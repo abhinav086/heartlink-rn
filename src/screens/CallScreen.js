@@ -1,0 +1,964 @@
+// screens/CallScreen.js - FIXED: No flickering in local video preview
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+  Dimensions,
+  StatusBar,
+  SafeAreaView,
+  Image,
+  BackHandler,
+  ActivityIndicator
+} from 'react-native';
+import { RTCView } from 'react-native-webrtc';
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import InCallManager from 'react-native-incall-manager';
+import enhancedGlobalWebRTCService from '../services/EnhancedGlobalWebRTCService';
+import BASE_URL from '../config/config';
+
+const { width, height } = Dimensions.get('window');
+
+const CallScreen = ({ route, navigation }) => {
+  const { callType, isIncoming, callerData, calleeData, authToken, callData } = route.params;
+  
+  // ============ STATE ============
+  const [callState, setCallState] = useState(isIncoming ? 'incoming' : 'initiating');
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(callType === 'video');
+  const [isSpeakerOn, setIsSpeakerOn] = useState(callType === 'video');
+  const [callDuration, setCallDuration] = useState(0);
+  const [connectionState, setConnectionState] = useState('new');
+  const [isConnected, setIsConnected] = useState(false);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [localStreamReady, setLocalStreamReady] = useState(false);
+  
+  // FIX: Add stream ID tracking to prevent unnecessary updates
+  const [localStreamId, setLocalStreamId] = useState(null);
+  const [remoteStreamId, setRemoteStreamId] = useState(null);
+
+  // ============ REFS ============
+  const callTimer = useRef(null);
+  const callStartTime = useRef(null);
+  const isComponentMounted = useRef(true);
+  const streamCheckInterval = useRef(null);
+  // FIX: Track if we've already set up the initial stream
+  const initialStreamSetup = useRef(false);
+
+  // ============ EFFECTS ============
+  
+  useEffect(() => {
+    initializeCallScreen();
+    setupInCallManager();
+    
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    
+    return () => {
+      console.log('🧹 CallScreen cleanup');
+      isComponentMounted.current = false;
+      cleanup();
+      backHandler.remove();
+    };
+  }, []);
+
+  // FIX: Improved stream monitoring without dependency array issues
+  useEffect(() => {
+    const checkStreams = () => {
+      if (!isComponentMounted.current) return;
+
+      const currentLocalStream = enhancedGlobalWebRTCService.localStream;
+      const currentRemoteStream = enhancedGlobalWebRTCService.remoteStream;
+
+      // FIX: Only update if stream ID has changed
+      if (currentLocalStream && currentLocalStream.id !== localStreamId) {
+        console.log('📹 New local stream detected:', currentLocalStream.id);
+        handleLocalStream(currentLocalStream);
+      }
+
+      if (currentRemoteStream && currentRemoteStream.id !== remoteStreamId) {
+        console.log('📺 New remote stream detected:', currentRemoteStream.id);
+        handleRemoteStream(currentRemoteStream);
+      }
+    };
+
+    // Check immediately
+    checkStreams();
+
+    // FIX: Clear any existing interval before setting new one
+    if (streamCheckInterval.current) {
+      clearInterval(streamCheckInterval.current);
+    }
+
+    // Set up interval to check periodically
+    streamCheckInterval.current = setInterval(checkStreams, 1000); // FIX: Increased interval to reduce checks
+
+    return () => {
+      if (streamCheckInterval.current) {
+        clearInterval(streamCheckInterval.current);
+        streamCheckInterval.current = null;
+      }
+    };
+  }, []); // FIX: Empty dependency array to prevent re-creating interval
+
+  // ============ IN-CALL MANAGER SETUP ============
+  
+  const setupInCallManager = () => {
+    try {
+      console.log('📞 Setting up InCallManager...');
+      
+      if (callType === 'video') {
+        InCallManager.start({ media: 'video' });
+        InCallManager.setSpeakerphoneOn(true);
+      } else {
+        InCallManager.start({ media: 'audio' });
+        InCallManager.setSpeakerphoneOn(false);
+      }
+      
+      InCallManager.setKeepScreenOn(true);
+      
+      console.log('✅ InCallManager setup complete');
+    } catch (error) {
+      console.error('❌ InCallManager setup failed:', error);
+    }
+  };
+
+  // ============ INITIALIZATION ============
+  
+  const initializeCallScreen = async () => {
+    try {
+      console.log('📺 Initializing CallScreen...', { callType, isIncoming });
+
+      // Set screen-specific callbacks for WebRTC service
+      enhancedGlobalWebRTCService.setScreenCallbacks({
+        onLocalStream: handleLocalStream,
+        onRemoteStream: handleRemoteStream,
+        onCallStateChange: handleCallStateChange,
+        onError: handleError,
+      });
+
+      // FIX: Only get initial stream once
+      if (callType === 'video' && !initialStreamSetup.current) {
+        initialStreamSetup.current = true;
+        console.log('🎥 Requesting initial local video stream...');
+        try {
+          const stream = await enhancedGlobalWebRTCService.getLocalStream();
+          if (stream) {
+            console.log('✅ Got initial local stream');
+            handleLocalStream(stream);
+          }
+        } catch (error) {
+          console.error('❌ Failed to get initial local stream:', error);
+        }
+      }
+
+      // Get current WebRTC state
+      const webrtcState = enhancedGlobalWebRTCService.getCallState();
+      console.log('📊 Current WebRTC state:', webrtcState);
+      
+      // Set initial streams if they exist and haven't been set
+      if (webrtcState.hasLocalStream && enhancedGlobalWebRTCService.localStream && !localStreamId) {
+        console.log('📹 Setting existing local stream');
+        handleLocalStream(enhancedGlobalWebRTCService.localStream);
+      }
+      
+      if (webrtcState.hasRemoteStream && enhancedGlobalWebRTCService.remoteStream && !remoteStreamId) {
+        console.log('📺 Setting existing remote stream');
+        handleRemoteStream(enhancedGlobalWebRTCService.remoteStream);
+      }
+      
+      // Update connection state
+      if (webrtcState.peerConnectionState) {
+        setConnectionState(webrtcState.peerConnectionState);
+        if (webrtcState.peerConnectionState === 'connected' && !isConnected) {
+          setCallState('connected');
+          setIsConnected(true);
+          startCallTimer();
+        }
+      }
+
+      // Set initializing to false after a short delay
+      setTimeout(() => {
+        if (isComponentMounted.current) {
+          setIsInitializing(false);
+        }
+      }, 500); // FIX: Reduced delay
+      
+      console.log('✅ CallScreen initialized');
+    } catch (error) {
+      console.error('❌ CallScreen initialization failed:', error);
+      setIsInitializing(false);
+      Alert.alert('Call Error', 'Failed to initialize call screen');
+      navigation.goBack();
+    }
+  };
+
+  // ============ WEBRTC EVENT HANDLERS ============
+  
+  const handleLocalStream = (stream) => {
+    if (!isComponentMounted.current) return;
+    
+    // FIX: Prevent duplicate updates for same stream
+    if (stream && stream.id === localStreamId) {
+      console.log('📹 Skipping duplicate local stream update');
+      return;
+    }
+    
+    console.log('📹 Local stream received in CallScreen:', stream?.id);
+    console.log('📹 Stream tracks:', stream?.getTracks()?.map(t => ({ kind: t.kind, enabled: t.enabled })));
+    
+    setLocalStream(stream);
+    setLocalStreamId(stream?.id || null); // FIX: Track stream ID
+    setLocalStreamReady(true);
+    setIsInitializing(false);
+    
+    // Ensure video track is enabled based on current state
+    if (stream && callType === 'video') {
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack && videoTrack.enabled !== isVideoEnabled) {
+        videoTrack.enabled = isVideoEnabled;
+        console.log(`📹 Video track synced to: ${videoTrack.enabled}`);
+      }
+    }
+    
+    // Update call state if we were waiting for media
+    if (callState === 'initiating' || callState === 'incoming') {
+      setCallState(isIncoming ? 'answering' : 'calling');
+    }
+  };
+
+  const handleRemoteStream = (stream) => {
+    if (!isComponentMounted.current) return;
+    
+    // FIX: Prevent duplicate updates for same stream
+    if (stream && stream.id === remoteStreamId) {
+      console.log('📺 Skipping duplicate remote stream update');
+      return;
+    }
+    
+    console.log('📺 Remote stream received in CallScreen - CONNECTION ESTABLISHED!');
+    console.log('📺 Stream tracks:', stream?.getTracks()?.map(t => ({ kind: t.kind, enabled: t.enabled })));
+    
+    setRemoteStream(stream);
+    setRemoteStreamId(stream?.id || null); // FIX: Track stream ID
+    
+    // Call is truly connected when we have remote stream
+    if (!isConnected) {
+      console.log('🎉 Call connection established, starting timer');
+      setCallState('connected');
+      setIsConnected(true);
+      startCallTimer();
+    }
+  };
+
+  const handleCallStateChange = (type, data) => {
+    if (!isComponentMounted.current) return;
+    
+    console.log('🔄 Call state change in CallScreen:', type, data);
+    
+    switch (type) {
+      case 'accepted':
+        setCallState('connecting');
+        break;
+        
+      case 'declined':
+        Alert.alert('Call Declined', 'The user declined your call', [
+          { text: 'OK', onPress: () => navigation.goBack() }
+        ]);
+        break;
+        
+      case 'ended':
+        const duration = data.duration || callDuration;
+        Alert.alert(
+          'Call Ended', 
+          `Call duration: ${formatDuration(duration)}`,
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
+        break;
+        
+      case 'connection':
+        setConnectionState(data.state);
+        
+        if (data.state === 'connected' && !isConnected) {
+          setCallState('connected');
+          setIsConnected(true);
+          startCallTimer();
+        } else if (data.state === 'disconnected' || data.state === 'failed') {
+          setCallState('reconnecting');
+        }
+        break;
+    }
+  };
+
+  const handleError = (error) => {
+    if (!isComponentMounted.current) return;
+    
+    console.error('❌ WebRTC error in CallScreen:', error);
+    
+    Alert.alert(
+      'Call Error', 
+      error.message || 'An error occurred during the call',
+      [
+        { text: 'End Call', onPress: endCall, style: 'destructive' },
+        { text: 'Continue', style: 'cancel' }
+      ]
+    );
+  };
+
+  // ============ CALL CONTROL FUNCTIONS ============
+  
+  const startCallTimer = () => {
+    if (callTimer.current) return;
+    
+    console.log('⏰ Starting call timer');
+    callStartTime.current = Date.now();
+    callTimer.current = setInterval(() => {
+      if (isComponentMounted.current) {
+        const elapsed = Math.floor((Date.now() - callStartTime.current) / 1000);
+        setCallDuration(elapsed);
+      }
+    }, 1000);
+  };
+
+  const endCall = async () => {
+    try {
+      console.log('🔚 User ending call');
+      
+      const duration = callStartTime.current ? 
+        Math.floor((Date.now() - callStartTime.current) / 1000) : 0;
+      
+      InCallManager.stop();
+      
+      await enhancedGlobalWebRTCService.endCall(duration);
+      
+      navigation.goBack();
+    } catch (error) {
+      console.error('❌ Failed to end call:', error);
+      navigation.goBack();
+    }
+  };
+
+  const toggleMute = async () => {
+    try {
+      const enabled = await enhancedGlobalWebRTCService.toggleMicrophone();
+      setIsMuted(!enabled);
+    } catch (error) {
+      console.error('❌ Failed to toggle microphone:', error);
+      Alert.alert('Error', 'Failed to toggle microphone');
+    }
+  };
+
+  const toggleVideo = async () => {
+    try {
+      console.log('🎥 Toggling video, current state:', isVideoEnabled);
+      
+      // FIX: Update state after successful toggle
+      const enabled = await enhancedGlobalWebRTCService.toggleCamera();
+      setIsVideoEnabled(enabled);
+      
+      console.log('🎥 Video toggled to:', enabled);
+      
+    } catch (error) {
+      console.error('❌ Failed to toggle camera:', error);
+      Alert.alert('Error', 'Failed to toggle camera');
+    }
+  };
+
+  const toggleSpeaker = () => {
+    try {
+      const newSpeakerState = !isSpeakerOn;
+      InCallManager.setSpeakerphoneOn(newSpeakerState);
+      setIsSpeakerOn(newSpeakerState);
+      console.log(`🔊 Speaker ${newSpeakerState ? 'ON' : 'OFF'}`);
+    } catch (error) {
+      console.error('❌ Failed to toggle speaker:', error);
+      Alert.alert('Error', 'Failed to toggle speaker');
+    }
+  };
+
+  const switchCamera = async () => {
+    try {
+      await enhancedGlobalWebRTCService.switchCamera();
+    } catch (error) {
+      console.error('❌ Failed to switch camera:', error);
+      Alert.alert('Error', 'Failed to switch camera');
+    }
+  };
+
+  // ============ UTILITY FUNCTIONS ============
+  
+  const handleBackPress = () => {
+    Alert.alert(
+      'End Call',
+      'Are you sure you want to end this call?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'End Call', style: 'destructive', onPress: endCall }
+      ]
+    );
+    return true;
+  };
+
+  const cleanup = () => {
+    console.log('🧹 Cleaning up CallScreen');
+    
+    if (callTimer.current) {
+      clearInterval(callTimer.current);
+      callTimer.current = null;
+    }
+    
+    if (streamCheckInterval.current) {
+      clearInterval(streamCheckInterval.current);
+      streamCheckInterval.current = null;
+    }
+    
+    try {
+      InCallManager.stop();
+    } catch (error) {
+      console.error('❌ Error stopping InCallManager:', error);
+    }
+    
+    enhancedGlobalWebRTCService.clearScreenCallbacks();
+  };
+
+  const formatDuration = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const getProfileImageUrl = (user) => {
+    if (!user) return null;
+    
+    if (user.photoUrl && typeof user.photoUrl === 'string') {
+      return user.photoUrl;
+    }
+    
+    if (user.profilePicture && typeof user.profilePicture === 'string') {
+      return user.profilePicture;
+    }
+    
+    if (user.profilePic && typeof user.profilePic === 'string') {
+      if (user.profilePic.startsWith('http://') || user.profilePic.startsWith('https://')) {
+        return user.profilePic;
+      }
+      const cleanPath = user.profilePic.startsWith('/') ? user.profilePic.substring(1) : user.profilePic;
+      return `${BASE_URL}/${cleanPath}`;
+    }
+    
+    return null;
+  };
+
+  const getInitials = (name) => {
+    if (!name) return '?';
+    const names = name.trim().split(' ');
+    if (names.length === 1) {
+      return names[0].charAt(0).toUpperCase();
+    }
+    return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
+  };
+
+  // ============ RENDER FUNCTIONS ============
+  
+  const renderCallStatus = () => {
+    const participant = isIncoming ? callerData : calleeData;
+    const participantName = participant?.fullName || participant?.name || 'Unknown';
+    
+    let statusText = '';
+    let statusColor = '#ffffff';
+    
+    switch (callState) {
+      case 'incoming':
+        statusText = 'Incoming call...';
+        statusColor = '#4CAF50';
+        break;
+      case 'initiating':
+      case 'calling':
+        statusText = 'Calling...';
+        statusColor = '#2196F3';
+        break;
+      case 'answering':
+        statusText = 'Answering...';
+        statusColor = '#4CAF50';
+        break;
+      case 'connecting':
+        statusText = 'Connecting...';
+        statusColor = '#FF9800';
+        break;
+      case 'connected':
+        statusText = formatDuration(callDuration);
+        statusColor = '#4CAF50';
+        break;
+      case 'reconnecting':
+        statusText = 'Reconnecting...';
+        statusColor = '#FF9800';
+        break;
+      default:
+        statusText = 'Loading...';
+        statusColor = '#999';
+    }
+
+    return (
+      <View style={styles.statusContainer}>
+        <Text style={styles.participantName}>{participantName}</Text>
+        <View style={styles.statusRow}>
+          <Text style={[styles.statusText, { color: statusColor }]}>{statusText}</Text>
+          {(callState === 'connecting' || callState === 'reconnecting') && (
+            <ActivityIndicator 
+              size="small" 
+              color={statusColor} 
+              style={styles.statusIndicator} 
+            />
+          )}
+        </View>
+      </View>
+    );
+  };
+
+  const renderVideoViews = () => {
+    const participant = isIncoming ? callerData : calleeData;
+    const participantName = participant?.fullName || participant?.name || 'Unknown';
+    const profileImageUrl = getProfileImageUrl(participant);
+
+    if (callType === 'audio') {
+      return (
+        <View style={styles.audioCallContainer}>
+          <View style={styles.avatarContainer}>
+            {profileImageUrl ? (
+              <Image 
+                source={{ uri: profileImageUrl }} 
+                style={styles.avatarImage}
+                onError={() => console.log('Failed to load participant image')}
+              />
+            ) : (
+              <View style={styles.avatarPlaceholder}>
+                <Text style={styles.avatarText}>
+                  {getInitials(participantName)}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+      );
+    }
+
+    // Video call rendering
+    return (
+      <View style={styles.videoContainer}>
+        {/* Remote video (full screen) */}
+        {remoteStream ? (
+          <RTCView
+            streamURL={remoteStream.toURL()}
+            style={styles.remoteVideo}
+            objectFit="cover"
+            mirror={false}
+            key={`remote-${remoteStreamId}`} // FIX: Use stream ID instead of dynamic key
+          />
+        ) : (
+          <View style={styles.waitingForVideoContainer}>
+            {profileImageUrl ? (
+              <Image 
+                source={{ uri: profileImageUrl }} 
+                style={styles.waitingAvatar}
+                onError={() => console.log('Failed to load participant image')}
+              />
+            ) : (
+              <View style={styles.waitingAvatarPlaceholder}>
+                <Text style={styles.waitingAvatarText}>
+                  {getInitials(participantName)}
+                </Text>
+              </View>
+            )}
+            <Text style={styles.waitingText}>
+              {isConnected ? 'Camera is off' : 'Connecting...'}
+            </Text>
+          </View>
+        )}
+        
+        {/* Local video preview - YOUR CAMERA */}
+        {localStream && isVideoEnabled && localStreamReady ? (
+          <View style={styles.localVideoContainer}>
+            <RTCView
+              streamURL={localStream.toURL()}
+              style={styles.localVideo}
+              objectFit="cover"
+              mirror={true}
+              zOrder={1}
+              key={`local-${localStreamId}`} // FIX: Use stream ID for stable key
+            />
+            <TouchableOpacity 
+              style={styles.switchCameraButton}
+              onPress={switchCamera}
+            >
+              <Ionicons name="camera-reverse" size={16} color="white" />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.localVideoOffContainer}>
+            <Ionicons 
+              name={!isVideoEnabled ? "videocam-off" : "videocam"} 
+              size={24} 
+              color={!isVideoEnabled ? "#ff9800" : "#ccc"} 
+            />
+            <Text style={styles.localVideoOffText}>
+              {!isVideoEnabled ? 'Camera Off' : 'Starting...'}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const renderCallControls = () => {
+    return (
+      <View style={styles.controlsContainer}>
+        <View style={styles.callControls}>
+          {/* Mute button */}
+          <TouchableOpacity
+            style={[styles.controlButton, isMuted && styles.mutedButton]}
+            onPress={toggleMute}
+            activeOpacity={0.7}
+          >
+            <Ionicons 
+              name={isMuted ? "mic-off" : "mic"} 
+              size={24} 
+              color="white"
+            />
+          </TouchableOpacity>
+
+          {/* Speaker button */}
+          <TouchableOpacity
+            style={[styles.controlButton, isSpeakerOn && styles.speakerOnButton]}
+            onPress={toggleSpeaker}
+            activeOpacity={0.7}
+          >
+            <Ionicons 
+              name={isSpeakerOn ? "volume-high" : "volume-low"} 
+              size={24} 
+              color="white"
+            />
+          </TouchableOpacity>
+
+          {/* Video toggle button (only for video calls) */}
+          {callType === 'video' && (
+            <TouchableOpacity
+              style={[styles.controlButton, !isVideoEnabled && styles.videoOffButton]}
+              onPress={toggleVideo}
+              activeOpacity={0.7}
+            >
+              <Ionicons 
+                name={isVideoEnabled ? "videocam" : "videocam-off"} 
+                size={24} 
+                color="white"
+              />
+            </TouchableOpacity>
+          )}
+
+          {/* End call button */}
+          <TouchableOpacity 
+            style={styles.endCallButton} 
+            onPress={endCall}
+            activeOpacity={0.7}
+          >
+            <Ionicons 
+              name="call" 
+              size={28} 
+              color="white" 
+              style={{ transform: [{ rotate: '135deg' }] }} 
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
+  // ============ LOADING STATE ============
+  
+  if (isInitializing && callType === 'video') {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar backgroundColor="#000" barStyle="light-content" />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#4CAF50" />
+          <Text style={styles.loadingText}>Preparing video call...</Text>
+          <Text style={styles.loadingSubText}>Setting up camera...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ============ MAIN RENDER ============
+  
+  return (
+    <SafeAreaView style={styles.container}>
+      <StatusBar backgroundColor="#000" barStyle="light-content" />
+      
+      {/* Video/Audio views */}
+      {renderVideoViews()}
+      
+      {/* Call status overlay */}
+      <View style={styles.overlay}>
+        {renderCallStatus()}
+      </View>
+      
+      {/* Call controls */}
+      {renderCallControls()}
+    </SafeAreaView>
+  );
+};
+
+// ============ STYLES ============
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1a1a1a',
+  },
+  loadingText: {
+    color: 'white',
+    fontSize: 16,
+    marginTop: 16,
+  },
+  loadingSubText: {
+    color: '#ccc',
+    fontSize: 14,
+    marginTop: 8,
+  },
+  videoContainer: {
+    flex: 1,
+    position: 'relative',
+  },
+  remoteVideo: {
+    flex: 1,
+    backgroundColor: '#000',
+    width: '100%',
+    height: '100%',
+  },
+  localVideoContainer: {
+    position: 'absolute',
+    top: 80,
+    right: 20,
+    width: 120,
+    height: 180,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#333',
+    borderWidth: 2,
+    borderColor: 'rgba(76, 175, 80, 0.8)',
+    zIndex: 999,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+  },
+  localVideo: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#222',
+  },
+  localVideoOffContainer: {
+    position: 'absolute',
+    top: 80,
+    right: 20,
+    width: 120,
+    height: 180,
+    borderRadius: 12,
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 152, 0, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 999,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.5,
+    shadowRadius: 6,
+  },
+  localVideoOffText: {
+    color: '#ccc',
+    fontSize: 10,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  switchCameraButton: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  audioCallContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1a1a1a',
+  },
+  avatarContainer: {
+    alignItems: 'center',
+  },
+  avatarImage: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: '#333',
+    borderWidth: 4,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  avatarPlaceholder: {
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: '#4CAF50',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  avatarText: {
+    fontSize: 64,
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  waitingForVideoContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#1a1a1a',
+  },
+  waitingAvatar: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#333',
+    marginBottom: 16,
+    borderWidth: 3,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  waitingAvatarPlaceholder: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#4CAF50',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    borderWidth: 3,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  waitingAvatarText: {
+    fontSize: 36,
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  waitingText: {
+    color: '#ccc',
+    fontSize: 16,
+  },
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingTop: 60,
+    paddingHorizontal: 20,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    zIndex: 5,
+  },
+  statusContainer: {
+    alignItems: 'center',
+  },
+  participantName: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: 'white',
+    marginBottom: 8,
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: {width: -1, height: 1},
+    textShadowRadius: 10
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusText: {
+    fontSize: 18,
+    fontWeight: '600',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: {width: -1, height: 1},
+    textShadowRadius: 10
+  },
+  statusIndicator: {
+    marginLeft: 8,
+  },
+  controlsContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingBottom: 60,
+    paddingHorizontal: 40,
+    zIndex: 5,
+  },
+  callControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    paddingVertical: 20,
+    borderRadius: 25,
+  },
+  controlButton: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  mutedButton: {
+    backgroundColor: '#f44336',
+  },
+  speakerOnButton: {
+    backgroundColor: '#2196F3',
+  },
+  videoOffButton: {
+    backgroundColor: '#ff9800',
+  },
+  endCallButton: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#f44336',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+});
+
+export default CallScreen;

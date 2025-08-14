@@ -1,0 +1,479 @@
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  TouchableOpacity,
+  Image,
+  ActivityIndicator,
+  RefreshControl,
+  Alert,
+} from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import Icon from 'react-native-vector-icons/Ionicons';
+import { useAuth } from '../../context/AuthContext';
+
+const NotificationsScreen = () => {
+  const navigation = useNavigation();
+  const { token } = useAuth();
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [pagination, setPagination] = useState({});
+  const [activeTab, setActiveTab] = useState('all');
+
+  useEffect(() => {
+    fetchNotifications();
+  }, [activeTab]);
+
+  const fetchNotifications = async (page = 1) => {
+    try {
+      setLoading(true);
+      // Map activeTab to API type parameter
+      let typeParam = '';
+      switch (activeTab) {
+        case 'impressions':
+          typeParam = 'impression';
+          break;
+        case 'follows':
+          typeParam = 'follow';
+          break;
+        case 'likes':
+          typeParam = 'like';
+          break;
+        default:
+          typeParam = 'all';
+      }
+
+      // Build query parameters
+      const params = new URLSearchParams({
+        page,
+        limit: 20,
+        ...(typeParam !== 'all' && { type: typeParam })
+      });
+
+      const response = await fetch(
+        `https://backendforheartlink.in/api/v1/notifications?${params}`,
+        {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+        }
+      );
+
+      const data = await response.json();
+      
+      if (data.statusCode === 200) {
+        // Transform API response to app format
+        const transformedData = data.data.notifications.map(item => {
+          // Determine icon and color based on type
+          let icon, color;
+          switch (item.type) {
+            case 'impression':
+              icon = 'eye-outline';
+              color = '#4A90E2';
+              break;
+            case 'follow':
+              icon = 'person-add-outline';
+              color = '#34A853';
+              break;
+            case 'like':
+              icon = 'heart-outline';
+              color = '#EA4335';
+              break;
+            default:
+              icon = 'notifications-outline';
+              color = '#9E9E9E';
+          }
+
+          return {
+            _id: item._id,
+            type: item.type,
+            user: {
+              _id: item.sender._id,
+              fullName: item.sender.fullName,
+              username: item.sender.username,
+              photoUrl: item.sender.photoUrl,
+              isOnline: item.sender.isOnline
+            },
+            message: item.message,
+            icon,
+            color,
+            timeAgo: item.timeAgo,
+            // For like notifications, add post preview
+            ...(item.type === 'like' && {
+              post: {
+                _id: item.relatedContent?.contentId,
+                content: item.metadata?.postContent || ''
+              }
+            })
+          };
+        });
+        
+        setNotifications(transformedData);
+        setPagination(data.data.pagination);
+      } else {
+        Alert.alert('Error', data.message || 'Failed to fetch notifications');
+      }
+    } catch (error) {
+      console.error('Error fetching notifications:', error);
+      Alert.alert('Error', 'Network error. Please try again.');
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  const handleRefresh = () => {
+    setRefreshing(true);
+    fetchNotifications();
+  };
+
+  const handleUserPress = (userId) => {
+    navigation.navigate('UserProfile', { userId });
+  };
+
+  const handlePostPress = (postId) => {
+    navigation.navigate('PostDetail', { postId });
+  };
+
+  const markAsRead = async (notificationId) => {
+    try {
+      const response = await fetch(
+        `https://backendforheartlink.in/api/v1/notifications/${notificationId}/read`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+        }
+      );
+      
+      if (response.ok) {
+        // Update local state to mark as read
+        setNotifications(prev => prev.map(notif => 
+          notif._id === notificationId ? {...notif, isRead: true} : notif
+        ));
+      }
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+    }
+  };
+
+  const renderNotificationItem = ({ item }) => (
+    <TouchableOpacity 
+      style={styles.notificationItem}
+      onPress={() => {
+        if (item.type === 'like' && item.post) {
+          handlePostPress(item.post._id);
+        } else {
+          handleUserPress(item.user._id);
+        }
+        if (!item.isRead) {
+          markAsRead(item._id);
+        }
+      }}
+    >
+      <View style={styles.leftContainer}>
+        <View style={[styles.iconContainer, { backgroundColor: item.color }]}>
+          <Icon name={item.icon} size={20} color="white" />
+        </View>
+      </View>
+      
+      <View style={styles.middleContainer}>
+        <View style={styles.userInfo}>
+          {item.user.photoUrl ? (
+            <Image source={{ uri: item.user.photoUrl }} style={styles.avatar} />
+          ) : (
+            <View style={styles.defaultAvatar}>
+              <Text style={styles.avatarText}>
+                {item.user.fullName?.charAt(0)?.toUpperCase() || 'U'}
+              </Text>
+            </View>
+          )}
+          
+          <Text style={styles.userName} numberOfLines={1}>
+            {item.user.fullName || 'Unknown User'}
+          </Text>
+        </View>
+        
+        <Text style={styles.messageText}>
+          {item.message}
+          {item.type === 'like' && ':'}
+        </Text>
+        
+        {item.type === 'like' && item.post?.content && (
+          <Text style={styles.postPreview} numberOfLines={1}>
+            "{item.post.content.substring(0, 30)}..."
+          </Text>
+        )}
+        
+        <Text style={styles.timeAgo}>{item.timeAgo}</Text>
+      </View>
+      
+      {!item.isRead && (
+        <View style={styles.unreadIndicator} />
+      )}
+    </TouchableOpacity>
+  );
+
+  const renderEmptyState = () => (
+    <View style={styles.emptyContainer}>
+      <Icon name="notifications-off-outline" size={64} color="#666" style={styles.emptyIcon} />
+      <Text style={styles.emptyTitle}>No notifications yet</Text>
+      <Text style={styles.emptySubtitle}>
+        {activeTab === 'impressions' 
+          ? 'When someone views your profile, you\'ll see it here' 
+          : activeTab === 'follows'
+          ? 'When someone follows you, you\'ll see it here'
+          : activeTab === 'likes'
+          ? 'When someone likes your post, you\'ll see it here'
+          : 'Your recent activities will appear here'}
+      </Text>
+    </View>
+  );
+
+  const renderTabButton = (tabName, iconName, label) => (
+    <TouchableOpacity
+      style={[styles.tabButton, activeTab === tabName && styles.activeTab]}
+      onPress={() => setActiveTab(tabName)}
+    >
+      <Icon 
+        name={iconName} 
+        size={20} 
+        color={activeTab === tabName ? '#007AFF' : '#666'} 
+      />
+      <Text style={[styles.tabText, activeTab === tabName && styles.activeTabText]}>
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+
+  const renderHeader = () => (
+    <View style={styles.header}>
+      <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
+        <Icon name="arrow-back" size={24} color="white" />
+      </TouchableOpacity>
+      <Text style={styles.headerTitle}>Notifications</Text>
+      <View style={styles.headerRight}>
+        <TouchableOpacity onPress={handleRefresh}>
+          <Icon name="refresh" size={24} color="white" />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  if (loading) {
+    return (
+      <View style={styles.container}>
+        {renderHeader()}
+        <View style={styles.centerContent}>
+          <ActivityIndicator size="large" color="#007AFF" />
+          <Text style={styles.loadingText}>Loading notifications...</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      {renderHeader()}
+      
+      {/* Tab Bar */}
+      <View style={styles.tabBar}>
+        {renderTabButton('all', 'notifications-outline', 'All')}
+        {renderTabButton('impressions', 'eye-outline', 'Views')}
+        {renderTabButton('follows', 'person-add-outline', 'Follows')}
+        {renderTabButton('likes', 'heart-outline', 'Likes')}
+      </View>
+      
+      <FlatList
+        data={notifications}
+        renderItem={renderNotificationItem}
+        keyExtractor={(item) => item._id}
+        style={styles.list}
+        contentContainerStyle={notifications.length === 0 ? styles.emptyList : null}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={handleRefresh}
+            tintColor="#007AFF"
+          />
+        }
+        ListEmptyComponent={renderEmptyState}
+        showsVerticalScrollIndicator={false}
+      />
+    </View>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+    paddingTop: 50,
+  },
+  backButton: {
+    padding: 8,
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: 'white',
+  },
+  headerRight: {
+    alignItems: 'flex-end',
+  },
+  tabBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+    backgroundColor: '#111',
+  },
+  tabButton: {
+    alignItems: 'center',
+    padding: 8,
+    borderRadius: 20,
+    flexDirection: 'row',
+  },
+  activeTab: {
+    backgroundColor: '#1a1a1a',
+  },
+  tabText: {
+    marginLeft: 6,
+    color: '#666',
+    fontWeight: '500',
+  },
+  activeTabText: {
+    color: '#007AFF',
+  },
+  list: {
+    flex: 1,
+  },
+  emptyList: {
+    flex: 1,
+  },
+  notificationItem: {
+    flexDirection: 'row',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1a1a1a',
+    position: 'relative',
+  },
+  leftContainer: {
+    marginRight: 15,
+  },
+  iconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  middleContainer: {
+    flex: 1,
+  },
+  userInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  avatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    marginRight: 10,
+  },
+  defaultAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#333',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  avatarText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  userName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: 'white',
+    maxWidth: '70%',
+  },
+  messageText: {
+    fontSize: 14,
+    color: '#aaa',
+    marginBottom: 3,
+  },
+  postPreview: {
+    fontSize: 14,
+    color: '#666',
+    fontStyle: 'italic',
+    marginBottom: 5,
+  },
+  timeAgo: {
+    fontSize: 12,
+    color: '#666',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  emptyIcon: {
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: 'white',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  centerContent: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: 'white',
+    marginTop: 16,
+    fontSize: 16,
+  },
+  unreadIndicator: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#007AFF',
+  },
+});
+
+export default NotificationsScreen;

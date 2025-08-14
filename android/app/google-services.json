@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "275966453498",
+    "project_id": "aiultrapro",
+    "storage_bucket": "aiultrapro.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:275966453498:android:6a163a6c29464f0e7bcb43",
+        "android_client_info": {
+          "package_name": "com.aiheartlink"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "275966453498-5392ua0pgps19j7nk8jsroluerpdi7hk.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.aiheartlink",
+            "certificate_hash": "183e0fc929fe1cb004179ff1e76c9d1a8b694981"
+          }
+        },
+        {
+          "client_id": "275966453498-hc9fa9v3475p4mkeal76jhd326tv0lcd.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDfdmkj1TdrXBxU2bHLmXmI37fmsmFHbo0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "275966453498-hc9fa9v3475p4mkeal76jhd326tv0lcd.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
