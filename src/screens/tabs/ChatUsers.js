@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react'; // Added useCallback
 import {
   View,
   Text,
@@ -89,6 +89,38 @@ const ChatDetailScreen = () => {
   const appStateSubscriptionRef = useRef(null);
   const markAsReadTimeoutRef = useRef(null);
   const { conversationId, receiverId, receiverName, receiverOnline } = route.params;
+
+  // ===== START: NEW UTILITY FUNCTION AND EFFECT =====
+  // Add this function to your ChatDetailScreen component
+  const handleConnectionIssues = useCallback(() => {
+    if (!socket || !socket.connected) {
+      console.log('🔄 Attempting to reconnect socket...');
+      // Force socket reconnection
+      if (typeof socket?.connect === 'function') {
+        socket.connect();
+      }
+      return false;
+    }
+    return true;
+  }, [socket]);
+
+  // Add this useEffect for periodic connection checking
+  useEffect(() => {
+    const connectionCheckInterval = setInterval(() => {
+      if (!handleConnectionIssues() && socket) {
+        console.log('⚠ Socket disconnected, attempting to reconnect...');
+        // Try to rejoin conversation after reconnection
+        setTimeout(() => {
+          if (socket?.connected && conversationId) {
+            socket.emit('joinConversation', { conversationId });
+          }
+        }, 2000);
+      }
+    }, 10000); // Check every 10 seconds
+
+    return () => clearInterval(connectionCheckInterval);
+  }, [socket, conversationId, handleConnectionIssues]);
+  // ===== END: NEW UTILITY FUNCTION AND EFFECT =====
 
   // ADDED FOR AUDIO PLAYBACK: Function to handle playing/pausing audio messages
   const handleAudioPlayPause = (messageId, fileUrl) => {
@@ -545,16 +577,25 @@ const ChatDetailScreen = () => {
     };
   }, []);
 
-  // Socket listeners
+  // Enhanced Socket listeners with better error handling and reconnection
   useEffect(() => {
-    if (!socket) return;
+    if (!socket || !conversationId) return;
+
+    console.log('🔌 Setting up socket listeners for conversation:', conversationId);
+
+    // Join conversation room immediately
+    socket.emit('joinConversation', { conversationId });
+
     const handleUserOnline = (data) => {
+      console.log('👤 User came online:', data);
       setOnlineUsers(prev => new Set([...prev, data.userId]));
       if (data.userId === receiverId) {
         setReceiverOnlineStatus(true);
       }
     };
+
     const handleUserOffline = (data) => {
+      console.log('👤 User went offline:', data);
       setOnlineUsers(prev => {
         const newSet = new Set(prev);
         newSet.delete(data.userId);
@@ -564,41 +605,166 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(false);
       }
     };
+
     const handleOnlineUsersList = (data) => {
-      if (data.users && Array.isArray(data.users)) {
-        const onlineUserIds = new Set(data.users.map(user => user._id || user.id || user));
+      console.log('👥 Received online users list:', data);
+      if (data && Array.isArray(data)) {
+        const onlineUserIds = new Set(data.map(user => user._id || user.id || user));
         setOnlineUsers(onlineUserIds);
         const isReceiverOnline = onlineUserIds.has(receiverId);
         setReceiverOnlineStatus(isReceiverOnline);
       }
     };
+
+    // Enhanced message handler with better error handling
     const handleNewMessage = (message) => {
-      if (message.conversationId === conversationId) {
-        setMessages(prev => [...prev, message]);
-        if (message.sender._id !== currentUser._id && conversationFocused) {
-          setTimeout(() => {
-            markMessagesAsRead([message._id]);
-          }, 500);
-        } else if (message.sender._id !== currentUser._id) {
-          setUnseenCount(prev => prev + 1);
+      console.log('📨 New message received:', {
+        messageId: message._id,
+        conversationId: message.conversationId,
+        currentConversationId: conversationId,
+        sender: message.sender?._id,
+        content: message.content?.substring(0, 50) + '...'
+      });
+
+      // Verify this message belongs to current conversation
+      if (message.conversationId !== conversationId) {
+        console.log('📨 Message not for current conversation, ignoring');
+        return;
+      }
+
+      // Update messages state
+      setMessages(prev => {
+        // Check if message already exists to prevent duplicates
+        const exists = prev.find(msg => msg._id === message._id);
+        if (exists) {
+          console.log('📨 Message already exists, skipping duplicate');
+          return prev;
         }
+        
+        console.log('📨 Adding new message to state');
+        const newMessages = [...prev, message];
+        
+        // Scroll to bottom after state update
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
         }, 100);
+        
+        return newMessages;
+      });
+
+      // Auto-mark as read if conversation is focused and message is from other user
+      if (message.sender._id !== currentUser._id && conversationFocused) {
+        setTimeout(() => {
+          markMessagesAsRead([message._id]);
+        }, 500);
+      } else if (message.sender._id !== currentUser._id) {
+        setUnseenCount(prev => prev + 1);
       }
     };
-    socket.on('user-online', handleUserOnline);
-    socket.on('user-offline', handleUserOffline);
-    socket.on('online-users', handleOnlineUsersList);
-    socket.on('newMessage', handleNewMessage);
-    socket.emit('get-online-users');
-    return () => {
-      socket.off('user-online', handleUserOnline);
-      socket.off('user-offline', handleUserOffline);
-      socket.off('online-users', handleOnlineUsersList);
-      socket.off('newMessage', handleNewMessage);
+
+    // Message status updates
+    const handleMessageStatusUpdate = (data) => {
+      console.log('📊 Message status update:', data);
+      if (data.conversationId === conversationId) {
+        setMessages(prev => prev.map(msg => {
+          if (msg.sender._id === currentUser._id && msg.status !== 'read') {
+            return { ...msg, status: data.status, [data.status + 'At']: new Date().toISOString() };
+          }
+          return msg;
+        }));
+      }
     };
-  }, [socket, receiverId, conversationId, currentUser, conversationFocused]);
+
+    // Bulk message status updates
+    const handleBulkMessageStatusUpdate = (data) => {
+      console.log('📊 Bulk message status update:', data);
+      if (data.conversationId === conversationId) {
+        setMessages(prev => prev.map(msg => {
+          if (msg.sender._id === currentUser._id && msg.receiver === data.readBy) {
+            return { ...msg, status: data.status, [data.status + 'At']: new Date().toISOString() };
+          }
+          return msg;
+        }));
+      }
+    };
+
+    // Conversation joined confirmation
+    const handleJoinedConversation = (data) => {
+      console.log('✅ Successfully joined conversation:', data);
+      handleConversationFocus();
+    };
+
+    // Connection status handlers
+    const handleConnect = () => {
+      console.log('🔌 Socket connected, rejoining conversation');
+      setTimeout(() => {
+        socket.emit('joinConversation', { conversationId });
+      }, 1000);
+    };
+
+    const handleDisconnect = () => {
+      console.log('🔌 Socket disconnected');
+    };
+
+    const handleReconnect = () => {
+      console.log('🔌 Socket reconnected, rejoining conversation');
+      setTimeout(() => {
+        socket.emit('joinConversation', { conversationId });
+      }, 1000);
+    };
+
+    // Register all event listeners
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+    socket.on('reconnect', handleReconnect);
+    socket.on('userOnline', handleUserOnline);
+    socket.on('userOffline', handleUserOffline);
+    socket.on('allOnlineUsers', handleOnlineUsersList);
+    socket.on('newMessage', handleNewMessage);
+    socket.on('messageStatusUpdate', handleMessageStatusUpdate);
+    socket.on('bulkMessageStatusUpdate', handleBulkMessageStatusUpdate);
+    socket.on('joinedConversation', handleJoinedConversation);
+
+    // Request current online users
+    socket.emit('getAllOnlineUsers');
+
+    // Cleanup function
+    return () => {
+      console.log('🧹 Cleaning up socket listeners for conversation:', conversationId);
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+      socket.off('reconnect', handleReconnect);
+      socket.off('userOnline', handleUserOnline);
+      socket.off('userOffline', handleUserOffline);
+      socket.off('allOnlineUsers', handleOnlineUsersList);
+      socket.off('newMessage', handleNewMessage);
+      socket.off('messageStatusUpdate', handleMessageStatusUpdate);
+      socket.off('bulkMessageStatusUpdate', handleBulkMessageStatusUpdate);
+      socket.off('joinedConversation', handleJoinedConversation);
+      
+      // Leave conversation room
+      socket.emit('leaveConversation', { conversationId });
+    };
+  }, [socket, conversationId, receiverId, currentUser, conversationFocused]);
+
+  // Add this useEffect to handle app focus/blur for better real-time updates
+  useFocusEffect(
+    React.useCallback(() => {
+      console.log('📱 ChatDetailScreen focused');
+      if (socket && conversationId) {
+        // Rejoin conversation when screen becomes focused
+        socket.emit('joinConversation', { conversationId });
+        handleConversationFocus();
+      }
+      
+      return () => {
+        console.log('📱 ChatDetailScreen blurred');
+        if (socket && conversationId) {
+          handleConversationBlur();
+        }
+      };
+    }, [socket, conversationId])
+  );
 
   // Initial data loading
   useEffect(() => {
@@ -689,77 +855,132 @@ const ChatDetailScreen = () => {
     }
   };
 
-  // ===== START: UPDATED sendMessage FUNCTION =====
+  // ===== START: REPLACED sendMessage FUNCTION =====
   const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null) => {
     if (messageType === 'text' && (!newMessage.trim() || sending)) return;
     if (messageType !== 'text' && !fileData) return;
+
     const messageText = messageType === 'text' ? newMessage.trim() : newMessage;
+    const tempId = `temp_${Date.now()}_${Math.random()}`;
+    
     setNewMessage('');
     if (messageType === 'text') {
       setSending(true);
     }
+
     try {
-      let requestBody;
-      let headers = {
-        'Authorization': `Bearer ${token}`,
-      };
-      let endpoint = `${BASE_URL}/api/v1/chat/message`;
-      // Special handling for voice messages
-      if (messageType === 'audio') {
-        endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
-        const formData = new FormData();
-        // Use 'voice' field name as per API documentation
-        formData.append('voice', {
-          uri: fileData.uri,
-          type: fileData.type || 'audio/mp3',
-          name: fileData.name || `voice_message_${Date.now()}.mp3`,
-        });
-        formData.append('conversationId', conversationId);
-        formData.append('receiverId', receiverId);
-        // Add duration if available
-        if (audioDuration) {
-          formData.append('duration', audioDuration.toString());
-        }
-        requestBody = formData;
-      } else if (messageType === 'text') {
-        headers['Content-Type'] = 'application/json';
-        requestBody = JSON.stringify({
+      if (messageType === 'text' && socket && socket.connected) {
+        // Try socket first for text messages (real-time)
+        console.log('📤 Sending text message via socket');
+        
+        const messageData = {
           conversationId,
           receiverId,
           content: messageText,
           messageType: 'text',
+          tempId
+        };
+
+        socket.emit('sendMessage', messageData);
+        
+        // Wait for confirmation or timeout
+        const confirmationTimeout = setTimeout(() => {
+          console.log('⚠ Socket message timeout, falling back to HTTP');
+          // Fallback to HTTP if socket fails
+          sendViaHTTP();
+        }, 5000);
+
+        // Listen for confirmation
+        const handleMessageSent = (data) => {
+          if (data.tempId === tempId) {
+            clearTimeout(confirmationTimeout);
+            socket.off('messageSent', handleMessageSent);
+            socket.off('error', handleMessageError);
+            setSending(false);
+            console.log('✅ Message sent via socket successfully');
+          }
+        };
+
+        const handleMessageError = (error) => {
+          if (error.tempId === tempId) {
+            clearTimeout(confirmationTimeout);
+            socket.off('messageSent', handleMessageSent);
+            socket.off('error', handleMessageError);
+            console.log('❌ Socket message failed, falling back to HTTP');
+            sendViaHTTP();
+          }
+        };
+
+        socket.on('messageSent', handleMessageSent);
+        socket.on('error', handleMessageError);
+
+      } else {
+        // Use HTTP for file messages or when socket is not connected
+        await sendViaHTTP();
+      }
+
+      async function sendViaHTTP() {
+        console.log('📤 Sending message via HTTP');
+        
+        let requestBody;
+        let headers = {
+          'Authorization': `Bearer ${token}`,
+        };
+        let endpoint = `${BASE_URL}/api/v1/chat/message`;
+
+        if (messageType === 'audio') {
+          endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
+          const formData = new FormData();
+          formData.append('voice', {
+            uri: fileData.uri,
+            type: fileData.type || 'audio/mp3',
+            name: fileData.name || `voice_message_${Date.now()}.mp3`,
+          });
+          formData.append('conversationId', conversationId);
+          formData.append('receiverId', receiverId);
+          if (audioDuration) {
+            formData.append('duration', audioDuration.toString());
+          }
+          requestBody = formData;
+        } else if (messageType === 'text') {
+          headers['Content-Type'] = 'application/json';
+          requestBody = JSON.stringify({
+            conversationId,
+            receiverId,
+            content: messageText,
+            messageType: 'text',
+          });
+        } else {
+          const formData = new FormData();
+          formData.append('file', fileData);
+          formData.append('conversationId', conversationId);
+          formData.append('receiverId', receiverId);
+          formData.append('messageType', messageType);
+          if (messageText) {
+            formData.append('content', messageText);
+          }
+          requestBody = formData;
+        }
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: requestBody,
         });
-      } else {
-        // For other file types (image, video, document)
-        const formData = new FormData();
-        formData.append('file', fileData);
-        formData.append('conversationId', conversationId);
-        formData.append('receiverId', receiverId);
-        formData.append('messageType', messageType);
-        if (messageText) {
-          formData.append('content', messageText);
-        }
-        requestBody = formData;
-      }
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: requestBody,
-      });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        const newMessageObj = data.data;
-        setMessages(prev => [...prev, newMessageObj]);
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
-      } else {
-        console.error('❌ API Error:', data);
-        Alert.alert('Error', data.message || 'Failed to send message');
-        if (messageType === 'text') {
-          setNewMessage(messageText);
+
+        const data = await response.json();
+        if (response.ok && data.success) {
+          console.log('✅ Message sent via HTTP successfully');
+          // Note: Don't add to messages state here as it will come via socket
+        } else {
+          console.error('❌ HTTP message failed:', data);
+          Alert.alert('Error', data.message || 'Failed to send message');
+          if (messageType === 'text') {
+            setNewMessage(messageText);
+          }
         }
       }
+
     } catch (error) {
       console.error('❌ Error sending message:', error);
       Alert.alert('Error', 'Failed to send message');
@@ -774,7 +995,7 @@ const ChatDetailScreen = () => {
       }
     }
   };
-  // ===== END: UPDATED sendMessage FUNCTION =====
+  // ===== END: REPLACED sendMessage FUNCTION =====
 
   // Delete message
   const deleteMessage = async (messageId) => {

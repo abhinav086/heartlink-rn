@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   SafeAreaView,
   View,
@@ -23,9 +23,11 @@ import { useSocket } from '../../context/SocketContext';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import BASE_URL from '../../config/config';
 import AllStories from '../../components/Home/Stories'; // Import AllStories component
+
 const { width } = Dimensions.get('window');
 // Define the new pinkish color
 const PINK_THEME_COLOR = '#ed167e'; // Color #ed167e
+
 const REPORT_TYPES = [
   { label: 'User', value: 'user' },
   { label: 'Post', value: 'post' },
@@ -54,6 +56,7 @@ const SEVERITIES = [
   { label: 'Urgent', value: 'urgent' },
   { label: 'Critical', value: 'critical' },
 ];
+
 const WChatScreen = () => {
   const [conversations, setConversations] = useState([]);
   const [users, setUsers] = useState([]);
@@ -88,19 +91,178 @@ const WChatScreen = () => {
   const [submittingReport, setSubmittingReport] = useState(false);
   // State for auto-search debounce
   const [searchDebounceTimer, setSearchDebounceTimer] = useState(null);
+
   const { user: currentUser, token } = useAuth();
-  const { onlineUsers, isConnected } = useSocket();
+  const { 
+    onlineUsers, 
+    onlineUserIds, 
+    isConnected, 
+    socket,
+    isUserOnline: socketIsUserOnline,
+    getOnlineStatus 
+  } = useSocket();
   const navigation = useNavigation();
-  // Function to check if a user is online using real-time socket data
-  const isUserOnline = (userId) => {
-    if (!isConnected || !userId) return false;
-    return onlineUsers.some(onlineUser => onlineUser._id === userId);
-  };
+
+  // Enhanced online status tracking with local state for immediate updates
+  const [localOnlineUsers, setLocalOnlineUsers] = useState(new Set());
+  const [lastOnlineUpdate, setLastOnlineUpdate] = useState(Date.now());
+
+  // Enhanced function to check if a user is online
+  const isUserOnline = useCallback((userId) => {
+    if (!isConnected || !userId) {
+      console.log('⚠ Cannot check online status: socket not connected or no userId');
+      return false;
+    }
+
+    // Check both socket state and local state for most up-to-date info
+    const socketOnline = socketIsUserOnline(userId);
+    const localOnline = localOnlineUsers.has(userId);
+    
+    const isOnline = socketOnline || localOnline;
+    
+    // Debug logging (remove in production)
+    console.log(`👤 Online check for ${userId}:`, {
+      socketOnline,
+      localOnline,
+      finalResult: isOnline,
+      totalSocketOnline: onlineUsers.length,
+      totalLocalOnline: localOnlineUsers.size,
+      socketConnected: isConnected
+    });
+    
+    return isOnline;
+  }, [isConnected, socketIsUserOnline, localOnlineUsers, onlineUsers.length]);
+
+  // Add socket listeners for real-time online status updates
+  useEffect(() => {
+    if (!socket || !isConnected) {
+      console.log('⚠ Socket not available for online status listeners');
+      return;
+    }
+
+    console.log('🔌 Setting up online status listeners in WChatScreen');
+
+    const handleUserOnline = (userData) => {
+      console.log('✅ WChatScreen: User came online:', userData);
+      
+      const userId = userData.userId || userData.user?._id || userData._id;
+      if (userId) {
+        setLocalOnlineUsers(prev => new Set([...prev, userId]));
+        setLastOnlineUpdate(Date.now());
+        
+        // Force re-render of conversations and users
+        setConversations(prev => [...prev]);
+        setUsers(prev => [...prev]);
+      }
+    };
+
+    const handleUserOffline = (userData) => {
+      console.log('❌ WChatScreen: User went offline:', userData);
+      
+      const userId = userData.userId || userData.user?._id || userData._id;
+      if (userId) {
+        setLocalOnlineUsers(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(userId);
+          return newSet;
+        });
+        setLastOnlineUpdate(Date.now());
+        
+        // Force re-render of conversations and users
+        setConversations(prev => [...prev]);
+        setUsers(prev => [...prev]);
+      }
+    };
+
+    const handleAllOnlineUsers = (users) => {
+      console.log('👥 WChatScreen: Received all online users:', users);
+      
+      let userIds = new Set();
+      
+      if (Array.isArray(users)) {
+        userIds = new Set(users.map(user => {
+          if (typeof user === 'string') return user;
+          return user._id || user.id || user.userId;
+        }).filter(Boolean));
+      } else if (users && Array.isArray(users.users)) {
+        userIds = new Set(users.users.map(user => user._id || user.id).filter(Boolean));
+      }
+      
+      console.log('👥 WChatScreen: Processed online user IDs:', Array.from(userIds));
+      setLocalOnlineUsers(userIds);
+      setLastOnlineUpdate(Date.now());
+      
+      // Force re-render
+      setConversations(prev => [...prev]);
+      setUsers(prev => [...prev]);
+    };
+
+    const handleConnect = () => {
+      console.log('🔌 WChatScreen: Socket connected, requesting online users');
+      setTimeout(() => {
+        socket.emit('getAllOnlineUsers');
+      }, 1000);
+    };
+
+    const handleDisconnect = () => {
+      console.log('🔌 WChatScreen: Socket disconnected, clearing local online users');
+      setLocalOnlineUsers(new Set());
+    };
+
+    // Register listeners
+    socket.on('userOnline', handleUserOnline);
+    socket.on('userOffline', handleUserOffline);
+    socket.on('allOnlineUsers', handleAllOnlineUsers);
+    socket.on('connect', handleConnect);
+    socket.on('disconnect', handleDisconnect);
+
+    // Request current online users
+    socket.emit('getAllOnlineUsers');
+
+    // Cleanup
+    return () => {
+      console.log('🧹 WChatScreen: Cleaning up online status listeners');
+      socket.off('userOnline', handleUserOnline);
+      socket.off('userOffline', handleUserOffline);
+      socket.off('allOnlineUsers', handleAllOnlineUsers);
+      socket.off('connect', handleConnect);
+      socket.off('disconnect', handleDisconnect);
+    };
+  }, [socket, isConnected]);
+
+  // Sync local state with socket state when socket state changes
+  useEffect(() => {
+    if (onlineUserIds && onlineUserIds.size > 0) {
+      console.log('🔄 Syncing local online users with socket state:', onlineUserIds.size);
+      setLocalOnlineUsers(new Set(onlineUserIds));
+      setLastOnlineUpdate(Date.now());
+    }
+  }, [onlineUserIds]);
+
+  // Periodic refresh of online status (fallback)
+  useEffect(() => {
+    const refreshInterval = setInterval(() => {
+      if (socket && isConnected) {
+        console.log('🔄 Periodic refresh: requesting online users');
+        socket.emit('getAllOnlineUsers');
+      }
+    }, 30000); // Every 30 seconds
+
+    return () => clearInterval(refreshInterval);
+  }, [socket, isConnected]);
+
+  // Add dependency on lastOnlineUpdate to force re-renders when online status changes
+  useEffect(() => {
+    // This effect doesn't do anything but triggers re-renders when online status changes
+    console.log('🔄 Online status update detected, last update:', new Date(lastOnlineUpdate).toISOString());
+  }, [lastOnlineUpdate]);
+
   // Function to validate if the search query is a valid mobile number (10-14 digits for international)
   const isValidMobileNumber = (query) => {
     const mobileRegex = /^\d{10,14}$/;
     return mobileRegex.test(query.trim());
   };
+
   // Function to get profile image URL - matching UpdateProfileScreen pattern
   const getProfileImageUrl = (user) => {
     // First check for photoUrl (as used in UpdateProfileScreen)
@@ -131,6 +293,7 @@ const WChatScreen = () => {
     }
     return null;
   };
+
   // ✅ EXISTING: Story utility functions (from AllStories component)
   const getSafeProfilePic = (userData) => {
     if (!userData) {
@@ -159,6 +322,7 @@ const WChatScreen = () => {
     console.log('getSafeProfilePic returning empty string');
     return '';
   };
+
   const getSafeUsername = (userData) => {
     if (!userData) {
       console.log('getSafeUsername: No userData provided');
@@ -171,6 +335,7 @@ const WChatScreen = () => {
     console.log('getSafeUsername result:', result);
     return result;
   };
+
   // ✅ UPDATED: Block API function
   const blockUser = async (userId) => {
     try {
@@ -214,6 +379,7 @@ const WChatScreen = () => {
       return false;
     }
   };
+
   const fetchBlockedUsers = async () => {
     try {
       if (!token) return;
@@ -242,6 +408,7 @@ const WChatScreen = () => {
       console.error('Network error or other issue fetching blocked users (non-critical):', error.message);
     }
   };
+
   // ✅ Block modal functions
   const showBlockModal = (user) => {
     // Don't show modal for already blocked users or self
@@ -258,6 +425,7 @@ const WChatScreen = () => {
       friction: 8,
     }).start();
   };
+
   const hideBlockModal = () => {
     // Animate modal out
     Animated.spring(blockModalAnimation, {
@@ -270,6 +438,7 @@ const WChatScreen = () => {
       setSelectedUserForBlock(null);
     });
   };
+
   const handleBlockConfirm = async () => {
     if (!selectedUserForBlock) return;
     setBlockingUser(selectedUserForBlock._id);
@@ -277,6 +446,7 @@ const WChatScreen = () => {
     await blockUser(selectedUserForBlock._id);
     setBlockingUser(null);
   };
+
   // ✅ NEW: Report user functions
   const showReportModal = (user) => {
     // Don't show modal for already blocked users or self
@@ -295,10 +465,12 @@ const WChatScreen = () => {
     setIsAnonymous(false);
     setSubmittingReport(false);
   };
+
   const hideReportModal = () => {
     setReportModalVisible(false);
     setSelectedUserForReport(null);
   };
+
   const handleReportSubmit = async () => {
     if (!description.trim() || description.trim().length < 10) {
       Alert.alert('Error', 'Please provide a detailed description (minimum 10 characters).');
@@ -336,6 +508,7 @@ const WChatScreen = () => {
       setSubmittingReport(false);
     }
   };
+
   // ✅ Long press handler
   const handleLongPress = (item) => {
     const targetUser = showingUsers ? item : getOtherParticipant(item);
@@ -344,6 +517,7 @@ const WChatScreen = () => {
     }
     showBlockModal(targetUser);
   };
+
   // ✅ EXISTING: Story-related functions
   const fetchStoriesData = async () => {
     try {
@@ -396,6 +570,7 @@ const WChatScreen = () => {
       console.error('Error fetching stories:', error);
     }
   };
+
   // ✅ EXISTING: Get story status for a user
   const getUserStoryStatus = (userId) => {
     const userStoryData = userStories[userId];
@@ -409,6 +584,7 @@ const WChatScreen = () => {
       stories: userStoryData.stories
     };
   };
+
   // Animate header on mount
   useEffect(() => {
     Animated.timing(animatedValue, {
@@ -417,6 +593,7 @@ const WChatScreen = () => {
       useNativeDriver: true,
     }).start();
   }, []);
+
   useFocusEffect(
     React.useCallback(() => {
       fetchData();
@@ -483,12 +660,14 @@ const WChatScreen = () => {
       setFilteredData(filteredConvs);
     }
   }, [searchQuery, showingUsers, conversations, blockedUsers]);
+
   useEffect(() => {
     if (showingUsers) {
       const filteredUsers = users.filter(user => !blockedUsers.has(user._id));
       setFilteredData(filteredUsers);
     }
   }, [users, showingUsers, blockedUsers]);
+
   const fetchData = async () => {
     setLoading(true);
     await Promise.all([
@@ -499,6 +678,7 @@ const WChatScreen = () => {
     ]);
     setLoading(false);
   };
+
   const fetchConversations = async () => {
     try {
       if (!token) return;
@@ -543,6 +723,7 @@ const WChatScreen = () => {
       setConversations([]);
     }
   };
+
   const fetchAllOnboardedUsers = async () => {
     try {
       if (!token) return;
@@ -578,6 +759,7 @@ const WChatScreen = () => {
       Alert.alert('Error', 'Failed to load users.');
     }
   };
+
   const fetchSearchedUsers = async () => {
     if (!isValidMobileNumber(searchQuery)) {
       return;
@@ -607,6 +789,7 @@ const WChatScreen = () => {
       setSearchLoading(false);
     }
   };
+
   const handleSearchPress = () => {
     // Although auto-search handles it, this can act as a manual trigger if needed
     // e.g., if user pastes a number and doesn't trigger the useEffect correctly
@@ -620,11 +803,13 @@ const WChatScreen = () => {
       fetchSearchedUsers();
     }
   };
+
   const onRefresh = async () => {
     setRefreshing(true);
     await fetchData();
     setRefreshing(false);
   };
+
   const createOrGetConversation = async (receiverId) => {
     try {
       setCreatingChat(receiverId);
@@ -656,6 +841,7 @@ const WChatScreen = () => {
       setCreatingChat(null);
     }
   };
+
   const getOtherParticipant = (conversation) => {
     if (!conversation || !conversation.participants || !Array.isArray(conversation.participants)) {
       console.warn('Invalid conversation data:', conversation);
@@ -666,6 +852,7 @@ const WChatScreen = () => {
     );
     return otherParticipant?.user || conversation.participants[0]?.user || {};
   };
+
   const getUnreadCount = (conversation) => {
     if (!conversation || !conversation.participants || !Array.isArray(conversation.participants)) {
       return 0;
@@ -675,6 +862,7 @@ const WChatScreen = () => {
     );
     return participant?.unreadCount || 0;
   };
+
   const getInitials = (fullName) => {
     if (!fullName || typeof fullName !== 'string') return '?';
     const names = fullName.trim().split(' ');
@@ -683,6 +871,7 @@ const WChatScreen = () => {
     }
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
+
   const getAvatarColor = (name) => {
     const safeName = typeof name === 'string' ? name : '';
     const colors = [
@@ -693,6 +882,7 @@ const WChatScreen = () => {
     const charCodeSum = safeName.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
     return colors[charCodeSum % colors.length];
   };
+
   const formatTime = (dateString) => {
     if (!dateString) return '';
     const date = new Date(dateString);
@@ -706,6 +896,7 @@ const WChatScreen = () => {
     if (diffInDays < 7) return `${diffInDays}d`;
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
+
   const getLastMessagePreview = (conversation) => {
     if (!conversation.lastMessage) return 'Start a conversation';
     const { lastMessage } = conversation;
@@ -717,6 +908,7 @@ const WChatScreen = () => {
       return `${prefix}📎 ${lastMessage.messageType}`;
     }
   };
+
   // ✅ EXISTING: Profile picture click -> Navigate to stories or create story
   const handleProfilePress = async (item) => {
     const targetUser = showingUsers ? item : getOtherParticipant(item);
@@ -778,6 +970,7 @@ const WChatScreen = () => {
       });
     }
   };
+
   // EXISTING: Updated handleNamePress function with better error handling and state management
   const handleNamePress = async (item) => {
     if (showingUsers) {
@@ -828,15 +1021,18 @@ const WChatScreen = () => {
       }
     }
   };
+
   const handleComposePress = () => {
     setShowingUsers(true);
     setSearchQuery('');
   };
+
   const toggleView = () => {
     setShowingUsers(prev => !prev);
     setSearchQuery('');
     Keyboard.dismiss();
   };
+
   const handleBlockedUsersPress = () => {
     navigation.navigate('BlockedUsersScreen', {
       setBlockedUsers: setBlockedUsers,
@@ -853,18 +1049,23 @@ const WChatScreen = () => {
       }
     });
   };
-  // ✅ EXISTING: Avatar rendering function with story indicators
+
+  // ✅ ENHANCED: Avatar rendering function with integrated story indicators and online status
   const renderAvatar = (user, hasUnread = false) => {
     const safeFullName = user.fullName && typeof user.fullName === 'string' ? user.fullName : 'User';
     const profileImageUrl = getProfileImageUrl(user);
-    // ✅ NEW: Get real-time online status
+
+    // Enhanced online status check with logging
     const isOnline = isUserOnline(user._id);
-    // ✅ EXISTING: Get story status for this user
+    console.log(`🎨 Rendering avatar for ${user.fullName} (${user._id}): online=${isOnline}`);
+
+    // Get story status for this user
     const isCurrentUserAvatar = user._id === currentUser._id;
     const storyStatus = isCurrentUserAvatar 
       ? { hasStory: currentUserStories.length > 0, hasViewed: true, storyCount: currentUserStories.length }
       : getUserStoryStatus(user._id);
-    // ✅ EXISTING: Determine border color based on story status
+
+    // Determine border color based on story status
     let borderColor = "#374151"; // Default gray
     let borderWidth = 2;
     if (isCurrentUserAvatar) {
@@ -884,27 +1085,19 @@ const WChatScreen = () => {
         borderWidth = 2;
       }
     }
+
     // Add unread border if there are unread messages and no story
     if (hasUnread && !storyStatus.hasStory) {
       borderColor = PINK_THEME_COLOR;
       borderWidth = 3;
     }
-    // Debug logging
-    console.log('Rendering avatar for user:', {
-      userId: user._id,
-      fullName: user.fullName,
-      photoUrl: user.photoUrl,
-      profilePic: user.profilePic,
-      constructedUrl: profileImageUrl,
-      hasStory: storyStatus.hasStory,
-      storyCount: storyStatus.storyCount
-    });
+
     return (
       <View style={styles.avatarContainer}>
         <View
           style={[
             styles.avatar,
-            { 
+            {
               backgroundColor: getAvatarColor(safeFullName),
               borderColor: borderColor,
               borderWidth: borderWidth
@@ -918,9 +1111,6 @@ const WChatScreen = () => {
               onError={(error) => {
                 console.log('Profile image error for user:', user._id, 'URL:', profileImageUrl, 'Error:', error?.nativeEvent?.error || 'Unknown profile image error');
               }}
-              onLoad={() => {
-                console.log('Profile image loaded successfully for user:', user._id, 'URL:', profileImageUrl);
-              }}
             />
           ) : (
             <Text style={styles.avatarText}>
@@ -928,19 +1118,38 @@ const WChatScreen = () => {
             </Text>
           )}
         </View>
-        {/* ✅ EXISTING: Story count indicator */}
+
+        {/* Enhanced online indicator with better visibility */}
+        {isOnline && (
+          <View style={[styles.onlineIndicator, { 
+            borderWidth: 2,
+            borderColor: '#111111',
+            backgroundColor: '#111111',
+          }]}>
+            <View style={[styles.onlineDot, {
+              backgroundColor: '#10b981', // Green color
+              width: 14, // Slightly larger
+              height: 14,
+              borderRadius: 7,
+            }]} />
+          </View>
+        )}
+
+        {/* Story count indicator */}
         {storyStatus.storyCount > 1 && (
           <View style={styles.storyCountBadge}>
             <Text style={styles.storyCountText}>{storyStatus.storyCount}</Text>
           </View>
         )}
-        {/* ✅ EXISTING: Add story button for current user */}
+
+        {/* Add story button for current user */}
         {isCurrentUserAvatar && (
           <View style={styles.addStoryButton}>
             <Text style={styles.addStoryIcon}>+</Text>
           </View>
         )}
-        {/* ✅ Blocking indicator */}
+        
+        {/* Blocking indicator */}
         {blockingUser === user._id && (
           <View style={styles.blockingIndicator}>
             <ActivityIndicator size="small" color="#fff" />
@@ -949,6 +1158,7 @@ const WChatScreen = () => {
       </View>
     );
   };
+  
   // ✅ Block Modal Component
   const renderBlockModal = () => {
     if (!selectedUserForBlock) return null;
@@ -1056,6 +1266,7 @@ const WChatScreen = () => {
       </Modal>
     );
   };
+  
   // ✅ NEW: Report User Modal Component
   const renderReportModal = () => {
     if (!selectedUserForReport) return null;
@@ -1234,6 +1445,7 @@ const WChatScreen = () => {
       </Modal>
     );
   };
+  
   const renderConversationItem = ({ item, index }) => {
     if (!item || !item._id) {
       console.warn('Invalid conversation item:', item);
@@ -1242,12 +1454,12 @@ const WChatScreen = () => {
     const otherParticipant = getOtherParticipant(item);
     const unreadCount = getUnreadCount(item);
     const hasUnread = unreadCount > 0;
-    // ✅ NEW: Get real-time online status
-    const isOnline = isUserOnline(otherParticipant._id);
+
     // Do not render conversation if the other participant is blocked
     if (blockedUsers.has(otherParticipant._id)) {
       return null;
     }
+
     return (
       <Animated.View
         style={[
@@ -1270,11 +1482,6 @@ const WChatScreen = () => {
           activeOpacity={0.8}
         >
           {renderAvatar(otherParticipant, hasUnread)}
-          {isOnline && (
-            <View style={styles.onlineIndicator}>
-              <View style={styles.onlineDot} />
-            </View>
-          )}
           {hasUnread && (
             <View style={styles.unreadBadge}>
               <Text style={styles.unreadCount}>
@@ -1314,14 +1521,15 @@ const WChatScreen = () => {
       </Animated.View>
     );
   };
+  
   const renderUserItem = ({ item, index }) => {
     // Do not render user if they are blocked
     if (blockedUsers.has(item._id)) {
       return null;
     }
     const isCreatingChatWithThisUser = creatingChat === item._id;
-    // ✅ NEW: Get real-time online status
     const isOnline = isUserOnline(item._id);
+
     return (
       <Animated.View
         style={[
@@ -1345,11 +1553,6 @@ const WChatScreen = () => {
           activeOpacity={0.8}
         >
           {renderAvatar(item)}
-          {isOnline && (
-            <View style={styles.onlineIndicator}>
-              <View style={styles.onlineDot} />
-            </View>
-          )}
         </TouchableOpacity>
         <TouchableOpacity
           style={styles.userContent}
@@ -1414,6 +1617,7 @@ const WChatScreen = () => {
       </Animated.View>
     );
   };
+  
   const renderItem = ({ item, index }) => {
     if (showingUsers) {
       return renderUserItem({ item, index });
@@ -1421,6 +1625,7 @@ const WChatScreen = () => {
       return renderConversationItem({ item, index });
     }
   };
+
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
       <View style={styles.emptyIconContainer}>
@@ -1456,6 +1661,7 @@ const WChatScreen = () => {
       )}
     </View>
   );
+
   if (loading || (showingUsers && searchLoading)) {
     return (
       <SafeAreaView style={styles.container}>
@@ -1471,6 +1677,7 @@ const WChatScreen = () => {
       </SafeAreaView>
     );
   }
+
   return (
     <SafeAreaView style={styles.container}>
       <Animated.View 
@@ -1524,6 +1731,7 @@ const WChatScreen = () => {
           </TouchableOpacity>
         </View>
       </Animated.View>
+      
       {/* ✅ NEW: Stories Ribbon - Added here above search bar */}
       <Animated.View
         style={[
@@ -1541,6 +1749,7 @@ const WChatScreen = () => {
       >
         <AllStories />
       </Animated.View>
+
       <View style={styles.searchContainer}>
         <View style={styles.searchWrapper}>
           <Icon name="search" size={20} color="#9ca3af" style={styles.searchIcon} />
@@ -1604,6 +1813,7 @@ const WChatScreen = () => {
     </SafeAreaView>
   );
 };
+
 // Updated StyleSheet with stories container styles and new report modal styles
 const styles = StyleSheet.create({
   container: {
@@ -2336,4 +2546,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
 export default WChatScreen;

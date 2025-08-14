@@ -1,12 +1,12 @@
-// AllStories.js (Fixed with correct API endpoint)
+// AllStories.js (Updated with correct profile/icon fetching and live stream features)
 import React, { useState, useEffect } from "react";
-import {
-  View,
-  ScrollView,
-  Image,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
+import { 
+  View, 
+  ScrollView, 
+  Image, 
+  StyleSheet, 
+  Text, 
+  TouchableOpacity, 
   ActivityIndicator,
   Alert,
   RefreshControl
@@ -95,6 +95,12 @@ const AllStories = () => {
         setFallbackStory();
         return;
       }
+
+      console.log('=== DEBUG: Current User Data ===');
+      console.log('Current User ID:', currentUser?._id);
+      console.log('Current User Name:', currentUser?.fullName || currentUser?.username);
+      console.log('Current User Profile Pic:', getSafeProfilePic(currentUser));
+      console.log('====================');
 
       // Fetch stories from backend
       const storiesResponse = await fetch(`${BASE_URL}/api/v1/stories/stories`, {
@@ -282,25 +288,27 @@ const AllStories = () => {
       for (const [streamerId, streamData] of Object.entries(userLiveStreamMap)) {
         if (streamerId !== currentUser._id && !usersWithStories.has(streamerId)) {
           // This user is live but has no stories - add them to the list
+          const streamerData = streamData.streamer || {
+            _id: streamerId,
+            fullName: streamData.streamer?.fullName || streamData.username || 'Live User',
+            username: streamData.streamer?.username || streamData.username || 'user',
+            photoUrl: streamData.streamer?.photoUrl || streamData.streamer?.profilePic || streamData.thumbnail
+          };
+          
           const liveOnlyUser = {
-            user: streamData.streamer || {
-              _id: streamerId,
-              fullName: streamData.streamer?.fullName || 'Live User',
-              username: streamData.streamer?.username || 'user',
-              photoUrl: streamData.streamer?.photoUrl
-            },
+            user: streamerData,
             stories: [],
             isLive: true,
             liveStream: streamData
           };
           otherUsersStories.push(liveOnlyUser);
-          console.log('Added live-only user:', streamerId, streamData.streamer?.username);
+          console.log('Added live-only user:', streamerId, streamerData.username);
         }
       }
 
       console.log('Processing other users stories:', otherUsersStories.length);
 
-      // Process each user's stories individually
+      // Process each user's stories individually with proper API calls
       for (const userStoryData of otherUsersStories) {
         const userId = userStoryData.user._id;
         const userStoriesList = (userStoryData.stories || []).sort((a, b) =>
@@ -319,18 +327,55 @@ const AllStories = () => {
         }
 
         try {
-          // Use original user data from stories response
-          const finalUserData = userStoryData.user;
+          // Fetch individual user's complete profile data
+          let detailedUserData = null;
+          
+          // Try to fetch detailed user profile
+          try {
+            console.log(`Fetching detailed profile for user ${userId}...`);
+            const userProfileResponse = await fetch(`${BASE_URL}/api/v1/users/user/${userId}`, {
+              method: 'GET',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+            });
 
-          // Extract username and profile pic
+            console.log(`User profile response status for ${userId}:`, userProfileResponse.status);
+
+            if (userProfileResponse.ok) {
+              const userProfileData = await userProfileResponse.json();
+              console.log(`User profile API response for ${userId}:`, userProfileData);
+              
+              if (userProfileData.success && userProfileData.data) {
+                detailedUserData = userProfileData.data.user || userProfileData.data;
+                console.log(`Successfully fetched detailed user data for ${userId}:`, detailedUserData);
+              } else {
+                console.warn(`User profile API returned success=false for ${userId}:`, userProfileData);
+              }
+            } else {
+              console.warn(`User profile API failed for ${userId}:`, userProfileResponse.status);
+            }
+          } catch (fetchError) {
+            console.error(`Error fetching detailed profile for ${userId}:`, fetchError);
+          }
+
+          // Use detailed data if available, otherwise fall back to original
+          const finalUserData = detailedUserData || userStoryData.user;
+
+          // Extract username and profile pic using the same logic as UpdateProfileScreen
           const userName = getSafeUsername(finalUserData);
           const userProfilePic = getSafeProfilePic(finalUserData);
 
-          console.log(`Final data for user ${userId}:`);
-          console.log(`- Name: ${userName}`);
-          console.log(`- Profile Pic: ${userProfilePic}`);
-          console.log(`- Is Live: ${isLive}`);
-          console.log(`- Live Stream Viewers: ${liveStream?.viewersCount || 0}`);
+          console.log(`🔍 Final data for user ${userId}:`, {
+            originalUserData: finalUserData,
+            extractedName: userName,
+            extractedProfilePic: userProfilePic,
+            isLive: isLive,
+            liveStreamViewers: liveStream?.viewersCount || 0,
+            storyCount: userStoriesList.length,
+            hasStories: userStoriesList.length > 0
+          });
 
           // Determine if user has viewed all stories from this user
           const hasViewedAllStories = userStoriesList.length > 0 ?
@@ -368,7 +413,42 @@ const AllStories = () => {
 
         } catch (error) {
           console.error(`Error processing user ${userId}:`, error);
-          // Continue with next user
+          
+          // Fallback processing with original data
+          const userName = getSafeUsername(userStoryData.user);
+          const userProfilePic = getSafeProfilePic(userStoryData.user);
+          
+          console.log(`Using fallback data for ${userId}: name=${userName}, pic=${userProfilePic}`);
+          
+          const hasViewedAllStories = userStoriesList.length > 0 ?
+            userStoriesList.every(story => story.hasViewed === true) : true;
+
+          // Calculate latest timestamp for this user's stories
+          const latestStoryTimestamp = userStoriesList.length > 0
+            ? new Date(Math.max(...userStoriesList.map(s => new Date(s.createdAt).getTime())))
+            : null;
+
+          processedStories.push({
+            id: userId,
+            name: userName,
+            img: userProfilePic,
+            add: false,
+            isCurrentUser: false,
+            user: userStoryData.user,
+            hasStory: userStoriesList.length > 0,
+            stories: userStoriesList,
+            hasViewed: hasViewedAllStories,
+            storyCount: userStoriesList.length,
+            // Live stream properties
+            isLive: isLive,
+            liveStream: liveStream,
+            // Add latest story timestamp for sorting
+            latestStoryTimestamp: latestStoryTimestamp,
+            // Add liveStreamStartTime for sorting if currently live
+            liveStreamStartTime: isLive && liveStream?.startedAt
+              ? new Date(liveStream.startedAt)
+              : null,
+          });
         }
       }
 
@@ -431,17 +511,32 @@ const AllStories = () => {
     }
   };
 
-  // Enhanced profile pic extraction
+  // Enhanced profile pic extraction using the same fields as UpdateProfileScreen
   const getSafeProfilePic = (userData) => {
     if (!userData) {
       console.log('getSafeProfilePic: No userData provided');
       return '';
     }
+    
+    console.log('getSafeProfilePic input:', {
+      userId: userData?._id || 'Unknown ID',
+      fullName: userData?.fullName,
+      username: userData?.username,
+      hasPhotoUrl: !!userData?.photoUrl,
+      hasProfilePic: !!userData?.profilePic,
+      hasAvatar: !!userData?.avatar,
+      hasPhoto: !!userData?.photo
+    });
 
-    console.log('getSafeProfilePic input:', userData?._id || 'Unknown ID');
-
-    // Check all possible fields for profile picture
-    const profilePic = userData.photoUrl || userData.profilePic || userData.avatar || userData.photo || '';
+    // Check all possible fields for profile picture (same as UpdateProfileScreen)
+    const profilePic = userData.photoUrl || 
+                      userData.profilePic || 
+                      userData.avatar || 
+                      userData.photo ||
+                      userData.profileImageUrl ||
+                      userData.avatarUrl ||
+                      userData.image ||
+                      '';
 
     console.log('getSafeProfilePic found raw:', profilePic);
 
@@ -456,9 +551,15 @@ const AllStories = () => {
         const fullUrl = `${BASE_URL}${trimmedPic}`;
         console.log('getSafeProfilePic returning relative URL converted:', fullUrl);
         return fullUrl;
-      } else {
-        console.log('getSafeProfilePic returning as-is:', trimmedPic);
+      } else if (trimmedPic.startsWith('data:image')) {
+        // Handle base64 images
+        console.log('getSafeProfilePic returning base64 image');
         return trimmedPic;
+      } else {
+        // Try to construct full URL for relative paths without leading slash
+        const fullUrl = `${BASE_URL}/${trimmedPic}`;
+        console.log('getSafeProfilePic returning constructed URL:', fullUrl);
+        return fullUrl;
       }
     }
 
@@ -466,27 +567,47 @@ const AllStories = () => {
     return '';
   };
 
-  // Enhanced username extraction
+  // Enhanced username extraction using the same fields as UpdateProfileScreen
   const getSafeUsername = (userData) => {
     if (!userData) {
       console.log('getSafeUsername: No userData provided');
       return 'Unknown User';
     }
 
-    // Check all possible fields for user name
-    const username = userData.fullName || userData.username || userData.displayName || userData.name || '';
-    const result = username && typeof username === 'string' && username.trim() !== '' ? username.trim() : 'Unknown User';
+    console.log('getSafeUsername input:', {
+      userId: userData?._id || 'Unknown ID',
+      fullName: userData?.fullName,
+      username: userData?.username,
+      displayName: userData?.displayName,
+      name: userData?.name,
+      email: userData?.email
+    });
 
-    console.log('getSafeUsername input:', userData?._id || 'Unknown ID', 'result:', result);
+    // Check all possible fields for user name (same as UpdateProfileScreen)
+    const username = userData.fullName || 
+                    userData.username || 
+                    userData.displayName || 
+                    userData.name ||
+                    (userData.firstName && userData.lastName ? 
+                      `${userData.firstName} ${userData.lastName}` : '') ||
+                    userData.email?.split('@')[0] ||
+                    userData.username ||
+                    '';
+
+    const result = username && typeof username === 'string' && username.trim() !== '' 
+      ? username.trim() 
+      : `User_${userData._id?.substring(0, 6) || 'unknown'}`;
+
+    console.log('getSafeUsername result:', result);
 
     return result;
   };
 
   const setFallbackStory = () => {
-    const fallbackUser = currentUser || {
-      fullName: 'You',
-      username: 'You',
-      profilePic: null
+    const fallbackUser = currentUser || { 
+      fullName: 'You', 
+      username: 'You', 
+      profilePic: null 
     };
 
     setStories([{
@@ -559,6 +680,7 @@ const AllStories = () => {
             headers: {
               'Authorization': `Bearer ${token}`,
               'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache'
             },
           });
         }
@@ -602,6 +724,7 @@ const AllStories = () => {
     return colors[charCodeSum % colors.length];
   };
 
+  // Enhanced renderStoryImage function
   const renderStoryImage = (story) => {
     // Determine border color based on story status and live state
     let borderColor = "#666666"; // Default gray
@@ -631,19 +754,21 @@ const AllStories = () => {
 
     // Check if we have a valid image URL
     const hasValidImage = story.img && typeof story.img === 'string' && story.img.trim() !== '';
+    const imageUrl = hasValidImage ? story.img.trim() : '';
 
     console.log(`Rendering story image for ${story.name}:`, {
       hasValidImage,
-      imageUrl: story.img,
+      imageUrl,
       userId: story.id,
       isCurrentUser: story.isCurrentUser,
-      isLive: story.isLive
+      isLive: story.isLive,
+      originalImg: story.img
     });
 
-    if (hasValidImage) {
+    if (hasValidImage && imageUrl) {
       return (
         <Image
-          source={{ uri: story.img.trim() }}
+          source={{ uri: imageUrl }}
           style={[
             styles.image,
             {
@@ -652,11 +777,13 @@ const AllStories = () => {
             }
           ]}
           onError={(error) => {
-            console.log('Image load error for:', story.name, story.id, story.img, error.nativeEvent.error);
+            console.log('❌ Image load error for:', story.name, story.id, imageUrl, error.nativeEvent.error);
           }}
           onLoad={() => {
-            console.log('Image loaded successfully for:', story.name, story.id, story.img);
+            console.log('✅ Image loaded successfully for:', story.name, story.id, imageUrl);
           }}
+          // Add cache handling
+          cache="force-cache"
         />
       );
     } else {
@@ -703,6 +830,13 @@ const AllStories = () => {
             {story.liveStream?.viewersCount != null && story.liveStream?.viewersCount > 0 && (
               <Text style={styles.viewerCount}>{story.liveStream.viewersCount}</Text>
             )}
+          </View>
+        )}
+        
+        {/* Story count indicator */}
+        {story.storyCount > 1 && !story.isLive && (
+          <View style={styles.multipleStoriesIndicator}>
+            <Text style={styles.storiesCount}>{story.storyCount}</Text>
           </View>
         )}
       </View>
@@ -848,6 +982,9 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
   },
   // Live indicator styles (WebRTC)
   liveIndicator: {
