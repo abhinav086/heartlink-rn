@@ -2020,7 +2020,11 @@ const styles = StyleSheet.create({
   fileMessageContainer: {
     // flexDirection: 'row', // Removed as AudioPlayer handles its own layout
     // alignItems: 'center',  // Removed as AudioPlayer handles its own layout
-    padding: 8, // Keep padding for touch area
+    width:'fit-content',
+    padding: 8,
+    minHeight: 60, // Ensure it has a minimum height for touch targets
+    maxHeight: 100, // Prevent it from stretching too tall // Keep padding for touch area
+    
   },
   fileIcon: {
     width: 40,

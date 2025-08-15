@@ -1,4 +1,4 @@
-// AllStories.js (Updated with correct profile/icon fetching and live stream features)
+// AllStories.js (FIXED VERSION with correct endpoints and live stream integration)
 import React, { useState, useEffect } from "react";
 import { 
   View, 
@@ -57,7 +57,7 @@ const AllStories = () => {
                   ...story,
                   liveStream: {
                     ...story.liveStream,
-                    viewersCount: updateData.count || 0
+                    viewersCount: updateData.count || updateData.viewersCount || updateData.currentViewers || 0
                   }
                 }
               : story
@@ -69,12 +69,14 @@ const AllStories = () => {
       socket.on('stream:went_live', handleStreamWentLive);
       socket.on('stream:ended', handleStreamEnded);
       socket.on('stream:viewer_count', handleViewerUpdate);
+      socket.on('stream:viewer_update', handleViewerUpdate); // Alternative event name
 
       // Cleanup listeners on unmount or socket change
       return () => {
         socket.off('stream:went_live', handleStreamWentLive);
         socket.off('stream:ended', handleStreamEnded);
         socket.off('stream:viewer_count', handleViewerUpdate);
+        socket.off('stream:viewer_update', handleViewerUpdate);
       };
     }
   }, [socket, isConnected]);
@@ -118,11 +120,11 @@ const AllStories = () => {
       const storiesData = await storiesResponse.json();
       console.log('Stories API Response:', storiesData);
 
-      // Fetch active live streams using the correct endpoint from the API doc
+      // FIXED: Fetch active live streams using the correct endpoint (same as other components)
       let liveStreamsData = [];
       try {
-        // FIXED: Using correct endpoint /live instead of /active
-        const liveStreamsResponse = await fetch(`${BASE_URL}/api/v1/live/live?limit=50`, {
+        console.log('🔴 Fetching active live streams...');
+        const liveStreamsResponse = await fetch(`${BASE_URL}/api/v1/live/active?limit=50`, {
           method: 'GET',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -130,12 +132,26 @@ const AllStories = () => {
           },
         });
 
+        console.log('Live streams API response status:', liveStreamsResponse.status);
+
         if (liveStreamsResponse.ok) {
           const liveData = await liveStreamsResponse.json();
           console.log('Active Live Streams Response:', liveData);
-          if (liveData.success && liveData.data) {
-            liveStreamsData = liveData.data.streams || [];
+          
+          // Handle different response formats
+          if (liveData.success !== false) {
+            if (liveData.streams && Array.isArray(liveData.streams)) {
+              liveStreamsData = liveData.streams;
+            } else if (liveData.data && Array.isArray(liveData.data.streams)) {
+              liveStreamsData = liveData.data.streams;
+            } else if (Array.isArray(liveData)) {
+              liveStreamsData = liveData;
+            }
           }
+          console.log(`✅ Found ${liveStreamsData.length} active live streams`);
+        } else if (liveStreamsResponse.status === 404) {
+          console.log('No active live streams found (404)');
+          liveStreamsData = [];
         } else {
           console.error('Failed to fetch live streams:', liveStreamsResponse.status);
         }
@@ -143,31 +159,16 @@ const AllStories = () => {
         console.error('Error fetching live streams:', liveError);
       }
 
-      // FIXED: Using correct endpoint /my-active instead of /my-streams
+      // REMOVED: The /my-active endpoint call since it's not consistent with other components
+      // Instead, we'll find current user's stream from the active streams list
       let currentUserLiveStreamData = null;
-      try {
-        const myActiveStreamResponse = await fetch(`${BASE_URL}/api/v1/live/my-active`, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        });
-
-        if (myActiveStreamResponse.ok) {
-          const myStreamData = await myActiveStreamResponse.json();
-          console.log('My Active Stream Response:', myStreamData);
-          if (myStreamData.success && myStreamData.data?.stream) {
-            currentUserLiveStreamData = myStreamData.data.stream;
-          }
-        } else if (myActiveStreamResponse.status === 404) {
-          // No active stream - this is normal
-          console.log('No active stream for current user');
-        } else {
-          console.error('Failed to fetch my active stream:', myActiveStreamResponse.status);
+      if (liveStreamsData.length > 0 && currentUser?._id) {
+        currentUserLiveStreamData = liveStreamsData.find(stream => 
+          stream.streamer?._id === currentUser._id
+        );
+        if (currentUserLiveStreamData) {
+          console.log('✅ Found current user live stream:', currentUserLiveStreamData.streamId);
         }
-      } catch (myStreamError) {
-        console.error('Error fetching my active stream:', myStreamError);
       }
 
       const fetchedStories = storiesData.data?.stories || [];
@@ -184,7 +185,7 @@ const AllStories = () => {
           userLiveStreamMap[streamerId] = {
             ...stream,
             streamId: stream.streamId,
-            viewersCount: stream.currentViewers || 0,
+            viewersCount: stream.currentViewers || stream.viewersCount || 0,
             status: stream.status || 'LIVE',
             startedAt: stream.startedAt || stream.createdAt,
             title: stream.title || 'Live Stream',
@@ -197,24 +198,6 @@ const AllStories = () => {
           };
         }
       });
-
-      // Add/Override current user's live stream if it exists (ensures it's always shown)
-      if (currentUserLiveStreamData) {
-        userLiveStreamMap[currentUser._id] = {
-          ...currentUserLiveStreamData,
-          streamId: currentUserLiveStreamData.streamId,
-          viewersCount: currentUserLiveStreamData.currentViewers || 0,
-          status: currentUserLiveStreamData.status || 'LIVE',
-          startedAt: currentUserLiveStreamData.startedAt || currentUserLiveStreamData.createdAt,
-          title: currentUserLiveStreamData.title || 'Live Stream',
-          description: currentUserLiveStreamData.description,
-          thumbnail: currentUserLiveStreamData.thumbnail,
-          playbackUrl: currentUserLiveStreamData.playbackUrl || currentUserLiveStreamData.streamUrl,
-          streamer: currentUser,
-          settings: currentUserLiveStreamData.settings,
-          rtcConfig: currentUserLiveStreamData.rtcConfig
-        };
-      }
 
       console.log('User Live Stream Map:', userLiveStreamMap);
 
@@ -630,14 +613,15 @@ const AllStories = () => {
 
   // --- UPDATED handleStoryPress ---
   const handleStoryPress = (story) => {
-    console.log('Story pressed:', story.name, story.id);
+    console.log('📱 Story pressed:', story.name, story.id);
 
     if (story.isCurrentUser) {
       // Check if current user is live (WebRTC stream)
       if (story.isLive && story.liveStream) {
-        // Navigate to CreateLiveStream for own stream management
+        console.log('🔴 Navigating to CreateLiveStream for own stream management');
         navigation.navigate('CreateLiveStream');
       } else if (story.hasStory) {
+        console.log('📖 Navigating to view own stories');
         // Navigate to view own stories
         navigation.navigate('StoryViewer', {
           stories: story.stories,
@@ -648,19 +632,29 @@ const AllStories = () => {
           isOwnStory: true
         });
       } else {
+        console.log('➕ Navigating to create story');
         // Navigate to create story
         handleCreateStory();
       }
     } else {
       // Check if other user is live (WebRTC stream)
       if (story.isLive && story.liveStream) {
-        // Navigate to LiveStreamViewer for watching others' streams
-        navigation.navigate('LiveStreamViewer', {
-          streamId: story.liveStream.streamId,
-        });
+        console.log('📺 Navigating to LiveStreamViewer for stream:', story.liveStream.streamId);
+        // FIXED: Ensure we have a valid streamId before navigating
+        if (story.liveStream.streamId) {
+          navigation.navigate('LiveStreamViewer', {
+            streamId: story.liveStream.streamId,
+          });
+        } else {
+          console.error('❌ No streamId found in liveStream object:', story.liveStream);
+          Alert.alert('Error', 'Invalid stream ID. Cannot join stream.');
+        }
       } else if (story.hasStory) {
+        console.log('📖 Navigating to view other user stories');
         // Navigate to view other user's stories
         handleViewStory(story);
+      } else {
+        console.log('ℹ️ User has no stories and is not live');
       }
     }
   };

@@ -1,4 +1,4 @@
-// src/components/CreateLiveStream.jsx
+// src/components/CreateLiveStream.jsx - UPDATED: Using Enhanced Global WebRTC Service
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
@@ -13,76 +13,249 @@ import {
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
-import BASE_URL from '../../config/config'; // Assumes this points to 'https://backendforheartlink.in'
-import useWebRTC from '../../hooks/useWEBRTC';
+import BASE_URL from '../../config/config';
 import { RTCView } from 'react-native-webrtc';
+import enhancedGlobalWebRTCService from '../../services/EnhancedGlobalWebRTCService';
 
 const CreateLiveStream = ({ navigation }) => {
   const { user, token } = useAuth();
   const { socket, isConnected } = useSocket();
 
-  const {
-    localStream,
-    isWebRTCConnected,
-    webRTCError: webRTCErrorMsg,
-    initializeLocalStream,
-    createOfferAndSignal,
-    cleanupWebRTC,
-  } = useWebRTC(true);
+  // Stream management state
+  const [streamId, setStreamId] = useState(null);
+  const [localStream, setLocalStream] = useState(null);
+  const [isWebRTCConnected, setIsWebRTCConnected] = useState(false);
+  const [connectedViewers, setConnectedViewers] = useState(new Set());
+  const [webRTCError, setWebRTCError] = useState('');
 
+  // Form state
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [visibility, setVisibility] = useState('FOLLOWERS_ONLY'); // Restricted
+  const [visibility, setVisibility] = useState('PUBLIC');
   const [category, setCategory] = useState('OTHER');
   const [settings, setSettings] = useState({
     allowChat: true,
     allowReactions: true,
     maxViewers: 1000,
+    recordStream: false,
+    autoSaveRecording: false,
+    videoQuality: '720p',
+    maxBitrate: 2500,
   });
 
-  const [streamId, setStreamId] = useState(null);
-  const [streamStatus, setStreamStatus] = useState('IDLE');
+  // UI state
+  const [streamStatus, setStreamStatus] = useState('IDLE'); // IDLE, CREATING, WAITING, STARTING, LIVE, ENDING
   const [apiError, setApiError] = useState('');
   const [currentStreams, setCurrentStreams] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [checkingStreams, setCheckingStreams] = useState(true);
-  const [endingAll, setEndingAll] = useState(false); // New state for ending all
+  const [endingAll, setEndingAll] = useState(false);
 
-  const visibilities = ['FOLLOWERS_ONLY']; // Restricted
+  const visibilities = ['PUBLIC', 'FOLLOWERS_ONLY', 'PRIVATE'];
   const categories = ['GAMING', 'MUSIC', 'TALK_SHOW', 'EDUCATION', 'SPORTS', 'OTHER'];
-
-  const displayError = apiError || webRTCErrorMsg;
+  const displayError = apiError || webRTCError;
   const hasActiveStreams = useMemo(() => currentStreams.length > 0, [currentStreams]);
 
+  // ============ REPLACE YOUR ENTIRE SERVICE INITIALIZATION useEffect ============
+  useEffect(() => {
+    const initializeService = async () => {
+      try {
+        console.log('🚀 Initializing Enhanced WebRTC Service for Broadcasting');
+        console.log('🔌 Socket status:', {
+          socketExists: !!socket,
+          isConnected: isConnected,
+          socketId: socket?.id
+        });
+
+        // CRITICAL: Check socket connection first
+        if (!socket || !isConnected) {
+          console.warn('⚠️ Socket not ready, waiting...');
+          setWebRTCError('Connecting to server...');
+          return;
+        }
+
+        // 🔥 CRITICAL FIX 1: SET EXTERNAL SOCKET
+        console.log('🔌 Setting external socket for WebRTC service');
+        enhancedGlobalWebRTCService.setExternalSocket(socket);
+
+        // Initialize the service
+        await enhancedGlobalWebRTCService.initialize(token);
+
+        // Set up callbacks for broadcasting
+        enhancedGlobalWebRTCService.setCallbacks({
+          onLocalStream: handleLocalStream,
+          onStreamStateChange: handleStreamStateChange,
+          onError: handleWebRTCError,
+          onViewerCount: handleViewerCount,
+        });
+
+        console.log('✅ Enhanced WebRTC Service initialized for broadcasting');
+        setWebRTCError(''); // Clear any connection errors
+
+      } catch (error) {
+        console.error('❌ Failed to initialize service:', error);
+        setWebRTCError(`Service initialization failed: ${error.message}`);
+      }
+    };
+
+    if (token && user && socket && isConnected) {
+      initializeService();
+    }
+  }, [token, user, socket, isConnected]); // Added socket dependencies
+
+  // ============ WEBRTC CALLBACKS ============
+  const handleLocalStream = (stream) => {
+    console.log('📹 Local stream received:', stream?.id);
+    setLocalStream(stream);
+    setWebRTCError('');
+  };
+
+  const handleStreamStateChange = (state, data) => {
+    console.log('🔄 Stream state changed:', state, data);
+    switch (state) {
+      case 'created':
+        setStreamStatus('WAITING');
+        break;
+      case 'broadcasting':
+        setStreamStatus('LIVE');
+        setIsWebRTCConnected(true);
+        break;
+      case 'ended':
+        setStreamStatus('IDLE');
+        setIsWebRTCConnected(false);
+        setStreamId(null);
+        setLocalStream(null);
+        setConnectedViewers(new Set());
+        break;
+    }
+  };
+
+  const handleWebRTCError = (errorData) => {
+    console.error('❌ WebRTC error:', errorData);
+    setWebRTCError(errorData.message || 'WebRTC error occurred');
+  };
+
+  const handleViewerCount = (data) => {
+    console.log('👥 Viewer count update:', data);
+    // Update connected viewers count - this is just for display
+    setConnectedViewers(new Set(Array.from({ length: data.count || 0 }, (_, i) => `viewer_${i}`)));
+  };
+
+  // ============ SOCKET CONNECTION CHECK ============
   useEffect(() => {
     if (!isConnected) {
       setApiError('Socket connection lost. Please check your internet.');
     } else {
-       setApiError('');
+      setApiError('');
     }
   }, [isConnected]);
+
+  // ============ ADD THIS NEW useEffect FOR VIEWER JOIN HANDLING ============
+  // Add this AFTER your existing useEffect blocks:
+  useEffect(() => {
+    // 🔥 CRITICAL FIX 2: BROADCASTER VIEWER JOIN LISTENER
+    if (socket && isConnected && streamStatus === 'LIVE' && streamId) {
+      console.log('🎥 🎧 Setting up BROADCASTER viewer join listener...');
+      console.log('🎥 Current stream ID:', streamId);
+      console.log('🎥 Current stream status:', streamStatus);
+
+      const handleViewerJoin = (data) => {
+        console.log('🎥 🎉 🔥 BROADCASTER: stream_viewer_joined event received!', data);
+
+        const { streamId: eventStreamId, viewer, currentViewerCount } = data;
+        const viewerId = viewer?.userId;
+
+        console.log('🎥 📊 Event details:', {
+          eventStreamId,
+          viewerId,
+          myStreamId: streamId,
+          viewerName: viewer?.fullName,
+          currentViewerCount
+        });
+
+        // Verify this is for our stream
+        if (eventStreamId === streamId) {
+          console.log('✅ Event is for our stream - processing...');
+
+          // Update UI viewer count
+          setConnectedViewers(new Set(Array.from({ length: currentViewerCount || 0 }, (_, i) => `viewer_${i}`)));
+
+          // Log WebRTC service state
+          console.log('🎥 📊 WebRTC Service State:', {
+            streamRole: enhancedGlobalWebRTCService.streamRole,
+            streamState: enhancedGlobalWebRTCService.streamState,
+            isBroadcasting: enhancedGlobalWebRTCService.isBroadcasting,
+            viewerConnectionsSize: enhancedGlobalWebRTCService.viewerConnections.size
+          });
+
+          // Verify offer creation after a delay
+          setTimeout(() => {
+            const connectionsAfter = enhancedGlobalWebRTCService.viewerConnections.size;
+            console.log('🎥 🔍 Viewer connections after 2 seconds:', connectionsAfter);
+
+            if (connectionsAfter === 0 && viewerId) {
+              console.error('🎥 ❌ NO VIEWER CONNECTIONS CREATED! WebRTC service issue.');
+              console.error('🎥 🐛 Debug info:', {
+                hasSocket: !!enhancedGlobalWebRTCService.socket,
+                socketConnected: enhancedGlobalWebRTCService.socket?.connected,
+                streamRole: enhancedGlobalWebRTCService.streamRole,
+                streamState: enhancedGlobalWebRTCService.streamState,
+                streamId: enhancedGlobalWebRTCService.streamId
+              });
+              setWebRTCError('Failed to establish viewer connection - WebRTC service issue');
+            } else {
+              console.log('✅ Viewer connection established successfully');
+              setWebRTCError(''); // Clear any errors
+            }
+          }, 2000);
+
+        } else {
+          console.log('⚠️ Event not for our stream - ignoring');
+        }
+      };
+
+      // Add the listener
+      console.log('🎥 🎧 Adding stream_viewer_joined listener to socket');
+      socket.on('stream_viewer_joined', handleViewerJoin);
+
+      // Cleanup function
+      return () => {
+        console.log('🎥 🧹 Removing stream_viewer_joined listener');
+        socket.off('stream_viewer_joined', handleViewerJoin);
+      };
+    } else {
+      console.log('🎥 ⚠️ Not setting up viewer listener:', {
+        hasSocket: !!socket,
+        isConnected,
+        streamStatus,
+        streamId
+      });
+    }
+  }, [socket, isConnected, streamStatus, streamId]); // Watch these dependencies
 
   useEffect(() => {
     fetchCurrentStreams("component_mount_or_token_change");
   }, [token]);
 
+  // ============ STREAM MANAGEMENT ============
   const fetchCurrentStreams = useCallback(async (source = "unknown") => {
     console.log(`[fetchCurrentStreams] Called from: ${source}`);
     setCheckingStreams(true);
     if (!token) {
-        console.log("[fetchCurrentStreams] No token available.");
-        setCurrentStreams([]);
-        setCheckingStreams(false);
-        return;
+      console.log("[fetchCurrentStreams] No token available.");
+      setCurrentStreams([]);
+      setCheckingStreams(false);
+      return;
     }
     try {
       console.log("[fetchCurrentStreams] Fetching active streams...");
       const response = await fetch(`${BASE_URL}/api/v1/live/active`, {
-        headers: { 'Authorization': `Bearer ${token}` },
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
       });
-
       console.log(`[fetchCurrentStreams] API Response Status: ${response.status}`);
-
       if (!response.ok) {
         if (response.status === 404) {
           console.log("[fetchCurrentStreams] API returned 404 - No active streams.");
@@ -95,12 +268,17 @@ const CreateLiveStream = ({ navigation }) => {
           throw new Error(`Failed to fetch streams: ${response.status} ${response.statusText}`);
         }
       }
-
       const data = await response.json();
       console.log("[fetchCurrentStreams] Raw API Response Data:", JSON.stringify(data, null, 2));
-
-      if (data.success) {
-        const streamsArray = Array.isArray(data.data?.streams) ? data.data.streams : [];
+      if (data.success !== false) {
+        let streamsArray = [];
+        if (data.streams && Array.isArray(data.streams)) {
+          streamsArray = data.streams;
+        } else if (data.data && Array.isArray(data.data.streams)) {
+          streamsArray = data.data.streams;
+        } else if (Array.isArray(data)) {
+          streamsArray = data;
+        }
         console.log(`[fetchCurrentStreams] Successfully parsed ${streamsArray.length} stream(s).`);
         setCurrentStreams(streamsArray);
         setApiError('');
@@ -122,119 +300,92 @@ const CreateLiveStream = ({ navigation }) => {
     console.log("[onRefresh] Pull-to-refresh initiated.");
     setRefreshing(true);
     fetchCurrentStreams("pull_to_refresh").finally(() => {
-        setRefreshing(false);
+      setRefreshing(false);
     });
   }, [fetchCurrentStreams]);
 
-  // --- Function: End All Active Streams using REST API ---
+  // End all active streams using REST API
   const endAllStreams = async () => {
-    // if (!socket || !isConnected) { // Removed socket check for API call
-    //     Alert.alert('Error', 'Connection is not active.');
-    //     return;
-    // }
     if (currentStreams.length === 0) {
-        Alert.alert('Info', 'No active streams to end.');
-        return;
+      Alert.alert('Info', 'No active streams to end.');
+      return;
     }
     if (!token) {
-        Alert.alert('Error', 'Authentication required.');
-        return;
+      Alert.alert('Error', 'Authentication required.');
+      return;
     }
-
     setEndingAll(true);
     setApiError('');
-
     try {
-        console.log(`[endAllStreams] Attempting to end ${currentStreams.length} stream(s) via REST API.`);
-
-        // Create an array of promises for ending each stream
-        const endPromises = currentStreams.map(async (stream) => {
-            const id = stream[" streamId "]; // Adjust key access if needed based on actual API response
-            if (!id) {
-                console.warn(`[endAllStreams] Skipping stream, no ID found:`, stream);
-                return { streamId: 'unknown', success: false, error: 'No ID' };
-            }
-
-            try {
-                console.log(`[endAllStreams] Calling REST API to end streamId: ${id}`);
-                const response = await fetch(`${BASE_URL}/api/v1/live/${id}/end`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json',
-                    },
-                    // Body can be empty or {} if the API doesn't require it for this endpoint
-                });
-
-                if (!response.ok) {
-                    const errorText = await response.text();
-                    console.error(`[endAllStreams] REST API Error for ${id}: ${response.status} - ${errorText}`);
-                    return { streamId: id, success: false, error: `${response.status} - ${errorText}` };
-                }
-
-                const data = await response.json();
-                console.log(`[endAllStreams] REST API Success for ${id}:`, data);
-                return { streamId: id, success: true, data };
-
-            } catch (apiErr) {
-                console.error(`[endAllStreams] Network/Other Error for ${id}:`, apiErr);
-                return { streamId: id, success: false, error: apiErr.message };
-            }
-        });
-
-        // Wait for all end requests to complete
-        const results = await Promise.allSettled(endPromises);
-        console.log(`[endAllStreams] End stream API calls completed. Results:`, results);
-
-        // Check for any failures if needed for UI feedback
-        const failedResults = results.filter(r => r.status === 'fulfilled' && r.value.success === false);
-        if (failedResults.length > 0) {
-            console.warn('[endAllStreams] Some streams failed to end via API:', failedResults.map(r => r.value));
-            // Optionally, you could set a more specific error message based on failures
-            // setApiError('Failed to end one or more streams.');
+      console.log(`[endAllStreams] Attempting to end ${currentStreams.length} stream(s) via REST API.`);
+      const endPromises = currentStreams.map(async (stream) => {
+        const id = stream.streamId;
+        if (!id) {
+          console.warn('[endAllStreams] Skipping stream, no ID found:', stream);
+          return { streamId: 'unknown', success: false, error: 'No ID' };
         }
-
-        // --- Proceed with local cleanup and UI updates for the stream being broadcasted locally ---
-        if (streamId) {
-             cleanupWebRTC();
-             setStreamStatus('IDLE');
-             setStreamId(null);
-             setTitle('');
-             setDescription('');
+        try {
+          console.log(`[endAllStreams] Calling REST API to end streamId: ${id}`);
+          const response = await fetch(`${BASE_URL}/api/v1/live/${id}/end`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[endAllStreams] REST API Error for ${id}: ${response.status} - ${errorText}`);
+            return { streamId: id, success: false, error: `${response.status} - ${errorText}` };
+          }
+          const data = await response.json();
+          console.log(`[endAllStreams] REST API Success for ${id}:`, data);
+          return { streamId: id, success: true, data };
+        } catch (apiErr) {
+          console.error(`[endAllStreams] Network/Other Error for ${id}:`, apiErr);
+          return { streamId: id, success: false, error: apiErr.message };
         }
-
-        Alert.alert('Streams Ended', 'All your active streams have been ended. You can now create a new one.');
-        console.log("[endAllStreams] Waiting before refreshing stream list...");
-        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for backend
-
-        console.log("[endAllStreams] Refreshing stream list...");
-        await fetchCurrentStreams("endAllStreams");
-
+      });
+      const results = await Promise.allSettled(endPromises);
+      console.log('[endAllStreams] End stream API calls completed. Results:', results);
+      // Cleanup local state if current stream was ended
+      if (streamId) {
+        enhancedGlobalWebRTCService.cleanupStreaming();
+        setStreamStatus('IDLE');
+        setStreamId(null);
+        setLocalStream(null);
+        setTitle('');
+        setDescription('');
+      }
+      Alert.alert('Streams Ended', 'All your active streams have been ended. You can now create a new one.');
+      console.log("[endAllStreams] Waiting before refreshing stream list...");
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log("[endAllStreams] Refreshing stream list...");
+      await fetchCurrentStreams("endAllStreams");
     } catch (err) {
-        console.error('[endAllStreams] Unexpected Error:', err);
-        setApiError('Failed to end one or more streams.');
-        Alert.alert('Error', 'Failed to end one or more streams.');
+      console.error('[endAllStreams] Unexpected Error:', err);
+      setApiError('Failed to end one or more streams.');
+      Alert.alert('Error', 'Failed to end one or more streams.');
     } finally {
-        setEndingAll(false);
+      setEndingAll(false);
     }
   };
 
+  // Create stream using backend API
   const createStream = async () => {
     console.log("[createStream] Attempting to create a new stream.");
-
     if (hasActiveStreams) {
-        console.log("[createStream] Prevented creation because hasActiveStreams is true.");
-        Alert.alert(
-            'Active Stream Found',
-            'You already have active stream(s). Please end them first or use "End All & Create New".',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'End All & Create New', onPress: endAllStreams }
-            ]
-        );
-        return;
+      console.log("[createStream] Prevented creation because hasActiveStreams is true.");
+      Alert.alert(
+        'Active Stream Found',
+        'You already have active stream(s). Please end them first or use "End All & Create New".',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'End All & Create New', onPress: endAllStreams }
+        ]
+      );
+      return;
     }
-
     if (!title.trim()) {
       Alert.alert('Validation Error', 'Please enter a stream title.');
       return;
@@ -243,24 +394,25 @@ const CreateLiveStream = ({ navigation }) => {
       Alert.alert('Authentication Error', 'You are not logged in.');
       return;
     }
-
     setStreamStatus('CREATING');
     setApiError('');
-
     try {
       const requestBody = {
         title: title.trim(),
         description: description.trim(),
         visibility: visibility,
         category: category,
-        settings: {}
+        settings: {
+          allowChat: settings.allowChat,
+          allowReactions: settings.allowReactions,
+          maxViewers: Number(settings.maxViewers) || 1000,
+          recordStream: settings.recordStream,
+          autoSaveRecording: settings.autoSaveRecording,
+          videoQuality: settings.videoQuality,
+          maxBitrate: Number(settings.maxBitrate) || 2500,
+        }
       };
-      requestBody.settings[" allowChat "] = settings.allowChat === true;
-      requestBody.settings[" allowReactions "] = settings.allowReactions === true;
-      requestBody.settings[" maxViewers "] = Number(settings.maxViewers) || 1000;
-
       console.log('[createStream] Sending create stream request:', JSON.stringify(requestBody, null, 2));
-
       const response = await fetch(`${BASE_URL}/api/v1/live/create`, {
         method: 'POST',
         headers: {
@@ -269,42 +421,26 @@ const CreateLiveStream = ({ navigation }) => {
         },
         body: JSON.stringify(requestBody),
       });
-
       console.log(`[createStream] Create Stream Response Status: ${response.status}`);
-      let data;
-      let responseText = '';
-      try {
-         responseText = await response.text();
-         console.log(`[createStream] Raw Create Stream Response Text: ${responseText}`);
-         data = JSON.parse(responseText);
-         console.log(`[createStream] Parsed Create Stream Response Data:`, data);
-      } catch (parseError) {
-          console.error('[createStream] Error parsing response JSON:', parseError);
-          console.error('[createStream] Response Text:', responseText);
-          data = { success: false, message: `Invalid response format. Status: ${response.status}` };
-      }
-
-      if (response.ok && data.success === true) {
-        const newStreamId = data.data?.stream?.[" streamId "];
+      const data = await response.json();
+      console.log('[createStream] Parsed Create Stream Response Data:', data);
+      if (response.ok && data.success !== false) {
+        const newStreamId = data.data?.streamId || data.streamId;
         if (!newStreamId) {
-             const errorMsg = 'Stream ID not found in successful response';
-             console.error(`[createStream] ${errorMsg}`, data);
-             throw new Error(errorMsg);
+          const errorMsg = 'Stream ID not found in successful response';
+          console.error(`[createStream] ${errorMsg}`, 'Full response:', JSON.stringify(data, null, 2));
+          throw new Error(errorMsg);
         }
+        console.log('[createStream] Stream created successfully:', newStreamId);
         setStreamId(newStreamId);
         setStreamStatus('WAITING');
-        console.log('[createStream] Stream created successfully:', newStreamId);
         Alert.alert('Success', 'Stream created! Initializing camera...');
-        const success = await initializeLocalStream();
-        if (!success) {
-            setStreamStatus('ERROR');
-        }
+        // Initialize local stream for broadcasting
+        await initializeCamera();
       } else {
         let errorMessage = 'Failed to create stream.';
         if (data && data.message) {
           errorMessage = data.message;
-        } else if (responseText) {
-          errorMessage = `Server Error: ${responseText.substring(0, 100)}...`;
         } else if (!response.ok) {
           errorMessage = `HTTP Error ${response.status}: ${response.statusText}`;
         }
@@ -320,128 +456,209 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  const startBroadcasting = async () => {
-    if (streamStatus !== 'WAITING' || !streamId || !socket || !isConnected || !localStream) {
-      Alert.alert('Error', 'Stream is not ready or connection lost.');
-      return;
-    }
-
-    setStreamStatus('LIVE');
+  // Initialize camera
+  const initializeCamera = async () => {
     try {
-        console.log(`[startBroadcasting] Initiating broadcast for streamId: ${streamId}`);
-        const success = await createOfferAndSignal();
-        if (!success) {
-            console.log(`[startBroadcasting] Failed for streamId: ${streamId}`);
-            setStreamStatus('WAITING');
-        } else {
-             Alert.alert('Broadcasting', 'Your stream is now live!');
-             console.log(`[startBroadcasting] Success for streamId: ${streamId}`);
-        }
-    } catch (err) {
-        console.error('[startBroadcasting] Unexpected error:', err);
+      console.log('[initializeCamera] Initializing local stream...');
+      const stream = await enhancedGlobalWebRTCService.getLocalStream(true);
+      if (stream) {
+        setLocalStream(stream);
         setStreamStatus('WAITING');
-        Alert.alert('Error', 'An unexpected error occurred while starting.');
+        console.log('[initializeCamera] Camera initialized successfully');
+        return true;
+      } else {
+        throw new Error('Failed to get local stream');
+      }
+    } catch (error) {
+      console.error('[initializeCamera] Failed to initialize camera:', error);
+      setStreamStatus('ERROR');
+      setWebRTCError('Failed to initialize camera. Please check permissions.');
+      Alert.alert('Camera Error', 'Failed to initialize camera. Please check permissions and try again.');
+      return false;
     }
   };
 
-  // --- Function: End a Single Stream using REST API ---
+  // ============ UPDATE startStream FUNCTION ============
+  // Replace your existing startStream function with this enhanced version:
+  const startStream = async () => {
+    if (streamStatus !== 'WAITING' || !streamId || !token) {
+      Alert.alert('Error', 'Stream is not ready to start.');
+      return;
+    }
+    if (!localStream) {
+      Alert.alert('Error', 'Camera is not ready. Please wait or restart the stream.');
+      return;
+    }
+    // 🔥 VERIFY SOCKET CONNECTION BEFORE STARTING
+    if (!socket || !isConnected) {
+      Alert.alert('Error', 'Socket connection not ready. Please check your internet.');
+      return;
+    }
+    setStreamStatus('STARTING');
+    try {
+      console.log(`[startStream] Starting stream via REST API: ${streamId}`);
+      // Call REST API to start stream
+      const response = await fetch(`${BASE_URL}/api/v1/live/${streamId}/start`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error(`[startStream] Start stream API error: ${response.status} - ${errorData}`);
+        throw new Error(`Failed to start stream: ${response.status} ${response.statusText}`);
+      }
+      const data = await response.json();
+      console.log('[startStream] Start stream API success:', data);
+      // 🔥 ENSURE WEBRTC SERVICE IS PROPERLY CONFIGURED
+      console.log('🎥 Verifying WebRTC service before creating stream...');
+      const serviceReady = enhancedGlobalWebRTCService.isReady();
+      const socketStatus = enhancedGlobalWebRTCService.getSocketStatus();
+      console.log('🎥 Service ready:', serviceReady);
+      console.log('🎥 Socket status:', socketStatus);
+      if (!serviceReady || !socketStatus.socketConnected) {
+        throw new Error('WebRTC service not properly initialized');
+      }
+      // Create stream via WebRTC service
+      console.log('🎥 Creating WebRTC stream...');
+      const createSuccess = await enhancedGlobalWebRTCService.createStream({
+        streamId: streamId,
+        title: title,
+        description: description,
+        settings: settings
+      });
+      if (!createSuccess) {
+        throw new Error('Failed to create WebRTC stream');
+      }
+      console.log('🎥 Starting WebRTC broadcasting...');
+      // Start broadcasting
+      const broadcastSuccess = await enhancedGlobalWebRTCService.startBroadcasting(streamId);
+      if (broadcastSuccess) {
+        setStreamStatus('LIVE');
+        Alert.alert('Broadcasting', 'Your stream is now live and ready for viewers!');
+        console.log(`[startStream] Successfully started broadcasting: ${streamId}`);
+        // 🔥 VERIFY FINAL STATE
+        setTimeout(() => {
+          const finalState = enhancedGlobalWebRTCService.getStreamState();
+          console.log('🎥 📊 Final broadcaster state:', finalState);
+          if (finalState.streamRole !== 'broadcaster' || finalState.streamState !== 'broadcasting') {
+            console.error('🎥 ❌ Broadcaster not in correct state:', finalState);
+            setWebRTCError('Broadcaster not in correct state');
+          }
+        }, 1000);
+      } else {
+        console.log(`[startStream] Failed to start broadcasting: ${streamId}`);
+        setStreamStatus('WAITING');
+        Alert.alert('Error', 'Failed to start broadcasting. Check your camera and internet connection.');
+      }
+    } catch (err) {
+      console.error('[startStream] Error:', err);
+      setStreamStatus('WAITING');
+      setWebRTCError(err.message);
+      Alert.alert('Error', `Failed to start stream: ${err.message}`);
+    }
+  };
+
+  // End a single stream using REST API
   const endStream = async (id) => {
-     console.log(`[endStream] Attempting to end stream with ID: ${id}`);
-     if (!id) {
-        Alert.alert('Error', 'Invalid stream ID.');
-        return;
-     }
-     if (!token) { // Check for token instead of socket for API call
-        Alert.alert('Error', 'Authentication required.');
-        return;
-     }
-     // if (!socket || !isConnected) { // Removed socket check for API call
-     //    Alert.alert('Error', 'Connection is not active.');
-     //    return;
-     // }
+    console.log(`[endStream] Attempting to end stream with ID: ${id}`);
+    if (!id) {
+      Alert.alert('Error', 'Invalid stream ID.');
+      return;
+    }
+    if (!token) {
+      Alert.alert('Error', 'Authentication required.');
+      return;
+    }
+    if (id === streamId) {
+      setStreamStatus('ENDING');
+    }
+    try {
+      console.log(`[endStream] Calling REST API to end streamId: ${id}`);
+      const response = await fetch(`${BASE_URL}/api/v1/live/${id}/end`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      console.log(`[endStream] REST API Response Status: ${response.status}`);
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error(`[endStream] REST API Error ${response.status}: ${errorData}`);
+        throw new Error(`Failed to end stream via API: ${response.status} ${response.statusText}`);
+      }
+      const data = await response.json();
+      console.log('[endStream] REST API Success Response:', data);
+      // Cleanup local state if it was our stream
+      if (id === streamId) {
+        enhancedGlobalWebRTCService.endStream();
+        setStreamStatus('IDLE');
+        setStreamId(null);
+        setLocalStream(null);
+        setTitle('');
+        setDescription('');
+        Alert.alert('Stream Ended', 'Your live stream has finished.');
+        console.log(`[endStream] Local stream state cleared for streamId: ${id}`);
+      } else {
+        Alert.alert('Stream Ended', 'The selected live stream has finished.');
+      }
+      console.log("[endStream] Waiting before refreshing stream list...");
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      console.log("[endStream] Refreshing stream list...");
+      await fetchCurrentStreams("endStream");
+    } catch (err) {
+      console.error('[endStream] Error:', err);
+      if (id === streamId) {
+        setStreamStatus('LIVE');
+      }
+      Alert.alert('Error', `Failed to end stream: ${err.message}`);
+    }
+  };
 
-     if (id === streamId) {
-        setStreamStatus('ENDING');
-     }
-
-     try {
-         console.log(`[endStream] Calling REST API to end streamId: ${id}`);
-
-         // --- Use REST API to end the stream ---
-         const response = await fetch(`${BASE_URL}/api/v1/live/${id}/end`, {
-             method: 'POST',
-             headers: {
-                 'Authorization': `Bearer ${token}`, // JWT token required
-                 'Content-Type': 'application/json',
-             },
-             // Body can be empty or {} if the API doesn't require it for this endpoint
-             // body: JSON.stringify({})
-         });
-
-         console.log(`[endStream] REST API Response Status: ${response.status}`);
-
-         if (!response.ok) {
-             // Handle specific API errors if needed, or just throw a generic error
-             const errorData = await response.text(); // Get raw text in case it's not JSON
-             console.error(`[endStream] REST API Error ${response.status}: ${errorData}`);
-             throw new Error(`Failed to end stream via API: ${response.status} ${response.statusText} - ${errorData}`);
-         }
-
-         const data = await response.json();
-         console.log(`[endStream] REST API Success Response:`, data);
-
-         // --- Proceed with local cleanup and UI updates as before ---
-         if (id === streamId) {
-             cleanupWebRTC();
-             setStreamStatus('IDLE');
-             setStreamId(null);
-             setTitle('');
-             setDescription('');
-             Alert.alert('Stream Ended', 'Your live stream has finished.');
-             console.log(`[endStream] Local stream state cleared for streamId: ${id}`);
-         } else {
-             Alert.alert('Stream Ended', 'The selected live stream has finished.');
-         }
-
-         console.log("[endStream] Waiting before refreshing stream list...");
-         await new Promise(resolve => setTimeout(resolve, 1500)); // Short delay before refresh
-
-         console.log("[endStream] Refreshing stream list...");
-         await fetchCurrentStreams("endStream");
-
-     } catch (err) {
-         console.error('[endStream] Error:', err);
-         // Revert status if it was the local stream being ended
-         if (id === streamId) {
-             setStreamStatus('LIVE'); // Or perhaps 'WAITING' depending on desired UX on error
-         }
-         Alert.alert('Error', `Failed to end stream: ${err.message}`);
-     }
+  const retryCamera = async () => {
+    if (!streamId) {
+      Alert.alert('Error', 'No active stream to retry camera for.');
+      return;
+    }
+    console.log('[retryCamera] Retrying camera initialization...');
+    setStreamStatus('WAITING');
+    setApiError('');
+    setWebRTCError('');
+    const success = await initializeCamera();
+    if (success) {
+      console.log('[retryCamera] Camera initialized successfully');
+      Alert.alert('Success', 'Camera is now ready!');
+    } else {
+      setStreamStatus('ERROR');
+      console.error('[retryCamera] Failed to initialize camera');
+      Alert.alert('Camera Error', 'Still unable to access camera. Please check permissions.');
+    }
   };
 
   const handleStartBroadcast = () => {
     if (streamStatus === 'WAITING') {
-      startBroadcasting();
+      startStream(); // Use the fixed startStream function
     } else if (streamStatus === 'LIVE') {
       Alert.alert('Already Live', 'The stream is currently broadcasting.');
     } else {
-       Alert.alert('Not Ready', 'Please create a stream and wait for camera.');
+      Alert.alert('Not Ready', 'Please create a stream and wait for camera.');
     }
   };
 
   const handleEndStream = (id) => {
     const streamIdToUse = id || streamId;
     if (!streamIdToUse) {
-       Alert.alert('No Active Stream', 'There is no stream currently running to end.');
-       return;
+      Alert.alert('No Active Stream', 'There is no stream currently running to end.');
+      return;
     }
     Alert.alert(
       'End Stream',
       id === streamId
         ? 'Are you sure you want to end this live stream?'
-        : id
-        ? 'Are you sure you want to end this stream?'
-        : 'Are you sure you want to end this live stream?',
+        : 'Are you sure you want to end this stream?',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'End Stream', onPress: () => endStream(streamIdToUse), style: 'destructive' },
@@ -449,16 +666,82 @@ const CreateLiveStream = ({ navigation }) => {
     );
   };
 
+  // ============ ADD VERIFICATION FUNCTION ============
+  // Add this function in your component:
+  const verifyBroadcasterStatus = () => {
+    console.log('🎥 ===== BROADCASTER VERIFICATION =====');
+
+    const socketStatus = enhancedGlobalWebRTCService.getSocketStatus();
+    // const streamDebugInfo = enhancedGlobalWebRTCService.getStreamingDebugInfo(); // Assuming this exists or is removed
+
+    const checks = {
+      serviceReady: enhancedGlobalWebRTCService.isReady(),
+      hasSocket: !!enhancedGlobalWebRTCService.socket,
+      socketConnected: enhancedGlobalWebRTCService.socket?.connected,
+      isUsingExternalSocket: socketStatus.isUsingExternalSocket,
+      hasLocalStream: !!enhancedGlobalWebRTCService.localStream,
+      localStreamActive: enhancedGlobalWebRTCService.localStream?.active,
+      streamRole: enhancedGlobalWebRTCService.streamRole,
+      streamState: enhancedGlobalWebRTCService.streamState,
+      isBroadcasting: enhancedGlobalWebRTCService.isBroadcasting,
+      streamId: enhancedGlobalWebRTCService.streamId,
+      viewerConnectionsSize: enhancedGlobalWebRTCService.viewerConnections.size,
+      socketEventListeners: socket ? Object.keys(socket._callbacks || {}).length : 0
+    };
+
+    console.log('🎥 ✅ Service Ready:', checks.serviceReady);
+    console.log('🎥 ✅ Has Socket:', checks.hasSocket);
+    console.log('🎥 ✅ Socket Connected:', checks.socketConnected);
+    console.log('🎥 🔥 Using External Socket:', checks.isUsingExternalSocket);
+    console.log('🎥 ✅ Has Local Stream:', checks.hasLocalStream);
+    console.log('🎥 ✅ Local Stream Active:', checks.localStreamActive);
+    console.log('🎥 ✅ Stream Role:', checks.streamRole);
+    console.log('🎥 ✅ Stream State:', checks.streamState);
+    console.log('🎥 ✅ Is Broadcasting:', checks.isBroadcasting);
+    console.log('🎥 ✅ Stream ID:', checks.streamId);
+    console.log('🎥 📊 Viewer Connections:', checks.viewerConnectionsSize);
+    console.log('🎥 🎧 Socket Event Listeners:', checks.socketEventListeners);
+
+    // Test socket listener (Optional, commented out to avoid unintended side effects)
+    // if (socket) {
+    //   console.log('🧪 Testing socket listener...');
+    //   const testData = {
+    //     streamId: checks.streamId,
+    //     viewer: { userId: 'test_123', fullName: 'Test User' },
+    //     currentViewerCount: 1
+    //   };
+    //   console.log('🧪 Emitting test stream_viewer_joined event...');
+    //   socket.emit('test_event', testData); // Don't use real event for test
+    // }
+
+    const isReady = checks.serviceReady &&
+      checks.hasSocket &&
+      checks.socketConnected &&
+      checks.isUsingExternalSocket &&
+      checks.hasLocalStream &&
+      checks.localStreamActive &&
+      checks.streamRole === 'broadcaster' &&
+      checks.streamState === 'broadcasting' &&
+      checks.isBroadcasting &&
+      checks.streamId;
+
+    const status = isReady ? '✅ READY FOR VIEWERS' : '❌ NOT READY';
+    console.log('🎥 🎯 OVERALL STATUS:', status);
+
+    Alert.alert('Broadcaster Status', status + '\n\nCheck console for details');
+
+    return isReady;
+  };
+
   if (checkingStreams) {
-      return (
-          <View style={styles.centeredContainer}>
-              <ActivityIndicator size="large" color="#ff0000" />
-              <Text style={styles.loadingText}>Checking for active streams...</Text>
-          </View>
-      );
+    return (
+      <View style={styles.centeredContainer}>
+        <ActivityIndicator size="large" color="#ff0000" />
+        <Text style={styles.loadingText}>Checking for active streams...</Text>
+      </View>
+    );
   }
 
-  // --- Determine if main "Create Stream" button should be disabled ---
   const isCreateButtonDisabled = !token || hasActiveStreams || streamStatus !== 'IDLE';
 
   return (
@@ -474,10 +757,30 @@ const CreateLiveStream = ({ navigation }) => {
       }
     >
       <Text style={styles.header}>Create Live Stream</Text>
-
       {displayError ? <Text style={styles.errorText}>{displayError}</Text> : null}
 
-      {/* --- Active Streams Section --- */}
+      {/* Debug Info */}
+      {__DEV__ && (
+        <View style={styles.debugContainer}>
+          <Text style={styles.debugText}>🔍 Debug Info:</Text>
+          <Text style={styles.debugText}>StreamId: {streamId || 'null'}</Text>
+          <Text style={styles.debugText}>Status: {streamStatus}</Text>
+          <Text style={styles.debugText}>Service Ready: {enhancedGlobalWebRTCService.isReady()}</Text>
+          <Text style={styles.debugText}>Socket Connected: {socket?.connected ? '✅' : '❌'}</Text>
+          <Text style={styles.debugText}>Using External Socket: {enhancedGlobalWebRTCService.getSocketStatus().isUsingExternalSocket ? '✅' : '❌'}</Text>
+          <Text style={styles.debugText}>Viewer Connections: {enhancedGlobalWebRTCService.viewerConnections.size}</Text>
+
+          {/* ADD THIS VERIFICATION BUTTON */}
+          <TouchableOpacity
+            style={styles.debugButton}
+            onPress={verifyBroadcasterStatus}
+          >
+            <Text style={styles.debugButtonText}>🔍 Verify Broadcaster Status</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Active Streams Section */}
       <View style={styles.currentStreamsContainer}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Your Active Streams</Text>
@@ -485,46 +788,47 @@ const CreateLiveStream = ({ navigation }) => {
             <Text style={styles.refreshText}>Refresh</Text>
           </TouchableOpacity>
         </View>
-
         {currentStreams.length === 0 ? (
           <Text style={styles.noStreamsText}>No active streams found.</Text>
         ) : (
           <>
             {currentStreams.map((stream) => (
-              <View key={stream[" streamId "]} style={styles.streamItem}>
+              <View key={stream.streamId} style={styles.streamItem}>
                 <View style={styles.streamInfo}>
                   <Text style={styles.streamTitle} numberOfLines={1}>{stream.title}</Text>
-                  <Text style={styles.streamId}>ID: {stream[" streamId "]}</Text>
+                  <Text style={styles.streamId}>ID: {stream.streamId}</Text>
                   <Text style={styles.streamStatus}>Status: {stream.status}</Text>
+                  {connectedViewers.size > 0 && stream.streamId === streamId && (
+                    <Text style={styles.streamViewers}>Connected Viewers: {connectedViewers.size}</Text>
+                  )}
                 </View>
                 <TouchableOpacity
                   style={styles.endStreamButton}
-                  onPress={() => handleEndStream(stream[" streamId "])}
+                  onPress={() => handleEndStream(stream.streamId)}
                 >
                   <Text style={styles.endStreamButtonText}>End</Text>
                 </TouchableOpacity>
               </View>
             ))}
-            {/* --- End All Button --- */}
             <TouchableOpacity
-                style={[styles.button, styles.buttonEndAll, endingAll && styles.buttonDisabled]}
-                onPress={endAllStreams}
-                disabled={endingAll}
+              style={[styles.button, styles.buttonEndAll, endingAll && styles.buttonDisabled]}
+              onPress={endAllStreams}
+              disabled={endingAll}
             >
-                 {endingAll ? (
-                    <>
-                        <ActivityIndicator size="small" color="#fff" />
-                        <Text style={styles.buttonText}> Ending...</Text>
-                    </>
-                 ) : (
-                    <Text style={styles.buttonText}>End All & Create New</Text>
-                 )}
+              {endingAll ? (
+                <>
+                  <ActivityIndicator size="small" color="#fff" />
+                  <Text style={styles.buttonText}> Ending...</Text>
+                </>
+              ) : (
+                <Text style={styles.buttonText}>End All & Create New</Text>
+              )}
             </TouchableOpacity>
           </>
         )}
       </View>
 
-      {/* --- Stream Creation Form --- */}
+      {/* Stream Creation Form */}
       <View style={hasActiveStreams ? styles.disabledForm : null}>
         <View style={styles.formGroup}>
           <Text style={styles.label}>Title *</Text>
@@ -536,7 +840,6 @@ const CreateLiveStream = ({ navigation }) => {
             editable={!hasActiveStreams && streamStatus === 'IDLE'}
           />
         </View>
-
         <View style={styles.formGroup}>
           <Text style={styles.label}>Description</Text>
           <TextInput
@@ -548,26 +851,6 @@ const CreateLiveStream = ({ navigation }) => {
             editable={!hasActiveStreams && streamStatus === 'IDLE'}
           />
         </View>
-
-        <View style={styles.formGroup}>
-          <Text style={styles.label}>Category</Text>
-          <View style={styles.pickerContainer}>
-            {categories.map((cat) => (
-              <TouchableOpacity
-                key={cat}
-                style={[
-                  styles.pickerButton,
-                  category === cat && styles.pickerButtonSelected,
-                ]}
-                onPress={() => setCategory(cat)}
-                disabled={hasActiveStreams || streamStatus !== 'IDLE'}
-              >
-                <Text style={styles.pickerButtonText}>{cat.replace('_', ' ')}</Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
         <View style={styles.formGroup}>
           <Text style={styles.label}>Visibility</Text>
           <View style={styles.pickerContainer}>
@@ -586,51 +869,99 @@ const CreateLiveStream = ({ navigation }) => {
             ))}
           </View>
         </View>
-
+        <View style={styles.formGroup}>
+          <Text style={styles.label}>Category</Text>
+          <View style={styles.pickerContainer}>
+            {categories.map((cat) => (
+              <TouchableOpacity
+                key={cat}
+                style={[
+                  styles.pickerButton,
+                  category === cat && styles.pickerButtonSelected,
+                ]}
+                onPress={() => setCategory(cat)}
+                disabled={hasActiveStreams || streamStatus !== 'IDLE'}
+              >
+                <Text style={styles.pickerButtonText}>{cat.replace('_', ' ')}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
         {streamId && (
           <View style={styles.statusContainer}>
             <Text style={styles.statusText}>Stream ID: {streamId}</Text>
             <Text style={styles.statusText}>Status: {streamStatus}</Text>
-            {isWebRTCConnected && <Text style={styles.statusText}>WebRTC: Connected</Text>}
+            <Text style={styles.statusText}>
+              Camera: {localStream ? '✅ Ready' : '❌ Not Ready'}
+            </Text>
+            <Text style={styles.statusText}>
+              Socket: {isConnected ? '✅ Connected' : '❌ Disconnected'}
+            </Text>
+            {isWebRTCConnected && <Text style={styles.statusText}>WebRTC: Broadcasting</Text>}
+            {connectedViewers.size > 0 && (
+              <Text style={styles.statusText}>Connected Viewers: {connectedViewers.size}</Text>
+            )}
           </View>
         )}
-
         <View style={styles.buttonContainer}>
           <TouchableOpacity
             style={[
-                styles.button,
-                styles.buttonCreate,
-                isCreateButtonDisabled && styles.buttonDisabled, // Visual disable
-                hasActiveStreams && styles.buttonCreateDisabledWithStreams // Specific style if streams exist
+              styles.button,
+              styles.buttonCreate,
+              isCreateButtonDisabled && styles.buttonDisabled,
+              hasActiveStreams && styles.buttonCreateDisabledWithStreams
             ]}
             onPress={createStream}
-            disabled={isCreateButtonDisabled} // Actual disable
+            disabled={isCreateButtonDisabled}
           >
             <Text style={styles.buttonText}>Create Stream</Text>
           </TouchableOpacity>
-
           {(streamStatus === 'WAITING' || streamStatus === 'LIVE') && (
             <TouchableOpacity
-              style={[styles.button, streamStatus === 'WAITING' ? styles.buttonStart : styles.buttonLive]}
+              style={[
+                styles.button,
+                streamStatus === 'WAITING' ? styles.buttonStart : styles.buttonLive,
+                streamStatus === 'STARTING' && styles.buttonDisabled
+              ]}
               onPress={handleStartBroadcast}
-              disabled={!isConnected || !localStream}
+              disabled={!isConnected || !localStream || streamStatus === 'STARTING'}
             >
               <Text style={styles.buttonText}>
-                {streamStatus === 'WAITING' ? 'Start Broadcasting' : 'Live - Manage'}
+                {streamStatus === 'WAITING' ? 'Start Broadcasting' :
+                  streamStatus === 'STARTING' ? 'Starting...' : 'Live - Broadcasting'}
               </Text>
             </TouchableOpacity>
           )}
-
+          {streamStatus === 'ERROR' && (
+            <TouchableOpacity
+              style={[styles.button, styles.buttonStart]}
+              onPress={retryCamera}
+            >
+              <Text style={styles.buttonText}>Retry Camera</Text>
+            </TouchableOpacity>
+          )}
+          {(streamStatus === 'WAITING' || streamStatus === 'LIVE') && !localStream && (
+            <TouchableOpacity
+              style={[styles.button, styles.buttonStart]}
+              onPress={retryCamera}
+            >
+              <Text style={styles.buttonText}>Retry Camera</Text>
+            </TouchableOpacity>
+          )}
           {(streamStatus === 'WAITING' || streamStatus === 'LIVE') && (
-            <TouchableOpacity style={[styles.button, styles.buttonEnd]} onPress={() => handleEndStream(streamId)}>
+            <TouchableOpacity
+              style={[styles.button, styles.buttonEnd]}
+              onPress={() => handleEndStream(streamId)}
+            >
               <Text style={styles.buttonText}>End Stream</Text>
             </TouchableOpacity>
           )}
-
-          {streamStatus === 'CREATING' && (
+          {(streamStatus === 'CREATING' || streamStatus === 'STARTING') && (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#ff0000" />
-              <Text style={styles.loadingText}>Creating stream...</Text>
+              <Text style={styles.loadingText}>
+                {streamStatus === 'CREATING' ? 'Creating stream...' : 'Starting stream...'}
+              </Text>
             </View>
           )}
           {streamStatus === 'ENDING' && (
@@ -640,7 +971,6 @@ const CreateLiveStream = ({ navigation }) => {
             </View>
           )}
         </View>
-
         <View style={styles.previewContainer}>
           {localStream ? (
             <>
@@ -649,7 +979,9 @@ const CreateLiveStream = ({ navigation }) => {
             </>
           ) : (
             <Text style={styles.previewText}>
-              {streamStatus === 'WAITING' ? 'Initializing Camera...' : 'Preview will appear here'}
+              {streamStatus === 'WAITING' ? 'Initializing Camera...' :
+                streamStatus === 'ERROR' ? 'Camera Error - Tap "Retry Camera"' :
+                  'Preview will appear here'}
             </Text>
           )}
         </View>
@@ -658,7 +990,6 @@ const CreateLiveStream = ({ navigation }) => {
   );
 };
 
-// --- COMPLETE Styles ---
 const styles = StyleSheet.create({
   container: {
     padding: 20,
@@ -680,6 +1011,32 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     borderWidth: 1,
     borderColor: '#ff4444',
+  },
+  debugContainer: {
+    backgroundColor: '#111',
+    padding: 10,
+    marginBottom: 15,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: '#333',
+  },
+  debugText: {
+    color: '#888',
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  // ============ ADD THESE STYLES ============
+  debugButton: {
+    backgroundColor: '#333',
+    padding: 8,
+    marginTop: 5,
+    borderRadius: 4,
+    alignItems: 'center',
+  },
+  debugButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   formGroup: {
     marginBottom: 15,
@@ -747,11 +1104,11 @@ const styles = StyleSheet.create({
     padding: 15,
     borderRadius: 5,
     alignItems: 'center',
-    justifyContent: 'center', // For aligning text/indicator
+    justifyContent: 'center',
     minWidth: 120,
     borderWidth: 1,
     borderColor: '#333',
-    flexDirection: 'row', // For icon/text alignment
+    flexDirection: 'row',
   },
   buttonText: {
     color: '#fff',
@@ -759,39 +1116,34 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   buttonCreate: {
-    backgroundColor: '#007700', // Dark green
+    backgroundColor: '#007700',
     borderColor: '#00aa00',
   },
   buttonCreateDisabledWithStreams: {
-    backgroundColor: '#555', // Darker if streams exist
+    backgroundColor: '#555',
     borderColor: '#444',
   },
   buttonStart: {
-    backgroundColor: '#007700', // Dark green
+    backgroundColor: '#007700',
     borderColor: '#00aa00',
   },
   buttonLive: {
-    backgroundColor: '#cc0000', // Red
+    backgroundColor: '#cc0000',
     borderColor: '#ff0000',
   },
   buttonEnd: {
-    backgroundColor: '#333', // Dark gray
+    backgroundColor: '#333',
     borderColor: '#ff0000',
   },
-  buttonEndAll: { // --- New Style ---
-    backgroundColor: '#8B0000', // Darker red
-    borderColor: '#A52A2A', // Brownish red border
-    margin: 5, // Add margin like other buttons
+  buttonEndAll: {
+    backgroundColor: '#8B0000',
+    borderColor: '#A52A2A',
+    margin: 5,
     padding: 15,
     borderRadius: 5,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-  },
-  buttonEndAllText: { // --- New Style ---
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
   },
   loadingContainer: {
     flex: 1,
@@ -882,6 +1234,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
   },
+  streamViewers: {
+    color: '#00ff00',
+    fontSize: 12,
+    marginTop: 2,
+  },
   endStreamButton: {
     backgroundColor: '#cc0000',
     paddingHorizontal: 15,
@@ -907,7 +1264,7 @@ const styles = StyleSheet.create({
   buttonDisabled: {
     backgroundColor: '#555',
     borderColor: '#444',
-    opacity: 0.7, // Make it even more visually disabled
+    opacity: 0.7,
   },
 });
 

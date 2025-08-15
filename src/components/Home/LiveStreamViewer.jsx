@@ -1,4 +1,4 @@
-// src/components/LiveStreamViewer.jsx - FIXED TO MATCH BACKEND
+// src/screens/LiveStreamViewer.js - FIXED VERSION WITH SHARED SOCKET
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -11,135 +11,231 @@ import {
   TextInput,
   ScrollView,
 } from 'react-native';
-import { useAuth } from '../../context/AuthContext';
-import { useSocket } from '../../context/SocketContext';
-import BASE_URL from '../../config/config';
+import { useAuth } from '../../context/AuthContext'; // Adjust path as needed
+import { useSocket } from '../../context/SocketContext'; // ADD THIS IMPORT
+import enhancedGlobalWebRTCService from '../../services/EnhancedGlobalWebRTCService'; // Adjust path as needed
+import BASE_URL from '../../config/config'; // Adjust path as needed
+import { RTCView } from 'react-native-webrtc';
 
 const LiveStreamViewer = ({ navigation, route }) => {
   const { user, token } = useAuth();
-  const { 
-    socket, 
-    isConnected, 
-    registerStreamHandlers,
-    emitJoinLiveStream,
-    emitLeaveLiveStream,
-    emitLiveStreamChat,
-    emitLiveStreamReaction
-  } = useSocket();
-
-  // Get streamId from navigation params if provided
+  const { socket, isConnected } = useSocket(); // GET SOCKET FROM CONTEXT
   const initialStreamId = route?.params?.streamId;
-
+  
+  // State management
   const [activeStreams, setActiveStreams] = useState([]);
   const [loadingStreams, setLoadingStreams] = useState(false);
-  const [joiningStreamId, setJoiningStreamId] = useState(null);
-  const [currentStreamId, setCurrentStreamId] = useState(initialStreamId || null);
+  const [currentStreamId, setCurrentStreamId] = useState(null);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState('');
-  const [remoteStream, setRemoteStream] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [newMessage, setNewMessage] = useState('');
   const [currentViewerCount, setCurrentViewerCount] = useState(0);
   const [streamTitle, setStreamTitle] = useState('');
   const [streamerName, setStreamerName] = useState('');
   const [streamStatus, setStreamStatus] = useState('');
-  const [streamSettings, setStreamSettings] = useState({});
-
-  const peerConnectionRef = useRef(null);
+  const [hasAutoJoined, setHasAutoJoined] = useState(false);
+  const [offerTimeout, setOfferTimeout] = useState(null);
+  const [connectionAttempts, setConnectionAttempts] = useState(0);
+  
+  // WebRTC States
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
+  const [isWebRTCConnected, setIsWebRTCConnected] = useState(false);
+  const [connectionQuality, setConnectionQuality] = useState('unknown');
+  const [streamState, setStreamState] = useState('idle');
+  const [broadcasterStatus, setBroadcasterStatus] = useState('unknown');
+  const [socketDebugInfo, setSocketDebugInfo] = useState('');
+  
   const flatListRef = useRef();
 
-  // ============ SOCKET EVENT HANDLERS ============
-  
+  // ============ SERVICE INITIALIZATION ============
   useEffect(() => {
-    if (!socket || !isConnected) return;
+    const initializeService = async () => {
+      try {
+        console.log('🚀 Initializing Enhanced WebRTC Service for Live Streaming');
+        console.log('🔌 Socket status:', { 
+          socketExists: !!socket, 
+          isConnected: isConnected,
+          socketId: socket?.id 
+        });
+        
+        // CRITICAL: Check if socket is available and connected
+        if (!socket || !isConnected) {
+          console.warn('⚠️ Socket not ready, waiting...');
+          setError('Connecting to server...');
+          return;
+        }
 
-    console.log('🎥 Registering stream event handlers');
+        // PASS THE SHARED SOCKET TO WEBRTC SERVICE
+        console.log('🔌 Setting external socket for WebRTC service');
+        enhancedGlobalWebRTCService.setExternalSocket(socket);
+        
+        // Initialize the service with token
+        await enhancedGlobalWebRTCService.initialize(token);
+        
+        // Set up callbacks
+        enhancedGlobalWebRTCService.setCallbacks({
+          onLocalStream: handleLocalStream,
+          onRemoteStream: handleRemoteStream,
+          onStreamStateChange: handleStreamStateChange,
+          onError: handleError,
+          onViewerCount: handleViewerCount,
+          onConnectionQuality: handleConnectionQuality,
+          onChatMessage: handleChatMessage,
+          onReaction: handleReaction,
+          onStreamEnded: handleStreamEnded,
+        });
+        
+        console.log('✅ Enhanced WebRTC Service initialized for live streaming');
+        setError(''); // Clear any connection errors
+        
+        // Auto-join stream if provided
+        if (initialStreamId && !hasAutoJoined) {
+          console.log('🎯 Auto-joining stream:', initialStreamId);
+          setTimeout(() => {
+            joinStream(initialStreamId);
+            setHasAutoJoined(true);
+          }, 1000);
+        }
+      } catch (error) {
+        console.error('❌ Failed to initialize service:', error);
+        setError(`Initialization failed: ${error.message}`);
+      }
+    };
 
-    // Register stream handlers with the socket context
-    registerStreamHandlers({
-      onJoinedLiveStream: handleJoinedLiveStream,
-      onLeftLiveStream: handleLeftLiveStream,
-      onViewerJoinedStream: handleViewerJoinedStream,
-      onViewerLeftStream: handleViewerLeftStream,
-      onStreamStatusUpdated: handleStreamStatusUpdated,
-      onStreamEnded: handleStreamEnded,
-      onLiveStreamChat: handleLiveStreamChat,
-      onLiveStreamReaction: handleLiveStreamReaction,
-      onStreamWebRTCSignal: handleStreamWebRTCSignal,
-      onUserWentLive: handleUserWentLive,
-    });
+    if (token && user) {
+      initializeService();
+    }
 
     return () => {
-      console.log('🧹 Cleaning up stream handlers');
+      console.log('🧹 LiveStreamViewer component unmounting');
+      if (offerTimeout) {
+        clearTimeout(offerTimeout);
+      }
+      if (currentStreamId) {
+        console.log('🧹 Cleaning up stream:', currentStreamId);
+        enhancedGlobalWebRTCService.leaveStream();
+      }
     };
+  }, [token, user, socket, isConnected, initialStreamId]); // ADDED socket and isConnected as dependencies
+
+  // ============ SOCKET STATUS MONITORING ============
+  useEffect(() => {
+    const updateSocketDebugInfo = () => {
+      const debugInfo = {
+        socketExists: !!socket,
+        socketConnected: isConnected,
+        socketId: socket?.id || 'none',
+        serviceReady: enhancedGlobalWebRTCService.isReady(),
+        serviceSocketStatus: enhancedGlobalWebRTCService.getSocketStatus(),
+      };
+      setSocketDebugInfo(JSON.stringify(debugInfo, null, 2));
+    };
+
+    updateSocketDebugInfo();
+    const interval = setInterval(updateSocketDebugInfo, 2000);
+    return () => clearInterval(interval);
   }, [socket, isConnected]);
 
-  // ============ SOCKET EVENT HANDLER FUNCTIONS ============
-  
-  const handleJoinedLiveStream = (data) => {
-    console.log('🎥 Successfully joined stream:', data);
+  // ============ SERVICE CALLBACKS ============
+  const handleLocalStream = (stream) => {
+    console.log('📹 Local stream received:', stream?.id);
+    setLocalStream(stream);
+  };
+
+  const handleRemoteStream = (stream) => {
+    console.log('📺 🎉 REMOTE STREAM RECEIVED:', stream?.id);
+    console.log('📺 Stream active:', stream?.active);
+    console.log('📺 Stream tracks:', stream?.getTracks().length);
+    setRemoteStream(stream);
+    setIsWebRTCConnected(true);
+    setError('');
+    setBroadcasterStatus('streaming');
     
-    if (data.streamId === joiningStreamId) {
-      setJoiningStreamId(null);
-      setCurrentStreamId(data.streamId);
-      setCurrentViewerCount(data.viewersCount || 0);
-      setStreamTitle(data.streamTitle || 'Live Stream');
-      setStreamerName(data.streamer?.fullName || data.streamer?.username || 'Streamer');
-      setStreamStatus(data.status || 'LIVE');
-      setStreamSettings(data.settings || {});
-      
-      // Handle WebRTC configuration if provided
-      if (data.rtcConfig) {
-        console.log('📡 WebRTC config received:', data.rtcConfig);
-        // TODO: Set up WebRTC peer connection here
-        setupWebRTCConnection(data.rtcConfig);
-      }
-      
-      Alert.alert('Joined Stream', `You are now watching ${data.streamTitle}`);
+    // Clear any pending offer timeouts
+    if (offerTimeout) {
+      clearTimeout(offerTimeout);
+      setOfferTimeout(null);
+    }
+    setConnectionAttempts(0);
+  };
+
+  const handleStreamStateChange = (state, data) => {
+    console.log('🔄 Stream state changed:', state, data);
+    setStreamState(state);
+    
+    switch (state) {
+      case 'joining':
+        setIsConnecting(true);
+        setError('');
+        setBroadcasterStatus('checking');
+        break;
+        
+      case 'viewing':
+        setIsConnecting(false);
+        if (data) {
+          setStreamTitle(data.title || 'Live Stream');
+          setStreamerName(data.streamer?.fullName || 'Streamer');
+          setCurrentViewerCount(data.currentViewerCount || 0);
+        }
+        // Start waiting for WebRTC offer with timeout
+        startOfferTimeout();
+        break;
+        
+      case 'connected':
+        setIsConnecting(false);
+        setIsWebRTCConnected(true);
+        setBroadcasterStatus('connected');
+        break;
+        
+      case 'video_connected':
+        setIsConnecting(false);
+        setIsWebRTCConnected(true);
+        setBroadcasterStatus('streaming');
+        console.log('✅ Video connection established!');
+        break;
+        
+      case 'ended':
+        handleStreamEnd();
+        break;
+        
+      case 'error':
+        setError(data?.message || 'Stream error occurred');
+        setBroadcasterStatus('error');
+        break;
+        
+      default:
+        console.log('🔄 Stream state changed to unhandled state:', state);
     }
   };
 
-  const handleLeftLiveStream = (data) => {
-    console.log('🎥 Left stream:', data);
-    cleanupStream();
+  const handleError = (errorData) => {
+    console.error('❌ Service error:', errorData);
+    setError(errorData.message || 'An error occurred');
+    setIsConnecting(false);
+    setBroadcasterStatus('error');
   };
 
-  const handleViewerJoinedStream = (data) => {
-    console.log('👁️ Viewer joined:', data);
-    setCurrentViewerCount(data.viewersCount || 0);
+  const handleViewerCount = (data) => {
+    console.log('👥 Viewer count update:', data);
+    setCurrentViewerCount(data.count || data.currentViewerCount || 0);
   };
 
-  const handleViewerLeftStream = (data) => {
-    console.log('👁️ Viewer left:', data);
-    setCurrentViewerCount(data.viewersCount || 0);
+  const handleConnectionQuality = ({ quality, stats }) => {
+    console.log('📊 Connection quality:', quality);
+    setConnectionQuality(quality);
   };
 
-  const handleStreamStatusUpdated = (data) => {
-    console.log('📊 Stream status updated:', data);
-    setStreamStatus(data.status);
-    
-    if (data.status === 'ENDED' && currentStreamId === data.streamId) {
-      Alert.alert('Stream Ended', 'The stream has ended.');
-      cleanupStream();
-    }
-  };
-
-  const handleStreamEnded = (data) => {
-    console.log('🔚 Stream ended:', data);
-    
-    if (currentStreamId === data.streamId) {
-      Alert.alert('Stream Ended', data.reason || 'The stream has ended.');
-      cleanupStream();
-    }
-    
-    // Remove from active streams list
-    setActiveStreams(prev => prev.filter(s => s.streamId !== data.streamId));
-  };
-
-  const handleLiveStreamChat = (data) => {
+  const handleChatMessage = (data) => {
     console.log('💬 Chat message received:', data);
-    setChatMessages(prev => [...prev, data]);
+    setChatMessages(prev => [...prev, {
+      id: data.id || `${Date.now()}_${Math.random()}`,
+      user: data.user || { username: data.username },
+      message: data.message,
+      timestamp: data.timestamp || Date.now(),
+    }]);
     
-    // Scroll to bottom
     setTimeout(() => {
       if (flatListRef.current) {
         flatListRef.current.scrollToEnd({ animated: true });
@@ -147,45 +243,63 @@ const LiveStreamViewer = ({ navigation, route }) => {
     }, 100);
   };
 
-  const handleLiveStreamReaction = (data) => {
-    console.log('❤️ Reaction received:', data);
-    // Handle reactions - you can show floating reactions here
+  const handleReaction = (data) => {
+    console.log('❤ Reaction received:', data);
   };
 
-  const handleStreamWebRTCSignal = (data) => {
-    console.log('📡 WebRTC signal received:', data.type);
-    // Handle WebRTC signaling for stream
-    handleWebRTCSignalingMessage(data);
+  const handleStreamEnded = (data) => {
+    console.log('🔚 Stream ended:', data);
+    handleStreamEnd();
+    Alert.alert('Stream Ended', data.reason || 'The stream has ended.');
   };
 
-  const handleUserWentLive = (data) => {
-    console.log('📢 User went live:', data);
-    // Refresh streams list to show new live stream
-    fetchActiveStreams();
+  const handleStreamEnd = () => {
+    setStreamState('ended');
+    setIsWebRTCConnected(false);
+    setCurrentStreamId(null);
+    setRemoteStream(null);
+    setChatMessages([]);
+    setCurrentViewerCount(0);
+    setBroadcasterStatus('offline');
+    if (offerTimeout) {
+      clearTimeout(offerTimeout);
+      setOfferTimeout(null);
+    }
+    setConnectionAttempts(0);
   };
 
-  // ============ API FUNCTIONS ============
-  
-  const fetchActiveStreams = async (page = 1, limit = 20, category = '', search = '') => {
+  // ============ WEBRTC OFFER TIMEOUT HANDLING ============
+  const startOfferTimeout = () => {
+    console.log('⏰ Starting offer timeout (10 seconds)...');
+    const timeout = setTimeout(() => {
+      if (!isWebRTCConnected && currentStreamId) {
+        console.warn('⚠️ No WebRTC offer received after 10 seconds');
+        setBroadcasterStatus('not_ready');
+        setConnectionAttempts(prev => prev + 1);
+        
+        if (connectionAttempts < 3) {
+          console.log('🔄 Attempting to request offer manually (attempt', connectionAttempts + 1, ')');
+          // Start timeout again for retry
+          startOfferTimeout();
+        } else {
+          setError('Broadcaster is not sending video. They may need to start their camera.');
+          setBroadcasterStatus('no_video');
+        }
+      }
+    }, 10000); // 10 seconds timeout
+    
+    setOfferTimeout(timeout);
+  };
+
+  // ============ STREAM MANAGEMENT ============
+  const fetchActiveStreams = async () => {
     if (!token) return;
     
     setLoadingStreams(true);
     setError('');
-
+    
     try {
-      // Construct query string - FIXED: Using correct backend endpoint
-      const queryParams = new URLSearchParams({ 
-        page: page.toString(), 
-        limit: limit.toString() 
-      });
-      
-      if (category) queryParams.append('category', category);
-      if (search) queryParams.append('search', search);
-      
-      const url = `${BASE_URL}/api/v1/live/active?${queryParams.toString()}`;
-      console.log('🌐 Fetching active streams from:', url);
-
-      const response = await fetch(url, {
+      const response = await fetch(`${BASE_URL}/api/v1/live/active`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -200,278 +314,172 @@ const LiveStreamViewer = ({ navigation, route }) => {
       const data = await response.json();
       console.log('📊 Active streams response:', data);
 
-      if (data.success) {
-        const streams = data.data?.streams || [];
-        setActiveStreams(streams);
-        console.log(`✅ Fetched ${streams.length} active streams`);
-      } else {
-        throw new Error(data.message || 'Failed to fetch streams');
+      let streams = [];
+      if (data.streams && Array.isArray(data.streams)) {
+        streams = data.streams;
+      } else if (data.data && Array.isArray(data.data.streams)) {
+        streams = data.data.streams;
+      } else if (Array.isArray(data)) {
+        streams = data;
       }
+
+      setActiveStreams(streams);
+      console.log(`✅ Fetched ${streams.length} active streams`);
     } catch (err) {
       console.error('❌ Error fetching streams:', err);
       setError(err.message || 'Could not load streams.');
-      
-      // Show user-friendly error
-      if (err.message.includes('Failed to fetch') || err.message.includes('Network')) {
-        Alert.alert('Network Error', 'Please check your internet connection and try again.');
-      } else {
-        Alert.alert('Error', err.message || 'Failed to load live streams.');
-      }
     } finally {
       setLoadingStreams(false);
     }
   };
 
-  // ============ STREAM ACTIONS ============
-  
   const joinStream = async (streamId) => {
-    if (!socket || !isConnected) {
-      Alert.alert('Connection Error', 'Please check your internet connection.');
-      return;
-    }
-    
-    if (joiningStreamId) {
-      Alert.alert('Busy', 'Already trying to join a stream.');
-      return;
-    }
-
-    console.log(`🎥 Joining stream: ${streamId}`);
-    setJoiningStreamId(streamId);
-    setError('');
-    setChatMessages([]);
-    setCurrentViewerCount(0);
-    setRemoteStream(null);
-
     try {
-      // FIXED: Using correct socket event that matches backend
-      const success = emitJoinLiveStream({
-        streamId: streamId,
-        role: 'viewer'
-      });
-
-      if (!success) {
-        throw new Error('Failed to emit join stream event');
+      console.log('🎥 🎯 Starting join stream process:', streamId);
+      
+      // Check if socket is ready
+      if (!socket || !isConnected) {
+        throw new Error('Socket connection not ready');
+      }
+      
+      // Check if WebRTC service is ready
+      if (!enhancedGlobalWebRTCService.isReady()) {
+        throw new Error('WebRTC service not ready');
       }
 
-      console.log(`📡 Emitted join_live_stream for: ${streamId}`);
+      setCurrentStreamId(streamId);
+      setIsConnecting(true);
+      setError('');
+      setChatMessages([]);
+      setStreamState('joining');
+      setBroadcasterStatus('checking');
+      setConnectionAttempts(0);
 
-      // Find stream details for UI
+      // Set stream info from active streams list
       const stream = activeStreams.find(s => s.streamId === streamId);
       if (stream) {
         setStreamTitle(stream.title || 'Live Stream');
         setStreamerName(stream.streamer?.fullName || stream.streamer?.username || 'Streamer');
+        setStreamStatus(stream.status || 'LIVE');
+        setCurrentViewerCount(stream.currentViewerCount || 0);
       }
 
-    } catch (err) {
-      console.error('❌ Error joining stream:', err);
-      setJoiningStreamId(null);
-      setError(err.message || 'Could not join the stream.');
-      Alert.alert('Error', err.message || 'Failed to join the stream.');
+      console.log('🎯 Calling enhancedGlobalWebRTCService.joinStreamAsViewer...');
+      const success = await enhancedGlobalWebRTCService.joinStreamAsViewer(streamId);
+      
+      if (!success) {
+        throw new Error('Failed to join stream');
+      }
+
+      console.log('✅ Service join initiated successfully');
+    } catch (error) {
+      console.error('❌ Error joining stream:', error);
+      setError(error.message || 'Failed to join stream');
+      setIsConnecting(false);
+      setCurrentStreamId(null);
+      setStreamState('idle');
+      setBroadcasterStatus('error');
+      Alert.alert('Error', error.message || 'Failed to join the stream.');
     }
   };
 
-  const leaveStream = () => {
-    console.log(`🎥 Leaving stream: ${currentStreamId}`);
-    
-    if (currentStreamId && socket && isConnected) {
-      // FIXED: Using correct socket event that matches backend
-      emitLeaveLiveStream({
-        streamId: currentStreamId
-      });
-    }
-    
-    cleanupStream();
-  };
-
-  const cleanupStream = () => {
-    // Stop remote stream tracks
-    if (remoteStream) {
-      try {
-        remoteStream.getTracks().forEach(track => track.stop());
-      } catch (error) {
-        console.warn('Error stopping remote stream tracks:', error);
+  const leaveStream = async () => {
+    console.log('🎥 Leaving stream');
+    try {
+      if (currentStreamId) {
+        await enhancedGlobalWebRTCService.leaveStream();
       }
-      setRemoteStream(null);
-    }
-    
-    // Close peer connection
-    if (peerConnectionRef.current) {
-      try {
-        peerConnectionRef.current.close();
-      } catch (error) {
-        console.warn('Error closing peer connection:', error);
-      }
-      peerConnectionRef.current = null;
+    } catch (error) {
+      console.error('❌ Error leaving stream:', error);
     }
 
-    // Reset state
-    setJoiningStreamId(null);
+    // Reset UI state
     setCurrentStreamId(null);
+    setIsConnecting(false);
+    setIsWebRTCConnected(false);
+    setRemoteStream(null);
+    setLocalStream(null);
     setChatMessages([]);
     setCurrentViewerCount(0);
     setStreamTitle('');
     setStreamerName('');
     setStreamStatus('');
-    setStreamSettings({});
-    setNewMessage('');
+    setError('');
+    setStreamState('idle');
+    setConnectionQuality('unknown');
+    setBroadcasterStatus('unknown');
+    
+    if (offerTimeout) {
+      clearTimeout(offerTimeout);
+      setOfferTimeout(null);
+    }
+    setConnectionAttempts(0);
   };
 
-  // ============ CHAT FUNCTIONS ============
-  
+  // ============ CHAT & REACTIONS ============
   const sendChatMessage = () => {
     const messageToSend = newMessage.trim();
-    if (!messageToSend || !socket || !isConnected || !currentStreamId) return;
+    if (!messageToSend || !currentStreamId) return;
 
-    try {
-      // FIXED: Using correct socket event that matches backend
-      const success = emitLiveStreamChat({
-        streamId: currentStreamId,
-        message: messageToSend,
-        messageType: 'text'
-      });
-
-      if (success) {
-        console.log(`💬 Sent chat message: ${messageToSend}`);
-        setNewMessage('');
-      } else {
-        throw new Error('Failed to send message');
-      }
-    } catch (err) {
-      console.error('❌ Error sending chat message:', err);
+    const success = enhancedGlobalWebRTCService.sendChatMessage(messageToSend);
+    if (success) {
+      console.log(`💬 Sent chat message: ${messageToSend}`);
+      setNewMessage('');
+    } else {
       Alert.alert('Error', 'Could not send message.');
     }
   };
 
   const sendReaction = (reaction) => {
-    if (!socket || !isConnected || !currentStreamId) return;
+    if (!currentStreamId) return;
 
-    try {
-      // FIXED: Using correct socket event that matches backend
-      const success = emitLiveStreamReaction({
-        streamId: currentStreamId,
-        reaction: reaction,
-        intensity: 1
-      });
-
-      if (success) {
-        console.log(`❤️ Sent reaction: ${reaction}`);
-      }
-    } catch (err) {
-      console.error('❌ Error sending reaction:', err);
-    }
-  };
-
-  // ============ WEBRTC FUNCTIONS ============
-  
-  const setupWebRTCConnection = (rtcConfig) => {
-    try {
-      console.log('📡 Setting up WebRTC connection with config:', rtcConfig);
-      
-      const configuration = {
-        iceServers: rtcConfig.iceServers || [
-          { urls: 'stun:stun.l.google.com:19302' }
-        ]
-      };
-      
-      const pc = new RTCPeerConnection(configuration);
-      
-      pc.ontrack = (event) => {
-        console.log('📺 Received remote track');
-        if (event.streams && event.streams[0]) {
-          setRemoteStream(event.streams[0]);
-        }
-      };
-      
-      pc.onicecandidate = (event) => {
-        if (event.candidate && socket && currentStreamId) {
-          // Send ICE candidate through socket
-          socket.emit('stream_webrtc_signal', {
-            streamId: currentStreamId,
-            type: 'ice-candidate',
-            data: {
-              candidate: event.candidate
-            }
-          });
-        }
-      };
-      
-      pc.onconnectionstatechange = () => {
-        console.log('📡 WebRTC connection state:', pc.connectionState);
-      };
-      
-      peerConnectionRef.current = pc;
-      
-    } catch (error) {
-      console.error('❌ Error setting up WebRTC:', error);
-      Alert.alert('WebRTC Error', 'Could not set up stream connection.');
-    }
-  };
-
-  const handleWebRTCSignalingMessage = async (data) => {
-    const pc = peerConnectionRef.current;
-    if (!pc) return;
-
-    try {
-      switch (data.type) {
-        case 'offer':
-          console.log('📡 Handling WebRTC offer');
-          await pc.setRemoteDescription(new RTCSessionDescription(data.data));
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          
-          // Send answer back through socket
-          if (socket && currentStreamId) {
-            socket.emit('stream_webrtc_signal', {
-              streamId: currentStreamId,
-              type: 'answer',
-              data: answer
-            });
-          }
-          break;
-          
-        case 'ice-candidate':
-          console.log('📡 Handling ICE candidate');
-          await pc.addIceCandidate(new RTCIceCandidate(data.data.candidate));
-          break;
-          
-        default:
-          console.log('📡 Unknown WebRTC signal type:', data.type);
-      }
-    } catch (error) {
-      console.error('❌ Error handling WebRTC signal:', error);
+    const success = enhancedGlobalWebRTCService.sendReaction(reaction);
+    if (success) {
+      console.log(`❤ Sent reaction: ${reaction}`);
     }
   };
 
   // ============ LIFECYCLE EFFECTS ============
-  
   useEffect(() => {
-    fetchActiveStreams();
-  }, [token]);
-
-  useEffect(() => {
-    if (!isConnected) {
-      setError('Socket connection lost.');
-      setRemoteStream(null);
-      setChatMessages([]);
-      setCurrentViewerCount(0);
-    } else {
-      setError('');
+    if (token && socket && isConnected) {
+      fetchActiveStreams();
     }
-  }, [isConnected]);
+  }, [token, socket, isConnected]);
 
-  // Auto-join stream if streamId provided via navigation
-  useEffect(() => {
-    if (initialStreamId && isConnected && socket && !currentStreamId && !joiningStreamId) {
-      console.log('🎥 Auto-joining stream from navigation:', initialStreamId);
-      // Wait a bit for the component to fully mount
-      setTimeout(() => {
-        joinStream(initialStreamId);
-      }, 1000);
-    }
-  }, [initialStreamId, isConnected, socket, currentStreamId, joiningStreamId]);
+  // ============ DEBUG INFO ============
+  const getDebugInfo = () => {
+    const debugInfo = enhancedGlobalWebRTCService.getStreamingDebugInfo();
+    return `
+🔍 ENHANCED LIVE STREAM DEBUG:
+- Stream State: ${streamState}
+- Broadcaster Status: ${broadcasterStatus}
+- Connection Attempts: ${connectionAttempts}/3
+- WebRTC Connected: ${isWebRTCConnected}
+- Has Remote Stream: ${!!remoteStream}
+- Remote Stream Active: ${remoteStream?.active || false}
+- Current Viewers: ${currentViewerCount}
+- Connection Quality: ${connectionQuality}
+
+🔌 SOCKET DEBUG:
+${socketDebugInfo}
+
+🎥 SERVICE DEBUG:
+- Service Ready: ${enhancedGlobalWebRTCService.isReady()}
+- Stream ID: ${debugInfo.streamId || 'none'}
+- Stream Role: ${debugInfo.streamRole || 'none'}
+- Has Broadcaster Connection: ${debugInfo.hasBroadcasterConnection}
+- Broadcaster Connection State: ${debugInfo.broadcasterConnectionState}
+    `.trim();
+  };
+
+  // ============ MANUAL DEBUGGING ============
+  const testSocketConnection = () => {
+    console.log('🧪 Testing socket connection manually...');
+    const socketOk = enhancedGlobalWebRTCService.testSocketConnection();
+    Alert.alert('Socket Test', socketOk ? 'Socket OK' : 'Socket Failed');
+  };
 
   // ============ RENDER FUNCTIONS ============
-  
   const renderStreamItem = ({ item }) => (
     <View style={styles.streamItem}>
       <Text style={styles.streamTitle}>{item.title}</Text>
@@ -479,18 +487,18 @@ const LiveStreamViewer = ({ navigation, route }) => {
         Streamer: {item.streamer?.fullName || item.streamer?.username || 'Unknown'}
       </Text>
       <Text style={styles.streamInfo}>Category: {item.category || 'General'}</Text>
-      <Text style={styles.streamInfo}>Viewers: {item.currentViewers || 0}</Text>
+      <Text style={styles.streamInfo}>Viewers: {item.currentViewerCount || 0}</Text>
       <Text style={styles.streamInfo}>Status: {item.status || 'LIVE'}</Text>
       <TouchableOpacity
         style={[
           styles.joinButton,
-          (joiningStreamId === item.streamId) && styles.joiningButton
+          (isConnecting && currentStreamId === item.streamId) && styles.joiningButton
         ]}
         onPress={() => joinStream(item.streamId)}
-        disabled={!!joiningStreamId || !!currentStreamId}
+        disabled={!!currentStreamId || isConnecting}
       >
         <Text style={styles.joinButtonText}>
-          {joiningStreamId === item.streamId ? 'Joining...' : 
+          {(isConnecting && currentStreamId === item.streamId) ? 'Joining...' :
            currentStreamId ? 'In Stream' : 'Join Stream'}
         </Text>
       </TouchableOpacity>
@@ -499,7 +507,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
 
   const renderReactionButtons = () => (
     <View style={styles.reactionContainer}>
-      {['❤️', '👍', '😍', '🔥', '👏'].map((reaction) => (
+      {['❤', '👍', '😍', '🔥', '👏'].map((reaction) => (
         <TouchableOpacity
           key={reaction}
           style={styles.reactionButton}
@@ -511,24 +519,63 @@ const LiveStreamViewer = ({ navigation, route }) => {
     </View>
   );
 
+  const getBroadcasterStatusMessage = () => {
+    switch (broadcasterStatus) {
+      case 'checking':
+        return 'Checking broadcaster status...';
+      case 'not_ready':
+        return 'Waiting for broadcaster to start video...';
+      case 'no_video':
+        return 'Broadcaster camera is not active. Please wait...';
+      case 'connected':
+        return 'Connected, waiting for video...';
+      case 'streaming':
+        return 'Streaming';
+      case 'offline':
+        return 'Broadcaster is offline';
+      case 'error':
+        return 'Connection error';
+      default:
+        return 'Establishing connection...';
+    }
+  };
+
   // ============ MAIN RENDER ============
-  
   return (
     <View style={styles.container}>
+      {/* Connection Status */}
+      {!socket || !isConnected ? (
+        <View style={styles.connectionWarning}>
+          <Text style={styles.connectionWarningText}>
+            🔌 Connecting to server...
+          </Text>
+        </View>
+      ) : null}
+      
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
+      {/* DEBUG INFO */}
+      {__DEV__ && (
+        <ScrollView style={styles.debugContainer}>
+          <Text style={styles.debugText}>{getDebugInfo()}</Text>
+          <TouchableOpacity style={styles.debugButton} onPress={testSocketConnection}>
+            <Text style={styles.debugButtonText}>Test Socket</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      )}
+
       {/* Stream List */}
-      {!currentStreamId && !joiningStreamId && (
+      {!currentStreamId && (
         <View style={styles.streamListContainer}>
           <View style={styles.headerRow}>
             <Text style={styles.header}>Active Live Streams</Text>
-            <TouchableOpacity onPress={() => fetchActiveStreams()} disabled={loadingStreams}>
+            <TouchableOpacity onPress={fetchActiveStreams} disabled={loadingStreams}>
               <Text style={styles.refreshText}>
                 {loadingStreams ? 'Loading...' : 'Refresh'}
               </Text>
             </TouchableOpacity>
           </View>
-          
+
           {loadingStreams ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#ed167e" />
@@ -537,7 +584,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
           ) : activeStreams.length === 0 ? (
             <View style={styles.noStreamsContainer}>
               <Text style={styles.noStreamsText}>No live streams available</Text>
-              <TouchableOpacity onPress={() => fetchActiveStreams()} style={styles.retryButton}>
+              <TouchableOpacity onPress={fetchActiveStreams} style={styles.retryButton}>
                 <Text style={styles.retryButtonText}>Retry</Text>
               </TouchableOpacity>
             </View>
@@ -554,7 +601,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
       )}
 
       {/* Stream Viewer */}
-      {(currentStreamId || joiningStreamId) && (
+      {currentStreamId && (
         <View style={styles.viewerContainer}>
           {/* Stream Header */}
           <View style={styles.streamHeader}>
@@ -564,37 +611,66 @@ const LiveStreamViewer = ({ navigation, route }) => {
             <View style={styles.streamInfoHeader}>
               <Text style={styles.streamTitleHeader}>{streamTitle || 'Live Stream'}</Text>
               <Text style={styles.streamerName}>{streamerName || 'Streamer'}</Text>
-              <Text style={styles.viewerCount}>👁️ {currentViewerCount} • {streamStatus}</Text>
+              <Text style={styles.viewerCount}>👁 {currentViewerCount} • {streamStatus}</Text>
+              <Text style={styles.connectionStatus}>
+                Status: {getBroadcasterStatusMessage()}
+              </Text>
+              {connectionAttempts > 0 && (
+                <Text style={styles.connectionAttempts}>
+                  Connection attempt: {connectionAttempts}/3
+                </Text>
+              )}
             </View>
           </View>
 
           {/* Video Stream Container */}
           <View style={styles.videoContainer}>
-            {joiningStreamId && !remoteStream && (
+            {isConnecting && !remoteStream && (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#ed167e" />
                 <Text style={styles.loadingText}>Connecting to stream...</Text>
+                <Text style={styles.loadingSubText}>Please wait...</Text>
               </View>
             )}
-            {remoteStream && (
+
+            {remoteStream && remoteStream.active ? (
+              <View style={styles.videoWrapper}>
+                <RTCView
+                  streamURL={remoteStream.toURL()}
+                  style={styles.rtcView}
+                  objectFit="cover"
+                />
+                <View style={styles.videoOverlay}>
+                  <Text style={styles.liveIndicator}>🔴 LIVE</Text>
+                  {connectionQuality !== 'unknown' && (
+                    <Text style={styles.qualityIndicator}>{connectionQuality.toUpperCase()}</Text>
+                  )}
+                </View>
+              </View>
+            ) : currentStreamId && !isConnecting ? (
               <View style={styles.videoPlaceholder}>
                 <Text style={styles.videoPlaceholderText}>
-                  🎥 Live Video Stream
+                  {broadcasterStatus === 'no_video' ?
+                    '📹 Broadcaster camera is off' :
+                    '📡 Waiting for video stream...'}
                 </Text>
-                <Text style={styles.videoInfo}>
-                  Stream ID: {remoteStream.id}
+                <Text style={styles.videoSubText}>
+                  {getBroadcasterStatusMessage()}
                 </Text>
-                {/* TODO: Integrate actual video component here */}
-                {/* <RTCView streamURL={remoteStream.toURL()} style={styles.video} /> */}
+                {connectionAttempts > 0 && connectionAttempts < 3 && (
+                  <TouchableOpacity
+                    style={styles.retryVideoButton}
+                    onPress={() => {
+                      // Restart the offer timeout for retry
+                      setConnectionAttempts(prev => prev + 1);
+                      startOfferTimeout();
+                    }}
+                  >
+                    <Text style={styles.retryVideoText}>Retry Connection</Text>
+                  </TouchableOpacity>
+                )}
               </View>
-            )}
-            {!joiningStreamId && !remoteStream && currentStreamId && (
-              <View style={styles.videoPlaceholder}>
-                <Text style={styles.videoPlaceholderText}>
-                  📡 Setting up video connection...
-                </Text>
-              </View>
-            )}
+            ) : null}
           </View>
 
           {/* Reactions */}
@@ -606,7 +682,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
             <FlatList
               ref={flatListRef}
               data={chatMessages}
-              keyExtractor={(item) => item.id?.toString() || `${item.timestamp}_${Math.random()}`}
+              keyExtractor={(item) => item.id?.toString()}
               renderItem={({ item }) => (
                 <View style={styles.messageContainer}>
                   <Text style={styles.messageUser}>
@@ -625,17 +701,17 @@ const LiveStreamViewer = ({ navigation, route }) => {
                 onChangeText={setNewMessage}
                 placeholder="Type a message..."
                 placeholderTextColor="#999"
-                editable={isConnected && !!currentStreamId && streamSettings.allowComments !== false}
+                editable={!!currentStreamId}
                 onSubmitEditing={sendChatMessage}
                 multiline={false}
               />
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={[
                   styles.sendButton,
-                  (!isConnected || !newMessage.trim() || !currentStreamId) && styles.sendButtonDisabled
-                ]} 
-                onPress={sendChatMessage} 
-                disabled={!isConnected || !newMessage.trim() || !currentStreamId}
+                  (!newMessage.trim() || !currentStreamId) && styles.sendButtonDisabled
+                ]}
+                onPress={sendChatMessage}
+                disabled={!newMessage.trim() || !currentStreamId}
               >
                 <Text style={styles.sendButtonText}>Send</Text>
               </TouchableOpacity>
@@ -652,11 +728,44 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000',
   },
+  connectionWarning: {
+    backgroundColor: '#ff9500',
+    padding: 8,
+    alignItems: 'center',
+  },
+  connectionWarningText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
   errorText: {
     color: '#ff6b6b',
     padding: 10,
     textAlign: 'center',
     backgroundColor: 'rgba(255, 107, 107, 0.1)',
+  },
+  debugContainer: {
+    backgroundColor: '#111',
+    padding: 10,
+    marginBottom: 10,
+    maxHeight: 200,
+  },
+  debugText: {
+    color: '#00ff00',
+    fontSize: 10,
+    fontFamily: 'monospace',
+  },
+  debugButton: {
+    backgroundColor: '#333',
+    padding: 8,
+    marginTop: 5,
+    borderRadius: 4,
+    alignItems: 'center',
+  },
+  debugButtonText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   streamListContainer: {
     flex: 1,
@@ -687,6 +796,11 @@ const styles = StyleSheet.create({
     color: '#fff',
     marginTop: 10,
     fontSize: 16,
+  },
+  loadingSubText: {
+    color: '#666',
+    marginTop: 5,
+    fontSize: 12,
   },
   noStreamsContainer: {
     flex: 1,
@@ -784,6 +898,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
   },
+  connectionStatus: {
+    fontSize: 11,
+    color: '#00ff00',
+    marginTop: 2,
+  },
+  connectionAttempts: {
+    fontSize: 10,
+    color: '#ff9900',
+    marginTop: 2,
+  },
   videoContainer: {
     flex: 2,
     backgroundColor: '#000',
@@ -792,18 +916,62 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#333',
   },
+  videoWrapper: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+  },
+  rtcView: {
+    width: '100%',
+    height: '100%',
+    backgroundColor: '#000',
+  },
+  videoOverlay: {
+    position: 'absolute',
+    top: 10,
+    left: 10,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  liveIndicator: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  qualityIndicator: {
+    color: '#00ff00',
+    fontSize: 10,
+    marginTop: 2,
+  },
   videoPlaceholder: {
     alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
   },
   videoPlaceholderText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: '600',
+    textAlign: 'center',
   },
-  videoInfo: {
+  videoSubText: {
     color: '#666',
     fontSize: 12,
     marginTop: 5,
+    textAlign: 'center',
+  },
+  retryVideoButton: {
+    marginTop: 15,
+    backgroundColor: '#ed167e',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryVideoText: {
+    color: '#fff',
+    fontWeight: '600',
   },
   reactionContainer: {
     flexDirection: 'row',
@@ -887,6 +1055,5 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 });
-
 
 export default LiveStreamViewer;

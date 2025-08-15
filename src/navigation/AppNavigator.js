@@ -60,7 +60,7 @@ import PhotoViewerScreen from '../screens/tabs/PhotoViewerScreen';
 import ReelsViewerScreen from '../screens/tabs/ReelsViewerScreen';
 
 // Call-related screens
-import CallPage from '../screens/CallPage';
+// import CallPage from '../screens/CallPage';
 import CallScreen from '../screens/CallScreen';
 
 const Stack = createNativeStackNavigator();
@@ -536,14 +536,14 @@ const AppNavigator = ({ initialRouteName }) => {
         options={callScreenOptions}
       />
       
-      <Stack.Screen 
+      {/* <Stack.Screen 
         name="CallPage" 
         component={CallPage}
         options={{
           ...callScreenOptions,
           animationDuration: 250,
         }}
-      />
+      /> */}
     </Stack.Navigator>
   );
 };

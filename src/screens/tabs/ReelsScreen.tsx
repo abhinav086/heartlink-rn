@@ -1,3 +1,4 @@
+// src/screens/tabs/ReelsScreen.tsx
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   SafeAreaView,
@@ -41,17 +42,18 @@ const ReelsScreen = ({ navigation }) => {
   const [likeAnimations, setLikeAnimations] = useState([]);
   const animationId = useRef(0);
 
-  // Enhanced queue system for like operations
+  // Queue system for like operations
   const [likeQueue, setLikeQueue] = useState([]);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const queueRef = useRef([]);
   const processingRef = useRef(false);
 
+  // Use consistent BASE_URL with v1
   const BASE_URL = 'https://backendforheartlink.in';
 
   // Calculate dummy views based on video age
   const calculateDummyViews = useCallback((createdAt) => {
-    if (!createdAt) return Math.floor(Math.random() * 31) + 20;
+    if (!createdAt) return Math.floor(Math.random() * 31) + 20; // 20-50 for unknown dates
 
     try {
       const now = new Date();
@@ -63,26 +65,31 @@ const ReelsScreen = ({ navigation }) => {
       let randomRange;
 
       if (diffInHours < 24) {
+        // Less than 1 day: 20-50 views
         baseViews = 20;
         randomRange = 30;
       } else if (diffInDays <= 7) {
+        // 1-7 days: 50-100 views
         baseViews = 50;
         randomRange = 50;
       } else if (diffInDays <= 30) {
+        // 1-30 days: 100-130 views
         baseViews = 100;
         randomRange = 30;
       } else {
+        // More than 30 days: 120-150 views
         baseViews = 120;
         randomRange = 30;
       }
 
+      // Add some randomization and account for engagement
       const randomViews = Math.floor(Math.random() * randomRange);
       const finalViews = baseViews + randomViews;
 
-      return Math.min(Math.max(finalViews, 20), 150);
+      return Math.min(Math.max(finalViews, 20), 150); // Ensure it's between 20-150
     } catch (error) {
       console.error('Error calculating views:', error);
-      return Math.floor(Math.random() * 31) + 20;
+      return Math.floor(Math.random() * 31) + 20; // Default to 20-50
     }
   }, []);
 
@@ -93,7 +100,7 @@ const ReelsScreen = ({ navigation }) => {
     return `${(count / 1000000).toFixed(1)}M`;
   }, []);
 
-  // Get auth headers
+  // Get auth headers (matching CommentScreen approach)
   const getAuthHeaders = async () => {
     try {
       const token = await AsyncStorage.getItem('token');
@@ -112,7 +119,7 @@ const ReelsScreen = ({ navigation }) => {
     }
   };
 
-  // Get current user
+  // Get current user (matching CommentScreen approach)
   const getCurrentUser = async () => {
     try {
       const userJson = await AsyncStorage.getItem('user');
@@ -137,7 +144,7 @@ const ReelsScreen = ({ navigation }) => {
     return null;
   };
 
-  // Enhanced queue processing with better error handling
+  // Process like queue in background
   const processLikeQueue = useCallback(async () => {
     if (processingRef.current || queueRef.current.length === 0) {
       return;
@@ -155,7 +162,7 @@ const ReelsScreen = ({ navigation }) => {
         console.log('Action:', likeAction.action);
 
         const headers = await getAuthHeaders();
-        const response = await fetch(`${BASE_URL}/api/v1/posts/${likeAction.reelId}/like`, {
+        const response = await fetch(`${BASE_URL}/api/v1/posts/reels/${likeAction.reelId}/like`, {
           method: 'PATCH',
           headers,
         });
@@ -163,20 +170,23 @@ const ReelsScreen = ({ navigation }) => {
         if (!response.ok) {
           const errorData = await response.json();
           console.error('Like queue processing error:', errorData.message);
+          // Don't revert UI since user already saw the change
+          // Just log the error and continue processing
           continue;
         }
 
         const updatedData = await response.json();
         console.log('Like queue success:', updatedData);
 
-        // Update with server response for accuracy
+        // Optionally update with server response for accuracy
         if (updatedData.success && updatedData.data) {
           setReels(prevReels =>
             prevReels.map(reel =>
               reel._id === likeAction.reelId
                 ? {
                     ...reel,
-                    likes: updatedData.data.reel?.likes || reel.likes || []
+                    likeCount: updatedData.data.likeCount || updatedData.data.realTimeLikes || reel.likeCount,
+                    likes: updatedData.data.reel?.likes || reel.likes
                   }
                 : reel
             )
@@ -185,6 +195,7 @@ const ReelsScreen = ({ navigation }) => {
 
       } catch (error) {
         console.error('Error processing like queue:', error);
+        // Continue processing other items in queue
         continue;
       }
 
@@ -219,7 +230,7 @@ const ReelsScreen = ({ navigation }) => {
     processLikeQueue();
   }, [processLikeQueue]);
 
-  // Profile press handler
+  // Profile press handler (similar to Post.js)
   const handleProfilePress = useCallback((authorData) => {
     try {
       console.log('Profile press triggered for:', authorData?.fullName || authorData?.username);
@@ -246,6 +257,7 @@ const ReelsScreen = ({ navigation }) => {
 
       if (isOwnProfile) {
         console.log('Navigating to own profile');
+        // Navigate to own profile or main profile screen
         navigation.navigate('UserProfile', {
           userId: userId,
           fromReels: true,
@@ -302,8 +314,9 @@ const ReelsScreen = ({ navigation }) => {
             comments: post.comments || [],
             likeCount: post.likeCount || post.likes?.length || 0,
             commentCount: post.commentCount || post.comments?.length || 0,
-            viewCount: dummyViews,
+            viewCount: dummyViews, // Add dummy views based on age
             type: post.type,
+            // Add isLiked property for easier state management
             isLiked: false // Will be calculated below
           };
         });
@@ -431,7 +444,7 @@ const ReelsScreen = ({ navigation }) => {
     });
   }, []);
 
-  // Enhanced instant like functionality - now manages likes array like ReelsViewerScreen
+  // Instant like functionality with queue processing
   const handleLike = useCallback(async (reelId) => {
     if (!reelId || !currentUser) {
       Alert.alert('Error', 'Unable to like reel');
@@ -450,21 +463,16 @@ const ReelsScreen = ({ navigation }) => {
       }
 
       const wasLiked = currentReel.isLiked;
-      const userId = currentUser._id || currentUser.id;
+      const originalLikeCount = currentReel.likeCount;
 
-      // INSTANT UI UPDATE - Update likes array instead of just count
+      // INSTANT UI UPDATE - No loading, no waiting
       setReels(prevReels =>
         prevReels.map(reel => {
           if (reel._id === reelId) {
-            const newLikes = wasLiked 
-              ? reel.likes?.filter(like => (typeof like === 'object' ? like.user || like._id : like) !== userId) || []
-              : [...(reel.likes || []), { user: userId, _id: Date.now().toString() }];
-            
             return {
               ...reel,
               isLiked: !wasLiked,
-              likes: newLikes,
-              likeCount: newLikes.length // Update count based on array length
+              likeCount: wasLiked ? Math.max(0, originalLikeCount - 1) : originalLikeCount + 1
             };
           }
           return reel;
@@ -508,7 +516,6 @@ const ReelsScreen = ({ navigation }) => {
               ? {
                   ...r,
                   commentCount: newCommentCount,
-                  comments: realTimeComments || r.comments || [],
                   realTimeComments: realTimeComments
                 }
               : r
@@ -584,8 +591,7 @@ const ReelsScreen = ({ navigation }) => {
     const isActive = index === currentIndex && isAppActive;
     const mediaSource = getMediaSource(item);
     const isVideo = !!item.video?.url;
-    const isLiked = item.isLiked;
-    const likeCount = item.likes?.length || 0; // Use likes array length for accuracy
+    const isLiked = item.isLiked; // Use the isLiked property directly
 
     const isPaused = manualPaused[item._id] || !isActive || !isFocused;
 
@@ -667,7 +673,7 @@ const ReelsScreen = ({ navigation }) => {
                 color={isLiked ? "#ed167e" : "#fff"}
                 style={styles.actionIcon}
               />
-              <Text style={styles.actionCount}>{likeCount}</Text>
+              <Text style={styles.actionCount}>{item.likeCount || 0}</Text>
             </TouchableOpacity>
 
             {/* Comment Button */}
