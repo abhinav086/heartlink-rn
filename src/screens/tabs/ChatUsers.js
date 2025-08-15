@@ -855,146 +855,228 @@ const ChatDetailScreen = () => {
     }
   };
 
-  // ===== START: REPLACED sendMessage FUNCTION =====
-  const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null) => {
-    if (messageType === 'text' && (!newMessage.trim() || sending)) return;
-    if (messageType !== 'text' && !fileData) return;
+ // STEP 1: Replace the sendMessage function in ChatDetailScreen
+const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null) => {
+  if (messageType === 'text' && (!newMessage.trim() || sending)) return;
+  if (messageType !== 'text' && !fileData) return;
 
-    const messageText = messageType === 'text' ? newMessage.trim() : newMessage;
-    const tempId = `temp_${Date.now()}_${Math.random()}`;
-    
-    setNewMessage('');
-    if (messageType === 'text') {
-      setSending(true);
+  const messageText = messageType === 'text' ? newMessage.trim() : newMessage;
+  const tempId = `temp_${Date.now()}_${Math.random()}`;
+
+  setNewMessage('');
+  
+  // Set loading states based on message type
+  if (messageType === 'text') {
+    setSending(true);
+  } else {
+    setUploadingFile(true);
+  }
+
+  try {
+    if (messageType === 'text' && socket && socket.connected) {
+      // Handle text messages via socket (existing logic)
+      console.log('📤 Sending text message via socket');
+
+      const messageData = {
+        conversationId,
+        receiverId,
+        content: messageText,
+        messageType: 'text',
+        tempId
+      };
+
+      socket.emit('sendMessage', messageData);
+
+      const confirmationTimeout = setTimeout(() => {
+        console.log('⚠️ Socket message timeout, falling back to HTTP');
+        sendViaHTTP();
+      }, 5000);
+
+      const handleMessageSent = (data) => {
+        if (data.tempId === tempId) {
+          clearTimeout(confirmationTimeout);
+          socket.off('messageSent', handleMessageSent);
+          socket.off('error', handleMessageError);
+          setSending(false);
+          console.log('✅ Message sent via socket successfully');
+        }
+      };
+
+      const handleMessageError = (error) => {
+        if (error.tempId === tempId) {
+          clearTimeout(confirmationTimeout);
+          socket.off('messageSent', handleMessageSent);
+          socket.off('error', handleMessageError);
+          console.log('❌ Socket message failed, falling back to HTTP');
+          sendViaHTTP();
+        }
+      };
+
+      socket.on('messageSent', handleMessageSent);
+      socket.on('error', handleMessageError);
+
+    } else {
+      // Handle file messages via HTTP with immediate UI feedback
+      await sendViaHTTP();
     }
 
-    try {
-      if (messageType === 'text' && socket && socket.connected) {
-        // Try socket first for text messages (real-time)
-        console.log('📤 Sending text message via socket');
+    async function sendViaHTTP() {
+      console.log('📤 Sending message via HTTP, type:', messageType);
+
+      let requestBody;
+      let headers = {
+        'Authorization': `Bearer ${token}`,
+      };
+      let endpoint = `${BASE_URL}/api/v1/chat/message`;
+
+      // 🔥 STEP 1A: Create optimistic message for immediate UI feedback (for file uploads)
+      let optimisticMessage = null;
+      if (messageType !== 'text') {
+        optimisticMessage = {
+          _id: tempId,
+          conversationId,
+          sender: {
+            _id: currentUser._id,
+            fullName: currentUser.fullName,
+            username: currentUser.username,
+            photoUrl: currentUser.photoUrl
+          },
+          receiver: {
+            _id: receiverId,
+            fullName: receiverName
+          },
+          messageType,
+          content: messageText || '',
+          fileUrl: fileData.uri, // Temporary local URI
+          fileName: fileData.name || 'File',
+          fileSize: fileData.size,
+          status: 'sending', // Custom status for optimistic update
+          createdAt: new Date().toISOString(),
+          isOptimistic: true // Flag to identify optimistic messages
+        };
+
+        // Add optimistic message to UI immediately
+        setMessages(prev => [...prev, optimisticMessage]);
         
-        const messageData = {
+        // Scroll to bottom
+        setTimeout(() => {
+          flatListRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+
+      // Prepare request based on message type
+      if (messageType === 'audio') {
+        endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
+        const formData = new FormData();
+        formData.append('voice', {
+          uri: fileData.uri,
+          type: fileData.type || 'audio/mp3',
+          name: fileData.name || `voice_message_${Date.now()}.mp3`,
+        });
+        formData.append('conversationId', conversationId);
+        formData.append('receiverId', receiverId);
+        if (audioDuration) {
+          formData.append('duration', audioDuration.toString());
+        }
+        requestBody = formData;
+      } else if (messageType === 'text') {
+        headers['Content-Type'] = 'application/json';
+        requestBody = JSON.stringify({
           conversationId,
           receiverId,
           content: messageText,
           messageType: 'text',
-          tempId
-        };
-
-        socket.emit('sendMessage', messageData);
-        
-        // Wait for confirmation or timeout
-        const confirmationTimeout = setTimeout(() => {
-          console.log('⚠ Socket message timeout, falling back to HTTP');
-          // Fallback to HTTP if socket fails
-          sendViaHTTP();
-        }, 5000);
-
-        // Listen for confirmation
-        const handleMessageSent = (data) => {
-          if (data.tempId === tempId) {
-            clearTimeout(confirmationTimeout);
-            socket.off('messageSent', handleMessageSent);
-            socket.off('error', handleMessageError);
-            setSending(false);
-            console.log('✅ Message sent via socket successfully');
-          }
-        };
-
-        const handleMessageError = (error) => {
-          if (error.tempId === tempId) {
-            clearTimeout(confirmationTimeout);
-            socket.off('messageSent', handleMessageSent);
-            socket.off('error', handleMessageError);
-            console.log('❌ Socket message failed, falling back to HTTP');
-            sendViaHTTP();
-          }
-        };
-
-        socket.on('messageSent', handleMessageSent);
-        socket.on('error', handleMessageError);
-
+        });
       } else {
-        // Use HTTP for file messages or when socket is not connected
-        await sendViaHTTP();
+        const formData = new FormData();
+        formData.append('file', fileData);
+        formData.append('conversationId', conversationId);
+        formData.append('receiverId', receiverId);
+        formData.append('messageType', messageType);
+        if (messageText) {
+          formData.append('content', messageText);
+        }
+        requestBody = formData;
       }
 
-      async function sendViaHTTP() {
-        console.log('📤 Sending message via HTTP');
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: requestBody,
+      });
+
+      const data = await response.json();
+      
+      if (response.ok && data.success) {
+        console.log('✅ Message sent via HTTP successfully');
         
-        let requestBody;
-        let headers = {
-          'Authorization': `Bearer ${token}`,
-        };
-        let endpoint = `${BASE_URL}/api/v1/chat/message`;
+        // 🔥 STEP 1B: Handle successful file upload
+        if (messageType !== 'text' && optimisticMessage) {
+          // Replace optimistic message with real message
+          setMessages(prev => prev.map(msg => {
+            if (msg._id === tempId && msg.isOptimistic) {
+              return {
+                ...data.data, // Real message from server
+                statusInfo: {
+                  isSent: true,
+                  isDelivered: false,
+                  isRead: false
+                }
+              };
+            }
+            return msg;
+          }));
 
-        if (messageType === 'audio') {
-          endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
-          const formData = new FormData();
-          formData.append('voice', {
-            uri: fileData.uri,
-            type: fileData.type || 'audio/mp3',
-            name: fileData.name || `voice_message_${Date.now()}.mp3`,
-          });
-          formData.append('conversationId', conversationId);
-          formData.append('receiverId', receiverId);
-          if (audioDuration) {
-            formData.append('duration', audioDuration.toString());
+          // 🔥 STEP 1C: Emit via socket for real-time updates to other users
+          if (socket && socket.connected) {
+            socket.emit('fileMessageSent', {
+              message: data.data,
+              conversationId,
+              receiverId
+            });
           }
-          requestBody = formData;
-        } else if (messageType === 'text') {
-          headers['Content-Type'] = 'application/json';
-          requestBody = JSON.stringify({
-            conversationId,
-            receiverId,
-            content: messageText,
-            messageType: 'text',
-          });
-        } else {
-          const formData = new FormData();
-          formData.append('file', fileData);
-          formData.append('conversationId', conversationId);
-          formData.append('receiverId', receiverId);
-          formData.append('messageType', messageType);
-          if (messageText) {
-            formData.append('content', messageText);
-          }
-          requestBody = formData;
         }
-
-        const response = await fetch(endpoint, {
-          method: 'POST',
-          headers,
-          body: requestBody,
-        });
-
-        const data = await response.json();
-        if (response.ok && data.success) {
-          console.log('✅ Message sent via HTTP successfully');
-          // Note: Don't add to messages state here as it will come via socket
+        
+      } else {
+        console.error('❌ HTTP message failed:', data);
+        
+        // 🔥 STEP 1D: Handle failed file upload
+        if (messageType !== 'text' && optimisticMessage) {
+          // Remove optimistic message and show error
+          setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
+          Alert.alert('Error', data.message || 'Failed to send message');
+          if (messageType === 'text') {
+            setNewMessage(messageText);
+          }
         } else {
-          console.error('❌ HTTP message failed:', data);
           Alert.alert('Error', data.message || 'Failed to send message');
           if (messageType === 'text') {
             setNewMessage(messageText);
           }
         }
       }
-
-    } catch (error) {
-      console.error('❌ Error sending message:', error);
-      Alert.alert('Error', 'Failed to send message');
-      if (messageType === 'text') {
-        setNewMessage(messageText);
-      }
-    } finally {
-      if (messageType === 'text') {
-        setSending(false);
-      } else {
-        setUploadingFile(false);
-      }
     }
-  };
+
+  } catch (error) {
+    console.error('❌ Error sending message:', error);
+    
+    // Handle error for optimistic messages
+    if (messageType !== 'text') {
+      setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
+    }
+    
+    Alert.alert('Error', 'Failed to send message');
+    if (messageType === 'text') {
+      setNewMessage(messageText);
+    }
+  } finally {
+    if (messageType === 'text') {
+      setSending(false);
+    } else {
+      setUploadingFile(false);
+    }
+  }
+};
   // ===== END: REPLACED sendMessage FUNCTION =====
 
   // Delete message
@@ -2202,5 +2284,4 @@ const styles = StyleSheet.create({
     height: height - 100,
   },
 });
-
 export default ChatDetailScreen;
