@@ -1,4 +1,4 @@
-// src/screens/LiveStreamViewer.js - FIXED VERSION WITH SHARED SOCKET
+// src/screens/LiveStreamViewer.js - FIXED & RESPONSIVE VERSION WITH SHARED SOCKET
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -10,16 +10,23 @@ import {
   ActivityIndicator,
   TextInput,
   ScrollView,
+  Dimensions, // Import Dimensions
 } from 'react-native';
-import { useAuth } from '../../context/AuthContext'; // Adjust path as needed
-import { useSocket } from '../../context/SocketContext'; // ADD THIS IMPORT
-import enhancedGlobalWebRTCService from '../../services/EnhancedGlobalWebRTCService'; // Adjust path as needed
-import BASE_URL from '../../config/config'; // Adjust path as needed
+import { useAuth } from '../../context/AuthContext';
+import { useSocket } from '../../context/SocketContext';
+import enhancedGlobalWebRTCService from '../../services/EnhancedGlobalWebRTCService';
+import BASE_URL from '../../config/config';
 import { RTCView } from 'react-native-webrtc';
+
+// Responsive utilities
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const scale = (size) => (SCREEN_WIDTH / 375) * size; // Base iPhone X width
+const verticalScale = (size) => (SCREEN_HEIGHT / 812) * size; // Base iPhone X height
+const moderateScale = (size, factor = 0.5) => size + (scale(size) - size) * factor;
 
 const LiveStreamViewer = ({ navigation, route }) => {
   const { user, token } = useAuth();
-  const { socket, isConnected } = useSocket(); // GET SOCKET FROM CONTEXT
+  const { socket, isConnected } = useSocket();
   const initialStreamId = route?.params?.streamId;
   
   // State management
@@ -60,21 +67,17 @@ const LiveStreamViewer = ({ navigation, route }) => {
           socketId: socket?.id 
         });
         
-        // CRITICAL: Check if socket is available and connected
         if (!socket || !isConnected) {
-          console.warn('⚠️ Socket not ready, waiting...');
+          console.warn('⚠ Socket not ready, waiting...');
           setError('Connecting to server...');
           return;
         }
 
-        // PASS THE SHARED SOCKET TO WEBRTC SERVICE
         console.log('🔌 Setting external socket for WebRTC service');
         enhancedGlobalWebRTCService.setExternalSocket(socket);
         
-        // Initialize the service with token
         await enhancedGlobalWebRTCService.initialize(token);
         
-        // Set up callbacks
         enhancedGlobalWebRTCService.setCallbacks({
           onLocalStream: handleLocalStream,
           onRemoteStream: handleRemoteStream,
@@ -88,9 +91,8 @@ const LiveStreamViewer = ({ navigation, route }) => {
         });
         
         console.log('✅ Enhanced WebRTC Service initialized for live streaming');
-        setError(''); // Clear any connection errors
+        setError('');
         
-        // Auto-join stream if provided
         if (initialStreamId && !hasAutoJoined) {
           console.log('🎯 Auto-joining stream:', initialStreamId);
           setTimeout(() => {
@@ -118,7 +120,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
         enhancedGlobalWebRTCService.leaveStream();
       }
     };
-  }, [token, user, socket, isConnected, initialStreamId]); // ADDED socket and isConnected as dependencies
+  }, [token, user, socket, isConnected, initialStreamId]);
 
   // ============ SOCKET STATUS MONITORING ============
   useEffect(() => {
@@ -144,22 +146,45 @@ const LiveStreamViewer = ({ navigation, route }) => {
     setLocalStream(stream);
   };
 
-  const handleRemoteStream = (stream) => {
-    console.log('📺 🎉 REMOTE STREAM RECEIVED:', stream?.id);
-    console.log('📺 Stream active:', stream?.active);
-    console.log('📺 Stream tracks:', stream?.getTracks().length);
-    setRemoteStream(stream);
-    setIsWebRTCConnected(true);
-    setError('');
-    setBroadcasterStatus('streaming');
+  // In LiveStreamViewer.js - Enhanced remote stream handling
+const handleRemoteStream = (stream) => {
+  console.log('📺 Processing remote stream:', stream?.id);
+  console.log('📺 Stream active:', stream?.active);
+  console.log('📺 Stream tracks:', stream?.getTracks().length);
+  
+  // ✅ CHECK AUDIO TRACKS IN REMOTE STREAM
+  if (stream) {
+    const audioTracks = stream.getAudioTracks();
+    const videoTracks = stream.getVideoTracks();
     
-    // Clear any pending offer timeouts
-    if (offerTimeout) {
-      clearTimeout(offerTimeout);
-      setOfferTimeout(null);
+    console.log('📺 Remote audio tracks:', audioTracks.length);
+    console.log('📺 Remote video tracks:', videoTracks.length);
+    
+    audioTracks.forEach((track, index) => {
+      console.log(`🎵 Remote audio track ${index}:`, {
+        id: track.id,
+        enabled: track.enabled,
+        muted: track.muted,
+        readyState: track.readyState
+      });
+    });
+    
+    if (audioTracks.length === 0) {
+      console.warn('⚠️ No audio tracks in remote stream!');
     }
-    setConnectionAttempts(0);
-  };
+  }
+  
+  setRemoteStream(stream);
+  setIsWebRTCConnected(true);
+  setError('');
+  setBroadcasterStatus('streaming');
+  
+  if (offerTimeout) {
+    clearTimeout(offerTimeout);
+    setOfferTimeout(null);
+  }
+  setConnectionAttempts(0);
+};
 
   const handleStreamStateChange = (state, data) => {
     console.log('🔄 Stream state changed:', state, data);
@@ -179,7 +204,6 @@ const LiveStreamViewer = ({ navigation, route }) => {
           setStreamerName(data.streamer?.fullName || 'Streamer');
           setCurrentViewerCount(data.currentViewerCount || 0);
         }
-        // Start waiting for WebRTC offer with timeout
         startOfferTimeout();
         break;
         
@@ -273,20 +297,19 @@ const LiveStreamViewer = ({ navigation, route }) => {
     console.log('⏰ Starting offer timeout (10 seconds)...');
     const timeout = setTimeout(() => {
       if (!isWebRTCConnected && currentStreamId) {
-        console.warn('⚠️ No WebRTC offer received after 10 seconds');
+        console.warn('⚠ No WebRTC offer received after 10 seconds');
         setBroadcasterStatus('not_ready');
         setConnectionAttempts(prev => prev + 1);
         
         if (connectionAttempts < 3) {
           console.log('🔄 Attempting to request offer manually (attempt', connectionAttempts + 1, ')');
-          // Start timeout again for retry
           startOfferTimeout();
         } else {
           setError('Broadcaster is not sending video. They may need to start their camera.');
           setBroadcasterStatus('no_video');
         }
       }
-    }, 10000); // 10 seconds timeout
+    }, 10000);
     
     setOfferTimeout(timeout);
   };
@@ -337,12 +360,10 @@ const LiveStreamViewer = ({ navigation, route }) => {
     try {
       console.log('🎥 🎯 Starting join stream process:', streamId);
       
-      // Check if socket is ready
       if (!socket || !isConnected) {
         throw new Error('Socket connection not ready');
       }
       
-      // Check if WebRTC service is ready
       if (!enhancedGlobalWebRTCService.isReady()) {
         throw new Error('WebRTC service not ready');
       }
@@ -355,7 +376,6 @@ const LiveStreamViewer = ({ navigation, route }) => {
       setBroadcasterStatus('checking');
       setConnectionAttempts(0);
 
-      // Set stream info from active streams list
       const stream = activeStreams.find(s => s.streamId === streamId);
       if (stream) {
         setStreamTitle(stream.title || 'Live Stream');
@@ -393,7 +413,6 @@ const LiveStreamViewer = ({ navigation, route }) => {
       console.error('❌ Error leaving stream:', error);
     }
 
-    // Reset UI state
     setCurrentStreamId(null);
     setIsConnecting(false);
     setIsWebRTCConnected(false);
@@ -661,7 +680,6 @@ ${socketDebugInfo}
                   <TouchableOpacity
                     style={styles.retryVideoButton}
                     onPress={() => {
-                      // Restart the offer timeout for retry
                       setConnectionAttempts(prev => prev + 1);
                       startOfferTimeout();
                     }}
@@ -730,61 +748,62 @@ const styles = StyleSheet.create({
   },
   connectionWarning: {
     backgroundColor: '#ff9500',
-    padding: 8,
+    padding: moderateScale(8),
     alignItems: 'center',
   },
   connectionWarningText: {
     color: '#fff',
     fontWeight: 'bold',
-    fontSize: 12,
+    fontSize: moderateScale(12),
   },
   errorText: {
     color: '#ff6b6b',
-    padding: 10,
+    padding: moderateScale(10),
     textAlign: 'center',
     backgroundColor: 'rgba(255, 107, 107, 0.1)',
+    fontSize: moderateScale(14),
   },
   debugContainer: {
     backgroundColor: '#111',
-    padding: 10,
-    marginBottom: 10,
-    maxHeight: 200,
+    padding: moderateScale(10),
+    marginBottom: moderateScale(10),
+    maxHeight: verticalScale(200),
   },
   debugText: {
     color: '#00ff00',
-    fontSize: 10,
+    fontSize: moderateScale(10),
     fontFamily: 'monospace',
   },
   debugButton: {
     backgroundColor: '#333',
-    padding: 8,
-    marginTop: 5,
-    borderRadius: 4,
+    padding: moderateScale(8),
+    marginTop: moderateScale(5),
+    borderRadius: moderateScale(4),
     alignItems: 'center',
   },
   debugButtonText: {
     color: '#fff',
-    fontSize: 10,
+    fontSize: moderateScale(10),
     fontWeight: 'bold',
   },
   streamListContainer: {
     flex: 1,
-    padding: 15,
+    padding: moderateScale(15),
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 15,
+    marginBottom: moderateScale(15),
   },
   header: {
-    fontSize: 22,
+    fontSize: moderateScale(22),
     fontWeight: 'bold',
     color: '#fff',
   },
   refreshText: {
     color: '#ed167e',
-    fontSize: 16,
+    fontSize: moderateScale(16),
     fontWeight: '600',
   },
   loadingContainer: {
@@ -794,62 +813,64 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     color: '#fff',
-    marginTop: 10,
-    fontSize: 16,
+    marginTop: moderateScale(10),
+    fontSize: moderateScale(16),
   },
   loadingSubText: {
     color: '#666',
-    marginTop: 5,
-    fontSize: 12,
+    marginTop: moderateScale(5),
+    fontSize: moderateScale(12),
   },
   noStreamsContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: moderateScale(20),
   },
   noStreamsText: {
     color: '#666',
-    fontSize: 16,
+    fontSize: moderateScale(16),
     textAlign: 'center',
-    marginBottom: 20,
+    marginBottom: moderateScale(20),
   },
   retryButton: {
     backgroundColor: '#ed167e',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
+    paddingHorizontal: moderateScale(20),
+    paddingVertical: moderateScale(10),
+    borderRadius: moderateScale(8),
   },
   retryButtonText: {
     color: '#fff',
     fontWeight: '600',
+    fontSize: moderateScale(14),
   },
   listContent: {
-    paddingBottom: 20,
+    paddingBottom: moderateScale(20),
   },
   streamItem: {
     backgroundColor: '#1a1a1a',
-    padding: 15,
-    marginBottom: 12,
-    borderRadius: 12,
+    padding: moderateScale(15),
+    marginBottom: moderateScale(12),
+    borderRadius: moderateScale(12),
     borderWidth: 1,
     borderColor: '#333',
   },
   streamTitle: {
-    fontSize: 18,
+    fontSize: moderateScale(18),
     fontWeight: 'bold',
     color: '#fff',
-    marginBottom: 8,
+    marginBottom: moderateScale(8),
   },
   streamInfo: {
-    fontSize: 14,
+    fontSize: moderateScale(14),
     color: '#ccc',
-    marginBottom: 4,
+    marginBottom: moderateScale(4),
   },
   joinButton: {
-    marginTop: 12,
-    padding: 12,
+    marginTop: moderateScale(12),
+    padding: moderateScale(12),
     backgroundColor: '#ed167e',
-    borderRadius: 8,
+    borderRadius: moderateScale(8),
     alignItems: 'center',
   },
   joiningButton: {
@@ -858,55 +879,56 @@ const styles = StyleSheet.create({
   joinButtonText: {
     color: '#fff',
     fontWeight: 'bold',
-    fontSize: 16,
+    fontSize: moderateScale(16),
   },
   viewerContainer: {
     flex: 1,
   },
   streamHeader: {
     flexDirection: 'row',
-    padding: 15,
+    padding: moderateScale(15),
     backgroundColor: '#1a1a1a',
     alignItems: 'center',
     borderBottomWidth: 1,
     borderBottomColor: '#333',
   },
   leaveButton: {
-    padding: 10,
+    padding: moderateScale(10),
     backgroundColor: '#ff4757',
-    borderRadius: 8,
-    marginRight: 15,
+    borderRadius: moderateScale(8),
+    marginRight: moderateScale(15),
   },
   leaveButtonText: {
     color: '#fff',
     fontWeight: 'bold',
+    fontSize: moderateScale(14),
   },
   streamInfoHeader: {
     flex: 1,
   },
   streamTitleHeader: {
-    fontSize: 18,
+    fontSize: moderateScale(18),
     fontWeight: 'bold',
     color: '#fff',
   },
   streamerName: {
-    fontSize: 14,
+    fontSize: moderateScale(14),
     color: '#ed167e',
     fontWeight: '600',
   },
   viewerCount: {
-    fontSize: 12,
+    fontSize: moderateScale(12),
     color: '#999',
   },
   connectionStatus: {
-    fontSize: 11,
+    fontSize: moderateScale(11),
     color: '#00ff00',
-    marginTop: 2,
+    marginTop: moderateScale(2),
   },
   connectionAttempts: {
-    fontSize: 10,
+    fontSize: moderateScale(10),
     color: '#ff9900',
-    marginTop: 2,
+    marginTop: moderateScale(2),
   },
   videoContainer: {
     flex: 2,
@@ -928,103 +950,107 @@ const styles = StyleSheet.create({
   },
   videoOverlay: {
     position: 'absolute',
-    top: 10,
-    left: 10,
+    top: moderateScale(10),
+    left: moderateScale(10),
     backgroundColor: 'rgba(0,0,0,0.7)',
-    borderRadius: 5,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderRadius: moderateScale(5),
+    paddingHorizontal: moderateScale(8),
+    paddingVertical: moderateScale(4),
   },
   liveIndicator: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: moderateScale(12),
     fontWeight: 'bold',
   },
   qualityIndicator: {
     color: '#00ff00',
-    fontSize: 10,
-    marginTop: 2,
+    fontSize: moderateScale(10),
+    marginTop: moderateScale(2),
   },
   videoPlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 20,
+    padding: moderateScale(20),
+    width: '100%',
   },
   videoPlaceholderText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: moderateScale(18),
     fontWeight: '600',
     textAlign: 'center',
   },
   videoSubText: {
     color: '#666',
-    fontSize: 12,
-    marginTop: 5,
+    fontSize: moderateScale(12),
+    marginTop: moderateScale(5),
     textAlign: 'center',
   },
   retryVideoButton: {
-    marginTop: 15,
+    marginTop: moderateScale(15),
     backgroundColor: '#ed167e',
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
+    paddingHorizontal: moderateScale(20),
+    paddingVertical: moderateScale(10),
+    borderRadius: moderateScale(8),
   },
   retryVideoText: {
     color: '#fff',
     fontWeight: '600',
+    fontSize: moderateScale(14),
   },
   reactionContainer: {
     flexDirection: 'row',
     justifyContent: 'space-around',
-    padding: 10,
+    padding: moderateScale(10),
     backgroundColor: '#1a1a1a',
     borderBottomWidth: 1,
     borderBottomColor: '#333',
   },
   reactionButton: {
-    padding: 8,
+    padding: moderateScale(8),
     backgroundColor: '#333',
-    borderRadius: 20,
-    minWidth: 40,
+    borderRadius: moderateScale(20),
+    minWidth: moderateScale(40),
     alignItems: 'center',
   },
   reactionText: {
-    fontSize: 18,
+    fontSize: moderateScale(18),
   },
   chatContainer: {
     flex: 1,
     backgroundColor: '#1a1a1a',
   },
   chatHeader: {
-    padding: 12,
+    padding: moderateScale(12),
     fontWeight: 'bold',
     backgroundColor: '#2a2a2a',
     color: '#fff',
-    fontSize: 16,
+    fontSize: moderateScale(16),
     borderBottomWidth: 1,
     borderBottomColor: '#333',
   },
   chatList: {
-    padding: 10,
+    padding: moderateScale(10),
     flexGrow: 1,
   },
   messageContainer: {
     flexDirection: 'row',
-    marginBottom: 8,
+    marginBottom: moderateScale(8),
     flexWrap: 'wrap',
   },
   messageUser: {
     fontWeight: 'bold',
     color: '#ed167e',
-    marginRight: 5,
+    marginRight: moderateScale(5),
+    fontSize: moderateScale(14),
   },
   messageText: {
     flex: 1,
     color: '#fff',
+    fontSize: moderateScale(14),
   },
   inputContainer: {
     flexDirection: 'row',
-    padding: 10,
+    padding: moderateScale(10),
     borderTopWidth: 1,
     borderTopColor: '#333',
     alignItems: 'center',
@@ -1034,17 +1060,18 @@ const styles = StyleSheet.create({
     flex: 1,
     borderWidth: 1,
     borderColor: '#555',
-    borderRadius: 8,
-    padding: 10,
-    marginRight: 10,
+    borderRadius: moderateScale(8),
+    padding: moderateScale(10),
+    marginRight: moderateScale(10),
     color: '#fff',
     backgroundColor: '#333',
+    fontSize: moderateScale(14),
   },
   sendButton: {
-    padding: 10,
+    padding: moderateScale(10),
     backgroundColor: '#ed167e',
-    borderRadius: 8,
-    minWidth: 60,
+    borderRadius: moderateScale(8),
+    minWidth: moderateScale(60),
     alignItems: 'center',
   },
   sendButtonDisabled: {
@@ -1053,6 +1080,7 @@ const styles = StyleSheet.create({
   sendButtonText: {
     color: '#fff',
     fontWeight: 'bold',
+    fontSize: moderateScale(14),
   },
 });
 

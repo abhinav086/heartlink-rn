@@ -90,15 +90,14 @@ class EnhancedGlobalWebRTCService {
     this.mediaConstraints = {
       video: {
         width: { ideal: 1280, max: 1920 },
-        height: { ideal: 720, max: 1080 },
-        frameRate: { ideal: 30, max: 60 },
-        facingMode: 'user'
+    height: { ideal: 720, max: 1080 },
+    frameRate: { ideal: 30, max: 60 },
+    facingMode: 'user'
       },
       audio: {
         echoCancellation: true,
         noiseSuppression: true,
-        autoGainControl: true,
-        sampleRate: 48000
+        autoGainControl: true
       }
     };
     this.isInitialized = false;
@@ -572,24 +571,63 @@ class EnhancedGlobalWebRTCService {
   }
 
   // ============ MEDIA MANAGEMENT (EXISTING + ENHANCED) ============
+  // In EnhancedGlobalWebRTCService.js - Enhanced getUserMedia with audio debugging
   async getUserMedia(constraints = null) {
     try {
       const mediaConstraints = constraints || this.mediaConstraints;
       console.log('🎥 Getting user media...', mediaConstraints);
+      
       if (this.localStream) {
         this.localStream.getTracks().forEach(track => track.stop());
       }
+      
       this.localStream = await mediaDevices.getUserMedia(mediaConstraints);
       this.localMediaReady = true;
+      
+      // ✅ ENHANCED AUDIO DEBUGGING (SAFER VERSION)
+      const audioTracks = this.localStream.getAudioTracks();
+      const videoTracks = this.localStream.getVideoTracks();
+      
       console.log('✅ User media obtained:', {
-        audio: this.localStream.getAudioTracks().length,
-        video: this.localStream.getVideoTracks().length,
-        streamId: this.localStream.id
+        audio: audioTracks.length,
+        video: videoTracks.length,
+        streamId: this.localStream.id,
+        streamActive: this.localStream.active
       });
+      
+      // Check each audio track safely
+      audioTracks.forEach((track, index) => {
+        console.log(`🎵 Audio track ${index}:`, {
+          id: track.id,
+          kind: track.kind,
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState,
+          label: track.label || 'No label'
+        });
+        
+        // Safely get settings if available
+        try {
+          if (typeof track.getSettings === 'function') {
+            const settings = track.getSettings();
+            console.log(`🎵 Audio track ${index} settings:`, settings);
+          }
+        } catch (settingsError) {
+          console.log(`🎵 Audio track ${index} settings not available:`, settingsError.message);
+        }
+        
+        // Listen for track events
+        track.onended = () => console.log(`🎵 Audio track ${index} ended`);
+        track.onmute = () => console.log(`🎵 Audio track ${index} muted`);
+        track.onunmute = () => console.log(`🎵 Audio track ${index} unmuted`);
+      });
+      
       this.triggerCallback('onLocalStream', this.localStream);
+      
       if (this.peerConnection && this.peerConnection.connectionState !== 'closed') {
         await this.updatePeerConnectionTracks();
       }
+      
       return this.localStream;
     } catch (error) {
       console.error('❌ Failed to get user media:', error);
@@ -604,22 +642,40 @@ class EnhancedGlobalWebRTCService {
 
   async updatePeerConnectionTracks() {
     if (!this.peerConnection || !this.localStream) return;
+    
     try {
       console.log('🔄 Updating peer connection tracks...');
-      const senders = this.peerConnection.getSenders();
-      this.localStream.getTracks().forEach(track => {
-        const sender = senders.find(s => s.track && s.track.kind === track.kind);
-        if (sender) {
-          console.log(`🔄 Replacing ${track.kind} track`);
-          sender.replaceTrack(track);
-        } else {
-          console.log(`➕ Adding new ${track.kind} track`);
-          this.peerConnection.addTrack(track, this.localStream);
-        }
-      });
+      
+      // For React Native WebRTC, we don't need to replace tracks manually
+      // The addStream method handles this automatically
+      if (typeof this.peerConnection.addStream === 'function') {
+        console.log('🔄 Using React Native WebRTC - tracks updated automatically');
+        return;
+      }
+      
+      // For browser WebRTC, use getSenders safely
+      if (typeof this.peerConnection.getSenders === 'function') {
+        const senders = this.peerConnection.getSenders();
+        console.log('🔄 Found existing senders:', senders.length);
+        
+        this.localStream.getTracks().forEach(track => {
+          const sender = senders.find(s => s.track && s.track.kind === track.kind);
+          if (sender && typeof sender.replaceTrack === 'function') {
+            console.log(`🔄 Replacing ${track.kind} track`);
+            sender.replaceTrack(track);
+          } else {
+            console.log(`➕ Adding new ${track.kind} track`);
+            this.peerConnection.addTrack(track, this.localStream);
+          }
+        });
+      } else {
+        console.log('🔄 getSenders not available, skipping track update');
+      }
+      
       console.log('✅ Peer connection tracks updated');
     } catch (error) {
       console.error('❌ Failed to update peer connection tracks:', error);
+      // Don't throw here, as this is non-critical
     }
   }
 
@@ -1177,11 +1233,18 @@ class EnhancedGlobalWebRTCService {
     }
   }
 
+
   async addLocalStreamToPeerConnection() {
     if (!this.peerConnection || !this.localStream) return;
-    
+  
     try {
       console.log('📡 Adding local stream to peer connection...');
+      
+      // ✅ VERIFY AUDIO TRACKS BEFORE ADDING
+      const audioTracks = this.localStream.getAudioTracks();
+      const videoTracks = this.localStream.getVideoTracks();
+      
+      console.log('📡 Tracks to add:', { audio: audioTracks.length, video: videoTracks.length });
       
       // Check which API is available
       if (typeof this.peerConnection.addStream === 'function') {
@@ -1189,6 +1252,10 @@ class EnhancedGlobalWebRTCService {
         console.log('📡 Using addStream API (React Native)');
         this.peerConnection.addStream(this.localStream);
         console.log('✅ Local stream added via addStream');
+        
+        // REMOVED: Problematic getSenders verification that was causing crashes
+        // The getSenders() method is not reliably available in React Native WebRTC
+        
       } else if (typeof this.peerConnection.addTrack === 'function') {
         // Browser WebRTC
         console.log('📡 Using addTrack API (Browser)');
@@ -1206,7 +1273,7 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
+  
   setupPeerConnectionEventHandlers() {
     if (!this.peerConnection) return;
     this.peerConnection.onicecandidate = (event) => {
