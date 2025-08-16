@@ -17,7 +17,6 @@ import enhancedGlobalWebRTCService from '../../services/EnhancedGlobalWebRTCServ
 import BASE_URL from '../../config/config';
 import { RTCView } from 'react-native-webrtc';
 import InCallManager from 'react-native-incall-manager';
-
 // Responsive utilities
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const scale = (size) => (SCREEN_WIDTH / 375) * size;
@@ -28,7 +27,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
   const { user, token } = useAuth();
   const { socket, isConnected } = useSocket();
   const initialStreamId = route?.params?.streamId;
-  
+
   // State management
   const [activeStreams, setActiveStreams] = useState([]);
   const [loadingStreams, setLoadingStreams] = useState(false);
@@ -44,7 +43,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
   const [hasAutoJoined, setHasAutoJoined] = useState(false);
   const [offerTimeout, setOfferTimeout] = useState(null);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
-  
+
   // WebRTC States
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
@@ -54,26 +53,22 @@ const LiveStreamViewer = ({ navigation, route }) => {
   const [broadcasterStatus, setBroadcasterStatus] = useState('unknown');
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [speakerEnabled, setSpeakerEnabled] = useState(true); // Track speaker state
-  
+
   const flatListRef = useRef();
 
   // ============ AUDIO MANAGEMENT FUNCTIONS ============
   const enableLoudspeaker = () => {
     try {
       console.log('🔊 Enabling loudspeaker audio routing...');
-      
       // Start InCallManager with speaker on (no ringtone)
-      InCallManager.start({ 
-        media: 'video', 
+      InCallManager.start({
+        media: 'video',
         auto: false
       });
-      
       // Force speaker on
       InCallManager.setForceSpeakerphoneOn(true);
-      
       // Enable speaker
       InCallManager.setSpeakerphoneOn(true);
-      
       console.log('✅ Loudspeaker enabled');
       setSpeakerEnabled(true);
     } catch (error) {
@@ -84,12 +79,10 @@ const LiveStreamViewer = ({ navigation, route }) => {
   const disableLoudspeaker = () => {
     try {
       console.log('🔇 Disabling loudspeaker...');
-      
       // Stop forcing speakerphone
       InCallManager.setForceSpeakerphoneOn(false);
       InCallManager.setSpeakerphoneOn(false);
       InCallManager.stop();
-      
       console.log('✅ Loudspeaker disabled');
       setSpeakerEnabled(false);
     } catch (error) {
@@ -102,18 +95,14 @@ const LiveStreamViewer = ({ navigation, route }) => {
     const initializeService = async () => {
       try {
         console.log('🚀 Initializing Enhanced WebRTC Service for Live Streaming');
-        
         if (!socket || !isConnected) {
           console.warn('⚠ Socket not ready, waiting...');
           setError('Connecting to server...');
           return;
         }
-
         console.log('🔌 Setting external socket for WebRTC service');
         enhancedGlobalWebRTCService.setExternalSocket(socket);
-        
         await enhancedGlobalWebRTCService.initialize(token);
-        
         enhancedGlobalWebRTCService.setCallbacks({
           onLocalStream: handleLocalStream,
           onRemoteStream: handleRemoteStream,
@@ -125,10 +114,8 @@ const LiveStreamViewer = ({ navigation, route }) => {
           onReaction: handleReaction,
           onStreamEnded: handleStreamEnded,
         });
-        
         console.log('✅ Enhanced WebRTC Service initialized for live streaming');
         setError('');
-        
         if (initialStreamId && !hasAutoJoined) {
           console.log('🎯 Auto-joining stream:', initialStreamId);
           setTimeout(() => {
@@ -148,10 +135,8 @@ const LiveStreamViewer = ({ navigation, route }) => {
 
     return () => {
       console.log('🧹 LiveStreamViewer component unmounting');
-      
       // Clean up audio routing
       disableLoudspeaker();
-      
       if (offerTimeout) {
         clearTimeout(offerTimeout);
       }
@@ -172,50 +157,59 @@ const LiveStreamViewer = ({ navigation, route }) => {
   const handleRemoteStream = (stream) => {
     console.log('📺 Processing remote stream:', stream?.id);
     console.log('📺 Stream active:', stream?.active);
+    // Updated: Added stream tracks count
     console.log('📺 Stream tracks:', stream?.getTracks().length);
-    
+
     if (stream) {
       const audioTracks = stream.getAudioTracks();
       const videoTracks = stream.getVideoTracks();
-      
+
       console.log('📺 Remote audio tracks:', audioTracks.length);
       console.log('📺 Remote video tracks:', videoTracks.length);
-      
-      // ✅ ENABLE AUDIO BY DEFAULT WITH MAX VOLUME
+
+      // Check if we have video tracks
+      if (videoTracks.length === 0) {
+        console.warn('⚠️ No video tracks in remote stream!');
+        setError('Broadcaster camera is not active. Waiting for video...');
+        setBroadcasterStatus('no_video');
+      } else {
+        // Enable all video tracks
+        videoTracks.forEach((track, index) => {
+          track.enabled = true;
+          console.log(`📹 Video track ${index} enabled:`, {
+            id: track.id,
+            enabled: track.enabled,
+            readyState: track.readyState,
+            muted: track.muted
+          });
+        });
+        setBroadcasterStatus('streaming');
+        setError('');
+      }
+
+      // Enable audio tracks
       audioTracks.forEach((track, index) => {
-        track.enabled = true; // Ensure audio is enabled
+        track.enabled = true;
         console.log(`🎵 Audio track ${index} enabled:`, {
           id: track.id,
           enabled: track.enabled,
-          muted: track.muted,
           readyState: track.readyState
         });
       });
-      
-      // Enable video tracks as well
-      videoTracks.forEach((track, index) => {
-        track.enabled = true;
-        console.log(`📹 Video track ${index} enabled:`, {
-          id: track.id,
-          enabled: track.enabled,
-          readyState: track.readyState
-        });
-      });
-      
-      if (audioTracks.length === 0) {
-        console.warn('⚠️ No audio tracks in remote stream!');
-      } else {
-        // ✅ ENABLE LOUDSPEAKER WHEN STREAM STARTS
+
+      // Enable loudspeaker for audio
+      if (audioTracks.length > 0) {
         enableLoudspeaker();
-        // Note: Volume can be controlled using device volume buttons
       }
+
+      // Updated: Removed the section that explicitly enabled audio tracks here
+      // as it's now handled above. Also removed the enableLoudspeaker call here
+      // as it's now conditional on audioTracks existing.
     }
-    
+
     setRemoteStream(stream);
     setIsWebRTCConnected(true);
-    setError('');
-    setBroadcasterStatus('streaming');
-    
+
     if (offerTimeout) {
       clearTimeout(offerTimeout);
       setOfferTimeout(null);
@@ -226,14 +220,13 @@ const LiveStreamViewer = ({ navigation, route }) => {
   const handleStreamStateChange = (state, data) => {
     console.log('🔄 Stream state changed:', state, data);
     setStreamState(state);
-    
+
     switch (state) {
       case 'joining':
         setIsConnecting(true);
         setError('');
         setBroadcasterStatus('checking');
         break;
-        
       case 'viewing':
         setIsConnecting(false);
         if (data) {
@@ -243,7 +236,6 @@ const LiveStreamViewer = ({ navigation, route }) => {
         }
         startOfferTimeout();
         break;
-        
       case 'connected':
         setIsConnecting(false);
         setIsWebRTCConnected(true);
@@ -251,7 +243,6 @@ const LiveStreamViewer = ({ navigation, route }) => {
         // ✅ ENSURE LOUDSPEAKER IS ON WHEN CONNECTED
         enableLoudspeaker();
         break;
-        
       case 'video_connected':
         setIsConnecting(false);
         setIsWebRTCConnected(true);
@@ -260,16 +251,13 @@ const LiveStreamViewer = ({ navigation, route }) => {
         enableLoudspeaker();
         console.log('✅ Video connection established with loudspeaker!');
         break;
-        
       case 'ended':
         handleStreamEnd();
         break;
-        
       case 'error':
         setError(data?.message || 'Stream error occurred');
         setBroadcasterStatus('error');
         break;
-        
       default:
         console.log('🔄 Stream state changed to unhandled state:', state);
     }
@@ -300,7 +288,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
       message: data.message,
       timestamp: data.timestamp || Date.now(),
     }]);
-    
+
     setTimeout(() => {
       if (flatListRef.current) {
         flatListRef.current.scrollToEnd({ animated: true });
@@ -326,10 +314,9 @@ const LiveStreamViewer = ({ navigation, route }) => {
     setChatMessages([]);
     setCurrentViewerCount(0);
     setBroadcasterStatus('offline');
-    
     // ✅ DISABLE LOUDSPEAKER WHEN STREAM ENDS
     disableLoudspeaker();
-    
+
     if (offerTimeout) {
       clearTimeout(offerTimeout);
       setOfferTimeout(null);
@@ -345,17 +332,17 @@ const LiveStreamViewer = ({ navigation, route }) => {
         console.warn('⚠ No WebRTC offer received after 10 seconds');
         setBroadcasterStatus('not_ready');
         setConnectionAttempts(prev => prev + 1);
-        
+
         if (connectionAttempts < 3) {
           console.log('🔄 Attempting to request offer manually (attempt', connectionAttempts + 1, ')');
-          startOfferTimeout();
+          startOfferTimeout(); // Note: This recursive call might need adjustment
         } else {
           setError('Broadcaster is not sending video. They may need to start their camera.');
           setBroadcasterStatus('no_video');
         }
       }
     }, 10000);
-    
+
     setOfferTimeout(timeout);
   };
 
@@ -367,7 +354,6 @@ const LiveStreamViewer = ({ navigation, route }) => {
         track.enabled = !audioEnabled;
       });
       setAudioEnabled(!audioEnabled);
-      
       // If unmuting, ensure speaker is on
       if (!audioEnabled) {
         enableLoudspeaker();
@@ -393,10 +379,10 @@ const LiveStreamViewer = ({ navigation, route }) => {
   // ============ STREAM MANAGEMENT ============
   const fetchActiveStreams = async () => {
     if (!token) return;
-    
+
     setLoadingStreams(true);
     setError('');
-    
+
     try {
       const response = await fetch(`${BASE_URL}/api/v1/live/active`, {
         method: 'GET',
@@ -435,11 +421,11 @@ const LiveStreamViewer = ({ navigation, route }) => {
   const joinStream = async (streamId) => {
     try {
       console.log('🎥 🎯 Starting join stream process:', streamId);
-      
+
       if (!socket || !isConnected) {
         throw new Error('Socket connection not ready');
       }
-      
+
       if (!enhancedGlobalWebRTCService.isReady()) {
         throw new Error('WebRTC service not ready');
       }
@@ -456,8 +442,8 @@ const LiveStreamViewer = ({ navigation, route }) => {
 
       // ✅ ENABLE LOUDSPEAKER WHEN JOINING STREAM
       enableLoudspeaker();
-      // Note: Use device volume buttons to control volume level
 
+      // Note: Use device volume buttons to control volume level
       const stream = activeStreams.find(s => s.streamId === streamId);
       if (stream) {
         setStreamTitle(stream.title || 'Live Stream');
@@ -468,7 +454,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
 
       console.log('🎯 Calling enhancedGlobalWebRTCService.joinStreamAsViewer...');
       const success = await enhancedGlobalWebRTCService.joinStreamAsViewer(streamId);
-      
+
       if (!success) {
         throw new Error('Failed to join stream');
       }
@@ -515,7 +501,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
     setBroadcasterStatus('unknown');
     setAudioEnabled(true);
     setSpeakerEnabled(true);
-    
+
     if (offerTimeout) {
       clearTimeout(offerTimeout);
       setOfferTimeout(null);
@@ -529,6 +515,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
     if (!messageToSend || !currentStreamId) return;
 
     const success = enhancedGlobalWebRTCService.sendChatMessage(messageToSend);
+
     if (success) {
       console.log(`💬 Sent chat message: ${messageToSend}`);
       setNewMessage('');
@@ -541,6 +528,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
     if (!currentStreamId) return;
 
     const success = enhancedGlobalWebRTCService.sendReaction(reaction);
+
     if (success) {
       console.log(`❤ Sent reaction: ${reaction}`);
     }
@@ -553,9 +541,27 @@ const LiveStreamViewer = ({ navigation, route }) => {
     }
   }, [token, socket, isConnected]);
 
+  // Added: Network quality monitoring useEffect
+  useEffect(() => {
+    // Monitor network quality and adjust video quality
+    const monitorNetworkQuality = setInterval(() => {
+      if (remoteStream && remoteStream.getVideoTracks) {
+        const videoTracks = remoteStream.getVideoTracks();
+        videoTracks.forEach(track => {
+          if (track.getSettings) {
+            const settings = track.getSettings();
+            console.log('📊 Video track settings:', settings);
+          }
+        });
+      }
+    }, 5000);
+
+    return () => clearInterval(monitorNetworkQuality);
+  }, [remoteStream]);
+
   // ============ RENDER FUNCTIONS ============
   const renderStreamItem = ({ item }) => (
-    <TouchableOpacity 
+    <TouchableOpacity
       style={styles.streamItem}
       onPress={() => joinStream(item.streamId)}
       disabled={!!currentStreamId || isConnecting}
@@ -567,16 +573,13 @@ const LiveStreamViewer = ({ navigation, route }) => {
         </View>
         <Text style={styles.viewerCountBadge}>{item.currentViewerCount || 0} viewers</Text>
       </View>
-      
       <Text style={styles.streamTitle} numberOfLines={2}>{item.title}</Text>
-      
       <View style={styles.streamerInfo}>
         <Text style={styles.streamerName}>
           {item.streamer?.fullName || item.streamer?.username || 'Unknown'}
         </Text>
         <Text style={styles.streamCategory}>{item.category || 'General'}</Text>
       </View>
-      
       <View style={styles.joinButtonContainer}>
         <TouchableOpacity
           style={[
@@ -598,7 +601,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
 
   const renderReactionButtons = () => (
     <View style={styles.reactionContainer}>
-      {['❤️', '👍', '😍', '🔥', '👏'].map((reaction) => (
+      {['❤', '👍', '😍', '🔥', '👏'].map((reaction) => (
         <TouchableOpacity
           key={reaction}
           style={styles.reactionButton}
@@ -642,7 +645,7 @@ const LiveStreamViewer = ({ navigation, route }) => {
           <Text style={styles.connectionWarningText}>Connecting to server...</Text>
         </View>
       ) : null}
-      
+
       {error ? (
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{error}</Text>
@@ -654,8 +657,8 @@ const LiveStreamViewer = ({ navigation, route }) => {
         <View style={styles.streamListContainer}>
           <View style={styles.headerRow}>
             <Text style={styles.header}>Live Streams</Text>
-            <TouchableOpacity 
-              onPress={fetchActiveStreams} 
+            <TouchableOpacity
+              onPress={fetchActiveStreams}
               disabled={loadingStreams}
               style={styles.refreshButton}
             >
@@ -697,22 +700,20 @@ const LiveStreamViewer = ({ navigation, route }) => {
             <TouchableOpacity onPress={leaveStream} style={styles.leaveButton}>
               <Text style={styles.leaveButtonText}>✕</Text>
             </TouchableOpacity>
-            
             <View style={styles.streamInfoHeader}>
               <Text style={styles.streamTitleHeader} numberOfLines={1}>
                 {streamTitle || 'Live Stream'}
               </Text>
               <Text style={styles.streamerNameHeader}>{streamerName || 'Streamer'}</Text>
             </View>
-            
             <View style={styles.streamStatsContainer}>
               <View style={styles.viewerCountContainer}>
                 <Text style={styles.viewerCountText}>{currentViewerCount}</Text>
                 <Text style={styles.viewerLabel}>viewers</Text>
               </View>
               <View style={styles.audioControls}>
-                {/* <TouchableOpacity 
-                  onPress={toggleAudio} 
+                {/* <TouchableOpacity
+                  onPress={toggleAudio}
                   style={[
                     styles.audioButton,
                     { backgroundColor: audioEnabled ? '#4CAF50' : '#666' }
@@ -722,8 +723,8 @@ const LiveStreamViewer = ({ navigation, route }) => {
                     {audioEnabled ? '🔊' : '🔇'}
                   </Text>
                 </TouchableOpacity> */}
-                <TouchableOpacity 
-                  onPress={toggleSpeaker} 
+                <TouchableOpacity
+                  onPress={toggleSpeaker}
                   style={[
                     styles.audioButton,
                     { backgroundColor: speakerEnabled ? '#2196F3' : '#666' }
@@ -747,35 +748,52 @@ const LiveStreamViewer = ({ navigation, route }) => {
               </View>
             )}
 
-            {remoteStream && remoteStream.active ? (
+            {/* Updated: Conditional rendering logic for RTCView */}
+            {remoteStream ? (
               <View style={styles.videoWrapper}>
-                <RTCView
-                  streamURL={remoteStream.toURL()}
-                  style={styles.rtcView}
-                  objectFit="cover"
-                />
-                <View style={styles.videoOverlay}>
-                  <View style={styles.liveIndicator}>
-                    <Text style={styles.liveText}>● LIVE</Text>
+                {/* Check if stream has video tracks before rendering */}
+                {remoteStream.getVideoTracks && remoteStream.getVideoTracks().length > 0 ? (
+                  <>
+                    <RTCView
+                      streamURL={remoteStream.toURL()}
+                      style={styles.rtcView}
+                      objectFit="contain" // Changed from "cover" to "contain" for better compatibility
+                      mirror={false}
+                      zOrder={0}
+                    />
+                    <View style={styles.videoOverlay}>
+                      <View style={styles.liveIndicator}>
+                        <Text style={styles.liveText}>● LIVE</Text>
+                      </View>
+                      {connectionQuality !== 'unknown' && (
+                        <View style={styles.qualityIndicator}>
+                          <Text style={styles.qualityText}>{connectionQuality.toUpperCase()}</Text>
+                        </View>
+                      )}
+                      {speakerEnabled && (
+                        <View style={styles.speakerIndicator}>
+                          <Text style={styles.speakerText}>📢 Speaker</Text>
+                        </View>
+                      )}
+                    </View>
+                  </>
+                ) : (
+                  <View style={styles.videoPlaceholder}>
+                    <Text style={styles.videoPlaceholderText}>
+                      🎵 Audio Only - No Video
+                    </Text>
+                    <Text style={styles.videoSubText}>
+                      Broadcaster's camera is off or not available
+                    </Text>
                   </View>
-                  {connectionQuality !== 'unknown' && (
-                    <View style={styles.qualityIndicator}>
-                      <Text style={styles.qualityText}>{connectionQuality.toUpperCase()}</Text>
-                    </View>
-                  )}
-                  {speakerEnabled && (
-                    <View style={styles.speakerIndicator}>
-                      <Text style={styles.speakerText}>📢 Speaker</Text>
-                    </View>
-                  )}
-                </View>
+                )}
               </View>
             ) : currentStreamId && !isConnecting ? (
               <View style={styles.videoPlaceholder}>
                 <Text style={styles.videoPlaceholderText}>
                   {broadcasterStatus === 'no_video' ?
-                    '📹 Camera is off' :
-                    '📡 Connecting...'}
+                    '📹 Waiting for broadcaster to enable camera' :
+                    '📡 Connecting to video stream...'}
                 </Text>
                 <Text style={styles.videoSubText}>
                   {getBroadcasterStatusMessage()}
@@ -806,7 +824,6 @@ const LiveStreamViewer = ({ navigation, route }) => {
                 {getBroadcasterStatusMessage()}
               </Text>
             </View>
-            
             <FlatList
               ref={flatListRef}
               data={chatMessages}
@@ -822,7 +839,6 @@ const LiveStreamViewer = ({ navigation, route }) => {
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={false}
             />
-            
             <View style={styles.inputContainer}>
               <TextInput
                 style={styles.chatInput}
@@ -1112,10 +1128,16 @@ const styles = StyleSheet.create({
     height: '100%',
     position: 'relative',
   },
+  // Updated: rtcView style with position: 'absolute'
   rtcView: {
     width: '100%',
     height: '100%',
     backgroundColor: '#000',
+    position: 'absolute', // Add this
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
   videoOverlay: {
     position: 'absolute',

@@ -7,7 +7,6 @@ import {
 } from 'react-native-webrtc';
 import io from 'socket.io-client';
 import BASE_URL from '../config/config';
-
 class EnhancedGlobalWebRTCService {
   constructor() {
     // ============ EXISTING CALL PROPERTIES ============
@@ -27,7 +26,9 @@ class EnhancedGlobalWebRTCService {
     this.callStartTime = null;
     this.connectionQuality = 'unknown';
     this.statsInterval = null;
-
+    this.processingOffer = false;
+    this.currentOfferConnectionId = null;
+    this.offerProcessed = new Set(); // Track processed offers
     // ============ NEW LIVE STREAMING PROPERTIES ============
     this.streamId = null;
     this.streamRole = null; // 'broadcaster' or 'viewer'
@@ -40,7 +41,6 @@ class EnhancedGlobalWebRTCService {
     this.streamDescription = '';
     this.isBroadcasting = false;
     this.isViewing = false;
-
     // ============ UNIFIED CALLBACK SYSTEM ============
     this.callbacks = {
       // Existing call callbacks
@@ -57,7 +57,6 @@ class EnhancedGlobalWebRTCService {
       onReaction: null,
       onStreamEnded: null,
     };
-
     // ============ EXISTING STATE MANAGEMENT ============
     this.callState = 'idle';
     this.signalingState = 'closed';
@@ -67,7 +66,6 @@ class EnhancedGlobalWebRTCService {
     this.localDescriptionSet = false;
     this.isProcessingOffer = false;
     this.isProcessingAnswer = false;
-
     // ============ EXISTING RTC CONFIGURATION ============
     this.rtcConfiguration = {
       iceServers: [
@@ -103,25 +101,20 @@ class EnhancedGlobalWebRTCService {
     this.isInitialized = false;
     this.initializationPromise = null;
   }
-
   // ============ NEW: EXTERNAL SOCKET MANAGEMENT ============
   setExternalSocket(socket) {
     console.log('🔌 Setting external socket for WebRTC service');
     console.log('🔌 External socket ID:', socket?.id);
     console.log('🔌 External socket connected:', socket?.connected);
-    
     if (!socket) {
       console.error('❌ Cannot set null/undefined external socket');
       return false;
     }
-
     // Store reference to external socket
     this.externalSocket = socket;
     this.socket = socket;
     this.isUsingExternalSocket = true;
-    
     console.log('✅ External socket set successfully');
-    
     // Setup listeners immediately if socket is connected
     if (socket.connected) {
       this.setupSocketListeners();
@@ -129,10 +122,8 @@ class EnhancedGlobalWebRTCService {
     } else {
       console.warn('⚠️ External socket not connected, listeners will be setup when connected');
     }
-    
     return true;
   }
-
   // ============ ENHANCED INITIALIZATION ============
   async initialize(authToken) {
     if (this.isInitialized) {
@@ -146,12 +137,10 @@ class EnhancedGlobalWebRTCService {
     this.initializationPromise = this._performInitialization(authToken);
     return await this.initializationPromise;
   }
-
   async _performInitialization(authToken) {
     try {
       console.log('🚀 Initializing Enhanced WebRTC service...');
       this.authToken = authToken;
-      
       // ENHANCED: Only initialize socket if not using external one
       if (!this.isUsingExternalSocket) {
         console.log('🔌 No external socket provided, creating own socket connection');
@@ -163,7 +152,6 @@ class EnhancedGlobalWebRTCService {
           throw new Error('External socket not connected');
         }
       }
-      
       await this.getWebRTCConfig();
       this.isInitialized = true;
       console.log('✅ Enhanced WebRTC service initialized successfully');
@@ -173,27 +161,22 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   // ============ CALLBACK MANAGEMENT (EXISTING) ============
   setGlobalCallbacks(callbacks) {
     this.callbacks = { ...this.callbacks, ...callbacks };
     console.log('📱 Global callbacks set');
   }
-
   setScreenCallbacks(callbacks) {
     this.callbacks = { ...this.callbacks, ...callbacks };
     console.log('📺 Screen callbacks set');
   }
-
   clearScreenCallbacks() {
     console.log('🧹 Screen callbacks cleared');
   }
-
   setCallbacks(callbacks) {
     this.callbacks = { ...this.callbacks, ...callbacks };
     console.log('📱 Callbacks updated');
   }
-
   triggerCallback(callbackName, ...args) {
     const callback = this.callbacks[callbackName];
     if (callback && typeof callback === 'function') {
@@ -205,7 +188,6 @@ class EnhancedGlobalWebRTCService {
       }
     }
   }
-
   // ============ ENHANCED SOCKET INITIALIZATION ============
   async initializeSocket(authToken) {
     // ENHANCED: Check if we should use external socket
@@ -219,13 +201,11 @@ class EnhancedGlobalWebRTCService {
         throw new Error('External socket not connected');
       }
     }
-
     // Original socket creation logic for fallback
     if (this.socket && this.socket.connected) {
       console.log('✅ Socket already connected');
       return this.socket.id;
     }
-    
     return new Promise((resolve, reject) => {
       try {
         this.socket = io(this.serverUrl, {
@@ -236,18 +216,15 @@ class EnhancedGlobalWebRTCService {
           reconnectionAttempts: 3,
           reconnectionDelay: 1000,
         });
-
         const timeout = setTimeout(() => {
           reject(new Error('Socket connection timeout'));
         }, 15000);
-
         this.socket.on('connect', () => {
           clearTimeout(timeout);
           console.log('✅ Socket connected:', this.socket.id);
           this.setupSocketListeners();
           resolve(this.socket.id);
         });
-
         this.socket.on('connect_error', (error) => {
           clearTimeout(timeout);
           console.error('❌ Socket connection failed:', error);
@@ -258,15 +235,12 @@ class EnhancedGlobalWebRTCService {
       }
     });
   }
-
   setupSocketListeners() {
     if (!this.socket) {
       console.warn('⚠️ No socket available for setting up listeners');
       return;
     }
-
     console.log('🎧 Setting up socket listeners on socket:', this.socket.id);
-
     // ========== EXISTING CALL LISTENERS ============
     this.socket.on('incoming_call', (data) => {
       console.log('📞 Incoming call received:', data);
@@ -278,28 +252,24 @@ class EnhancedGlobalWebRTCService {
       this.incomingCallData = data;
       this.triggerCallback('onIncomingCall', data);
     });
-
     this.socket.on('call_accepted', (data) => {
       console.log('✅ Call accepted:', data);
       this.callState = 'connecting';
       this.triggerCallback('onCallStateChange', 'accepted', data);
       this.startSignaling();
     });
-
     this.socket.on('call_declined', (data) => {
       console.log('❌ Call declined:', data);
       this.callState = 'ended';
       this.cleanup();
       this.triggerCallback('onCallStateChange', 'declined', data);
     });
-
     this.socket.on('call_ended', (data) => {
       console.log('🔚 Call ended:', data);
       this.callState = 'ended';
       this.cleanup();
       this.triggerCallback('onCallStateChange', 'ended', data);
     });
-
     this.socket.on('broadcaster_ready_confirmed', (data) => {
       console.log('✅ Broadcaster ready confirmed:', data);
       if (this.streamRole === 'broadcaster') {
@@ -308,7 +278,6 @@ class EnhancedGlobalWebRTCService {
         this.triggerCallback('onStreamStateChange', 'broadcasting', data);
       }
     });
-
     this.socket.on('broadcaster_status_update', (data) => {
       console.log('📡 Broadcaster status update:', data);
       if (this.streamRole === 'viewer') {
@@ -321,8 +290,6 @@ class EnhancedGlobalWebRTCService {
         }
       }
     });
-    
-
     this.socket.on('webrtc_signal', async (data) => {
       console.log(`🔄 WebRTC signal received: ${data.type}`);
       try {
@@ -335,7 +302,6 @@ class EnhancedGlobalWebRTCService {
         });
       }
     });
-
     this.socket.on('signaling_room_joined', (data) => {
       console.log('📡 Signaling room joined:', data.signalingRoom);
       this.signalingState = 'ready';
@@ -344,7 +310,6 @@ class EnhancedGlobalWebRTCService {
         setTimeout(() => this.createOffer(), 1500);
       }
     });
-
     // ========== NEW LIVE STREAMING LISTENERS ============
     // Stream creation confirmation
     this.socket.on('stream_created', (data) => {
@@ -354,7 +319,6 @@ class EnhancedGlobalWebRTCService {
       this.streamState = 'waiting';
       this.triggerCallback('onStreamStateChange', 'created', data);
     });
-
     // Broadcast started
     this.socket.on('stream_broadcast_started', (data) => {
       console.log('📡 Broadcast started:', data);
@@ -362,7 +326,6 @@ class EnhancedGlobalWebRTCService {
       this.isBroadcasting = true;
       this.triggerCallback('onStreamStateChange', 'broadcasting', data);
     });
-
     // Viewer joined stream
     this.socket.on('stream_joined_as_viewer', (data) => {
       console.log('👁 ✅ RECEIVED stream_joined_as_viewer event:', data);
@@ -389,8 +352,7 @@ class EnhancedGlobalWebRTCService {
         });
       }
     });
-
-    // WebRTC offer from broadcaster to viewer
+    // WebRTC offer from broadcaster to viewer - UPDATED METHOD
     this.socket.on('stream_webrtc_offer', async (data) => {
       console.log('📡 ✅ Received WebRTC offer from broadcaster:', data);
       console.log('📡 Current stream role:', this.streamRole);
@@ -402,7 +364,6 @@ class EnhancedGlobalWebRTCService {
         console.warn('⚠️ Received offer but not a viewer, role:', this.streamRole);
       }
     });
-
     // WebRTC answer from viewer to broadcaster
     this.socket.on('stream_webrtc_answer', async (data) => {
       console.log('📡 ✅ Received WebRTC answer from viewer:', data);
@@ -414,39 +375,31 @@ class EnhancedGlobalWebRTCService {
         console.warn('⚠️ Received answer but not a broadcaster, role:', this.streamRole);
       }
     });
-
     // ICE candidates for streaming
     this.socket.on('stream_webrtc_ice_candidate', async (data) => {
       console.log('🧊 ✅ Received stream ICE candidate:', data);
       console.log('🧊 Current stream role:', this.streamRole);
       await this.handleStreamIceCandidate(data);
     });
-
     // Viewer count updates
     this.socket.on('stream_viewer_count_updated', (data) => {
       console.log('👥 Viewer count updated:', data);
       this.streamViewerCount = data.currentViewerCount;
       this.triggerCallback('onViewerCount', { count: data.currentViewerCount });
     });
-
     // New viewer joined (for broadcaster) - FIXED VERSION
     this.socket.on('stream_viewer_joined', async (data) => {
       console.log('👥 Viewer joined stream (Broadcaster side):', data);
-      
       // FIX: Extract viewerId from the viewer object
       const { streamId, viewer, currentViewerCount } = data;
       const viewerId = viewer?.userId; // ← THIS IS THE FIX!
-      
       if (!viewerId) {
         console.error('❌ No viewerId found in stream_viewer_joined event');
         return;
       }
-      
       console.log(`🔍 stream_viewer_joined: streamId: ${streamId}, viewerId: ${viewerId}`);
-      
       if (streamId === this.streamId && this.streamRole === 'broadcaster') {
         console.log(`✅ Creating offer for viewer: ${viewerId}`);
-        
         try {
           // Create peer connection for this viewer if it doesn't exist
           let peerConnection = this.viewerConnections.get(viewerId);
@@ -455,7 +408,6 @@ class EnhancedGlobalWebRTCService {
             peerConnection = await this.createViewerPeerConnection(viewerId);
             console.log(`✅ PeerConnection created for viewer ${viewerId}`);
           }
-          
           // Create and send offer
           if (peerConnection && peerConnection.connectionState !== 'closed') {
             console.log(`🎬 Creating offer for viewer ${viewerId}...`);
@@ -464,11 +416,9 @@ class EnhancedGlobalWebRTCService {
           } else {
             console.error(`❌ Invalid peer connection for viewer ${viewerId}`);
           }
-          
           // Update viewer count
           this.streamViewerCount = currentViewerCount;
           this.triggerCallback('onViewerCount', { count: currentViewerCount });
-          
         } catch (err) {
           console.error(`❌ Error handling viewer ${viewerId} joining:`, err);
           this.triggerCallback('onError', { 
@@ -480,7 +430,6 @@ class EnhancedGlobalWebRTCService {
         console.warn(`⚠️ Ignoring viewer join - wrong stream or not broadcaster`);
       }
     });
-
     // Viewer left (for broadcaster)
     this.socket.on('stream_viewer_left', (data) => {
       console.log('👁 Viewer left:', data);
@@ -491,19 +440,16 @@ class EnhancedGlobalWebRTCService {
         this.triggerCallback('onViewerCount', { count: data.currentViewerCount });
       }
     });
-
     // Chat messages
     this.socket.on('stream_chat_message', (data) => {
       console.log('💬 Chat message:', data);
       this.triggerCallback('onChatMessage', data);
     });
-
     // Reactions
     this.socket.on('stream_reaction', (data) => {
       console.log('❤️ Reaction:', data);
       this.triggerCallback('onReaction', data);
     });
-
     // Stream ended
     this.socket.on('stream_ended_by_broadcaster', (data) => {
       console.log('🔚 Stream ended by broadcaster:', data);
@@ -512,7 +458,6 @@ class EnhancedGlobalWebRTCService {
       this.triggerCallback('onStreamStateChange', 'ended', data);
       this.triggerCallback('onStreamEnded', data);
     });
-
     this.socket.on('stream_ended', (data) => {
       console.log('🔚 Stream ended:', data);
       this.streamState = 'ended';
@@ -520,7 +465,6 @@ class EnhancedGlobalWebRTCService {
       this.triggerCallback('onStreamStateChange', 'ended', data);
       this.triggerCallback('onStreamEnded', data);
     });
-
     // Stream errors
     this.socket.on('stream_error', (data) => {
       console.error('❌ Stream error:', data);
@@ -530,21 +474,17 @@ class EnhancedGlobalWebRTCService {
         code: data.code
       });
     });
-
     // Connection events
     this.socket.on('disconnect', () => {
       console.log('💔 Socket disconnected');
       this.triggerCallback('onError', new Error('Connection lost'));
     });
-
     this.socket.on('error', (error) => {
       console.error('❌ Socket error:', error);
       this.triggerCallback('onError', error);
     });
-
     console.log('✅ All socket listeners setup completed');
   }
-
   // ============ WEBRTC CONFIG (EXISTING) ============
   async getWebRTCConfig() {
     try {
@@ -569,32 +509,26 @@ class EnhancedGlobalWebRTCService {
       console.warn('⚠ Using default RTC config:', error);
     }
   }
-
   // ============ MEDIA MANAGEMENT (EXISTING + ENHANCED) ============
   // In EnhancedGlobalWebRTCService.js - Enhanced getUserMedia with audio debugging
   async getUserMedia(constraints = null) {
     try {
       const mediaConstraints = constraints || this.mediaConstraints;
       console.log('🎥 Getting user media...', mediaConstraints);
-      
       if (this.localStream) {
         this.localStream.getTracks().forEach(track => track.stop());
       }
-      
       this.localStream = await mediaDevices.getUserMedia(mediaConstraints);
       this.localMediaReady = true;
-      
       // ✅ ENHANCED AUDIO DEBUGGING (SAFER VERSION)
       const audioTracks = this.localStream.getAudioTracks();
       const videoTracks = this.localStream.getVideoTracks();
-      
       console.log('✅ User media obtained:', {
         audio: audioTracks.length,
         video: videoTracks.length,
         streamId: this.localStream.id,
         streamActive: this.localStream.active
       });
-      
       // Check each audio track safely
       audioTracks.forEach((track, index) => {
         console.log(`🎵 Audio track ${index}:`, {
@@ -605,7 +539,6 @@ class EnhancedGlobalWebRTCService {
           readyState: track.readyState,
           label: track.label || 'No label'
         });
-        
         // Safely get settings if available
         try {
           if (typeof track.getSettings === 'function') {
@@ -615,19 +548,15 @@ class EnhancedGlobalWebRTCService {
         } catch (settingsError) {
           console.log(`🎵 Audio track ${index} settings not available:`, settingsError.message);
         }
-        
         // Listen for track events
         track.onended = () => console.log(`🎵 Audio track ${index} ended`);
         track.onmute = () => console.log(`🎵 Audio track ${index} muted`);
         track.onunmute = () => console.log(`🎵 Audio track ${index} unmuted`);
       });
-      
       this.triggerCallback('onLocalStream', this.localStream);
-      
       if (this.peerConnection && this.peerConnection.connectionState !== 'closed') {
         await this.updatePeerConnectionTracks();
       }
-      
       return this.localStream;
     } catch (error) {
       console.error('❌ Failed to get user media:', error);
@@ -639,25 +568,20 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   async updatePeerConnectionTracks() {
     if (!this.peerConnection || !this.localStream) return;
-    
     try {
       console.log('🔄 Updating peer connection tracks...');
-      
       // For React Native WebRTC, we don't need to replace tracks manually
       // The addStream method handles this automatically
       if (typeof this.peerConnection.addStream === 'function') {
         console.log('🔄 Using React Native WebRTC - tracks updated automatically');
         return;
       }
-      
       // For browser WebRTC, use getSenders safely
       if (typeof this.peerConnection.getSenders === 'function') {
         const senders = this.peerConnection.getSenders();
         console.log('🔄 Found existing senders:', senders.length);
-        
         this.localStream.getTracks().forEach(track => {
           const sender = senders.find(s => s.track && s.track.kind === track.kind);
           if (sender && typeof sender.replaceTrack === 'function') {
@@ -671,14 +595,12 @@ class EnhancedGlobalWebRTCService {
       } else {
         console.log('🔄 getSenders not available, skipping track update');
       }
-      
       console.log('✅ Peer connection tracks updated');
     } catch (error) {
       console.error('❌ Failed to update peer connection tracks:', error);
       // Don't throw here, as this is non-critical
     }
   }
-
   async getLocalStream(forceRefresh = false) {
     console.log('📹 Getting local stream...', { forceRefresh, hasExisting: !!this.localStream });
     if (this.localStream && this.localStream.active && !forceRefresh) {
@@ -688,7 +610,6 @@ class EnhancedGlobalWebRTCService {
     }
     return await this.getUserMedia(this.mediaConstraints);
   }
-
   async setupMedia(callType = 'video') {
     console.log('🎥 Setting up media for call type:', callType);
     this.mediaConstraints = {
@@ -719,7 +640,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   // ============ NEW LIVE STREAMING METHODS ============
   // Create stream (broadcaster)
   async createStream(streamData) {
@@ -746,32 +666,58 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   // Start broadcasting (broadcaster)
-  async startBroadcasting(streamId) {
-    try {
-      console.log('📡 Starting broadcast for stream:', streamId);
-      if (!this.socket || !this.socket.connected) {
-        throw new Error('Socket not connected');
-      }
-      if (!this.localStream || !this.localStream.active) {
-        throw new Error('Local stream not available');
-      }
-      this.streamId = streamId;
-      this.streamRole = 'broadcaster';
-      this.streamState = 'starting';
-      this.socket.emit('stream_start_broadcast', { streamId });
-      return true;
-    } catch (error) {
-      console.error('❌ Failed to start broadcasting:', error);
-      this.triggerCallback('onError', {
-        type: 'broadcast_start_error',
-        message: error.message
-      });
-      return false;
+  // In EnhancedGlobalWebRTCService.js - Update startBroadcasting
+async startBroadcasting(streamId) {
+  try {
+    console.log('📡 Starting broadcast for stream:', streamId);
+    if (!this.socket || !this.socket.connected) {
+      throw new Error('Socket not connected');
     }
+    // Ensure we have a valid local stream with video
+    if (!this.localStream || !this.localStream.active) {
+      console.log('🎥 Local stream not ready, initializing...');
+      await this.getUserMedia({
+        video: {
+          width: { min: 320, ideal: 640, max: 1280 },
+          height: { min: 240, ideal: 480, max: 720 },
+          frameRate: { min: 15, ideal: 24, max: 30 },
+          facingMode: 'user'
+        },
+        audio: true
+      });
+    }
+    // Verify video tracks exist
+    const videoTracks = this.localStream.getVideoTracks();
+    if (videoTracks.length === 0) {
+      throw new Error('No video tracks available. Please enable camera.');
+    }
+    // Enable all tracks
+    this.localStream.getTracks().forEach(track => {
+      track.enabled = true;
+      console.log(`✅ ${track.kind} track enabled:`, track.enabled);
+    });
+    this.streamId = streamId;
+    this.streamRole = 'broadcaster';
+    this.streamState = 'starting';
+    // Notify backend that broadcaster is ready
+    this.socket.emit('broadcaster_ready', { 
+      streamId,
+      hasLocalStream: true,
+      hasVideo: videoTracks.length > 0,
+      hasAudio: this.localStream.getAudioTracks().length > 0
+    });
+    this.socket.emit('stream_start_broadcast', { streamId });
+    return true;
+  } catch (error) {
+    console.error('❌ Failed to start broadcasting:', error);
+    this.triggerCallback('onError', {
+      type: 'broadcast_start_error',
+      message: error.message
+    });
+    return false;
   }
-
+}
   // Join stream as viewer
   async joinStreamAsViewer(streamId) {
     try {
@@ -803,7 +749,6 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   // Create offer for viewer (broadcaster) - FIXED VERSION
   async createOfferForViewer(viewerId) {
     try {
@@ -811,30 +756,25 @@ class EnhancedGlobalWebRTCService {
       console.log(`🎬 Current streamId: ${this.streamId}`);
       console.log(`🎬 Socket connected: ${this.socket ? this.socket.connected : 'No Socket'}`);
       console.log(`🎬 viewerConnections map keys:`, Array.from(this.viewerConnections.keys()));
-      
       const peerConnection = this.viewerConnections.get(viewerId);
       console.log(`🎬 Retrieved PeerConnection for ${viewerId}:`, peerConnection ? 'Exists' : 'NULL');
       if (peerConnection) {
         console.log(`🎬 PeerConnection state for ${viewerId}:`, peerConnection.connectionState);
       }
-      
       if (!peerConnection || peerConnection.connectionState === 'closed') {
         const errorMsg = `⚠️ No valid peer connection for viewer ${viewerId}. Cannot create offer. State: ${peerConnection ? peerConnection.connectionState : 'NULL'}`;
         console.warn(errorMsg);
         this.triggerCallback('onError', { type: 'offer_failed', message: errorMsg });
         return;
       }
-      
       console.log(`🎬 Creating offer for viewer ${viewerId}...`);
       const offer = await peerConnection.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: true,
       });
       console.log(`🎬 Offer created successfully for viewer ${viewerId}:`, offer.sdp.substring(0, 100) + '...');
-      
       await peerConnection.setLocalDescription(offer);
       console.log(`🎬 Local Description (Offer) set successfully for viewer ${viewerId}.`);
-      
       // CRITICAL CHECKS before emitting
       if (this.socket && this.socket.connected && this.streamId) {
         console.log(`📡 Preparing to send offer for viewer ${viewerId} in stream ${this.streamId}`);
@@ -855,67 +795,102 @@ class EnhancedGlobalWebRTCService {
       this.triggerCallback('onError', { type: 'offer_failed', message: `Offer creation failed for ${viewerId}: ${error.message}` });
     }
   }
-
   // Handle stream offer (viewer) - FIXED VERSION
   async handleStreamOffer(data) {
     try {
       console.log('📥 🎥 Handling stream offer from broadcaster:', data);
-      console.log('📥 Offer data keys:', Object.keys(data));
-      console.log('📥 Current broadcaster connection:', !!this.broadcasterConnection);
       
-      // Extract connection ID from offer data
+      // Extract connection ID
       const connectionId = data.connectionId || `${this.streamId}_${this.socket.id}`;
       
-      // Create broadcaster connection if it doesn't exist
-      if (!this.broadcasterConnection) {
-        console.log('🔗 Creating new broadcaster peer connection...');
-        this.broadcasterConnection = await this.createBroadcasterPeerConnection();
-        console.log('✅ Broadcaster peer connection created');
+      // Check if we've already processed this offer
+      if (this.offerProcessed.has(connectionId)) {
+        console.log('⚠️ Offer already processed, skipping:', connectionId);
+        return;
       }
       
-      // Set remote description (the offer)
-      console.log('📝 Setting remote description (offer)...');
-      const offerDescription = new RTCSessionDescription(data.offer);
-      await this.broadcasterConnection.setRemoteDescription(offerDescription);
-      console.log('✅ Remote description set successfully');
+      // Check if we're already processing an offer
+      if (this.processingOffer) {
+        console.log('⚠️ Already processing an offer, skipping');
+        return;
+      }
       
-      // Create answer
-      console.log('📝 Creating answer...');
-      const answer = await this.broadcasterConnection.createAnswer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true
-      });
-      console.log('✅ Answer created successfully');
+      // Check if peer connection is already in stable state with a remote description
+      if (this.broadcasterConnection && 
+          this.broadcasterConnection.signalingState === 'stable' &&
+          this.broadcasterConnection.remoteDescription) {
+        console.log('⚠️ Connection already established, ignoring duplicate offer');
+        return;
+      }
       
-      // Set local description (the answer)
-      console.log('📝 Setting local description (answer)...');
-      await this.broadcasterConnection.setLocalDescription(answer);
-      console.log('✅ Local description set successfully');
+      // Mark as processing
+      this.processingOffer = true;
+      this.currentOfferConnectionId = connectionId;
       
-      // Send answer back to broadcaster with connection ID
-      console.log('📤 Sending answer to broadcaster...');
-      const answerData = {
-        streamId: this.streamId,
-        answer: answer,
-        connectionId: connectionId // Use the connection ID from the offer
-      };
-      this.socket.emit('stream_webrtc_answer', answerData);
-      console.log('✅ Answer sent to broadcaster:', answerData);
+      try {
+        // Create broadcaster connection if it doesn't exist
+        if (!this.broadcasterConnection) {
+          console.log('🔗 Creating new broadcaster peer connection...');
+          this.broadcasterConnection = await this.createBroadcasterPeerConnection();
+          console.log('✅ Broadcaster peer connection created');
+        }
+        
+        // Set remote description (the offer)
+        console.log('📝 Setting remote description (offer)...');
+        const offerDescription = new RTCSessionDescription(data.offer);
+        await this.broadcasterConnection.setRemoteDescription(offerDescription);
+        console.log('✅ Remote description set successfully');
+        
+        // Create answer
+        console.log('📝 Creating answer...');
+        const answer = await this.broadcasterConnection.createAnswer({
+          offerToReceiveAudio: true,
+          offerToReceiveVideo: true
+        });
+        console.log('✅ Answer created successfully');
+        
+        // Set local description (the answer)
+        console.log('📝 Setting local description (answer)...');
+        await this.broadcasterConnection.setLocalDescription(answer);
+        console.log('✅ Local description set successfully');
+        
+        // Send answer back to broadcaster
+        console.log('📤 Sending answer to broadcaster...');
+        const answerData = {
+          streamId: this.streamId,
+          answer: answer,
+          connectionId: connectionId
+        };
+        this.socket.emit('stream_webrtc_answer', answerData);
+        console.log('✅ Answer sent to broadcaster');
+        
+        // Mark this offer as processed
+        this.offerProcessed.add(connectionId);
+        
+        // Update state
+        this.triggerCallback('onStreamStateChange', 'connecting', {
+          streamId: this.streamId,
+          message: 'WebRTC connection establishing...'
+        });
+        
+      } finally {
+        // Reset processing flag
+        this.processingOffer = false;
+      }
       
-      // Update state
-      this.triggerCallback('onStreamStateChange', 'connecting', {
-        streamId: this.streamId,
-        message: 'WebRTC connection establishing...'
-      });
     } catch (error) {
       console.error('❌ Failed to handle stream offer:', error);
-      this.triggerCallback('onError', {
-        type: 'webrtc_offer_error',
-        message: `Failed to process stream offer: ${error.message}`
-      });
+      this.processingOffer = false;
+      
+      // Only trigger error if this is the first attempt
+      if (!this.offerProcessed.has(this.currentOfferConnectionId)) {
+        this.triggerCallback('onError', {
+          type: 'webrtc_offer_error',
+          message: `Failed to process stream offer: ${error.message}`
+        });
+      }
     }
   }
-
   // Handle stream answer (broadcaster)
   async handleStreamAnswer(data) {
     try {
@@ -932,12 +907,10 @@ class EnhancedGlobalWebRTCService {
       console.error('❌ Failed to handle stream answer:', error);
     }
   }
-
   // Handle ICE candidates for streaming - FIXED VERSION
   async handleStreamIceCandidate(data) {
     try {
       if (!data.candidate) return;
-      
       if (this.streamRole === 'broadcaster' && data.from === 'viewer') {
         // Use the specific viewer connection
         const peerConnection = this.viewerConnections.get(data.viewerId);
@@ -957,91 +930,58 @@ class EnhancedGlobalWebRTCService {
       console.error('❌ Failed to handle stream ICE candidate:', error);
     }
   }
-
   // Create peer connection for viewer (broadcaster side) - FIXED VERSION
-  async createViewerPeerConnection(viewerId) {
-    try {
-      console.log(`🔗 Creating peer connection for viewer ${viewerId}...`);
-      const peerConnection = new RTCPeerConnection(this.rtcConfiguration);
-      
-      // Use consistent connection ID format
-      const connectionId = `${this.streamId}_${viewerId}`;
-      
-      // Add local stream to peer connection
-      if (this.localStream) {
-        console.log(`📹 Adding local stream to peer connection for viewer ${viewerId}`);
-        
-        // Check which method is available and use it
-        if (typeof peerConnection.addStream === 'function') {
-          // React Native WebRTC uses addStream
-          peerConnection.addStream(this.localStream);
-          console.log(`✅ Added stream using addStream method`);
-        } else if (typeof peerConnection.addTrack === 'function') {
-          // Browser WebRTC uses addTrack
-          this.localStream.getTracks().forEach(track => {
-            peerConnection.addTrack(track, this.localStream);
-          });
-          console.log(`✅ Added tracks using addTrack method`);
-        } else {
-          console.error('❌ Neither addStream nor addTrack is available!');
-          throw new Error('WebRTC API method not found');
-        }
-      } else {
-        console.warn('⚠️ No local stream available for viewer connection');
+  // In EnhancedGlobalWebRTCService.js - Add this to ensure broadcaster has video
+async createViewerPeerConnection(viewerId) {
+  try {
+    console.log(`🔗 Creating peer connection for viewer ${viewerId}...`);
+    const peerConnection = new RTCPeerConnection(this.rtcConfiguration);
+    // Add bandwidth optimization for poor networks
+    const transceivers = peerConnection.getTransceivers ? peerConnection.getTransceivers() : [];
+    transceivers.forEach(transceiver => {
+      const params = transceiver.sender.getParameters();
+      if (!params.encodings) {
+        params.encodings = [{}];
       }
-      
-      // Setup event handlers with consistent connection ID
-      peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log(`🧊 Sending ICE candidate for viewer ${viewerId}`);
-          this.socket.emit('stream_webrtc_ice_candidate', {
-            streamId: this.streamId,
-            candidate: event.candidate,
-            from: 'broadcaster',
-            viewerId: viewerId // Send viewerId instead of connectionId
-          });
-        }
-      };
-      
-      peerConnection.onconnectionstatechange = () => {
-        console.log(`🔗 Viewer ${viewerId} connection state:`, peerConnection.connectionState);
-        if (peerConnection.connectionState === 'connected') {
-          console.log(`✅ Connected to viewer: ${viewerId}`);
-          // Update connected viewers
-          this.connectedViewers.set(viewerId, {
-            userId: viewerId,
-            connectionState: 'connected',
-            connectionId: connectionId, // Store the connection ID
-            connectedAt: new Date()
-          });
-        } else if (peerConnection.connectionState === 'failed') {
-          console.log(`❌ Connection failed to viewer: ${viewerId}`);
-          this.cleanupViewerConnection(viewerId);
-        }
-      };
-      
-      peerConnection.oniceconnectionstatechange = () => {
-        console.log(`🧊 ICE state for viewer ${viewerId}:`, peerConnection.iceConnectionState);
-      };
-      
-      // Store the connection with viewer ID as key
-      this.viewerConnections.set(viewerId, peerConnection);
-      console.log(`✅ Viewer peer connection created for ${viewerId}. Total connections: ${this.viewerConnections.size}`);
-      
-      return peerConnection;
-    } catch (error) {
-      console.error(`❌ Failed to create viewer peer connection for ${viewerId}:`, error);
-      throw error;
+      // Set lower bitrate for poor network conditions
+      params.encodings[0].maxBitrate = 100000; // 500kbps for video
+      if (transceiver.sender.track && transceiver.sender.track.kind === 'audio') {
+        params.encodings[0].maxBitrate = 32000; // 32kbps for audio
+      }
+      transceiver.sender.setParameters(params);
+    });
+    // Check if local stream has video before adding
+    if (this.localStream) {
+      const videoTracks = this.localStream.getVideoTracks();
+      const audioTracks = this.localStream.getAudioTracks();
+      console.log(`📹 Local stream has ${videoTracks.length} video tracks`);
+      console.log(`🎵 Local stream has ${audioTracks.length} audio tracks`);
+      if (videoTracks.length === 0) {
+        console.error('❌ Broadcaster has no video tracks!');
+        // Still add the stream even without video
+      }
+      // Add stream
+      if (typeof peerConnection.addStream === 'function') {
+        peerConnection.addStream(this.localStream);
+      } else if (typeof peerConnection.addTrack === 'function') {
+        this.localStream.getTracks().forEach(track => {
+          peerConnection.addTrack(track, this.localStream);
+        });
+      }
     }
+    // Rest of the connection setup...
+    return peerConnection;
+  } catch (error) {
+    console.error(`❌ Failed to create viewer peer connection:`, error);
+    throw error;
   }
-
+}
   // Create peer connection for broadcaster (viewer side) - FIXED VERSION
   async createBroadcasterPeerConnection() {
     try {
       console.log('🔗 Creating broadcaster peer connection...');
       const peerConnection = new RTCPeerConnection(this.rtcConfiguration);
       console.log('✅ RTCPeerConnection created with config:', this.rtcConfiguration);
-      
       // Setup ICE candidate handler - viewer side
       peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
@@ -1056,7 +996,6 @@ class EnhancedGlobalWebRTCService {
           console.log('🧊 ICE gathering complete for broadcaster connection');
         }
       };
-      
       // Handle remote stream (THIS IS CRITICAL FOR VIDEO)
       peerConnection.ontrack = (event) => {
         console.log('📺 🎉 ✅ REMOTE TRACK RECEIVED from broadcaster!', event);
@@ -1081,7 +1020,6 @@ class EnhancedGlobalWebRTCService {
           console.warn('⚠️ No streams in track event');
         }
       };
-      
       // ALSO handle onaddstream for compatibility
       peerConnection.onaddstream = (event) => {
         console.log('📺 🎉 ✅ REMOTE STREAM RECEIVED via onaddstream!', event);
@@ -1095,7 +1033,6 @@ class EnhancedGlobalWebRTCService {
           });
         }
       };
-      
       // Connection state monitoring
       peerConnection.onconnectionstatechange = () => {
         const state = peerConnection.connectionState;
@@ -1117,7 +1054,6 @@ class EnhancedGlobalWebRTCService {
           this.triggerCallback('onStreamStateChange', 'disconnected', { streamId: this.streamId });
         }
       };
-      
       // ICE connection state monitoring
       peerConnection.oniceconnectionstatechange = () => {
         const iceState = peerConnection.iceConnectionState;
@@ -1132,7 +1068,6 @@ class EnhancedGlobalWebRTCService {
           });
         }
       };
-      
       console.log('✅ Broadcaster peer connection setup complete');
       return peerConnection;
     } catch (error) {
@@ -1140,7 +1075,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   // Send chat message
   sendChatMessage(message) {
     try {
@@ -1158,7 +1092,6 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   // Send reaction
   sendReaction(reaction) {
     try {
@@ -1176,7 +1109,6 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   // End stream
   async endStream() {
     try {
@@ -1191,7 +1123,6 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   // Leave stream
   async leaveStream() {
     try {
@@ -1206,7 +1137,6 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   // ============ EXISTING PEER CONNECTION MANAGEMENT ============
   async createPeerConnection() {
     if (this.peerConnection) {
@@ -1232,30 +1162,22 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
-
   async addLocalStreamToPeerConnection() {
     if (!this.peerConnection || !this.localStream) return;
-  
     try {
       console.log('📡 Adding local stream to peer connection...');
-      
       // ✅ VERIFY AUDIO TRACKS BEFORE ADDING
       const audioTracks = this.localStream.getAudioTracks();
       const videoTracks = this.localStream.getVideoTracks();
-      
       console.log('📡 Tracks to add:', { audio: audioTracks.length, video: videoTracks.length });
-      
       // Check which API is available
       if (typeof this.peerConnection.addStream === 'function') {
         // React Native WebRTC
         console.log('📡 Using addStream API (React Native)');
         this.peerConnection.addStream(this.localStream);
         console.log('✅ Local stream added via addStream');
-        
         // REMOVED: Problematic getSenders verification that was causing crashes
         // The getSenders() method is not reliably available in React Native WebRTC
-        
       } else if (typeof this.peerConnection.addTrack === 'function') {
         // Browser WebRTC
         console.log('📡 Using addTrack API (Browser)');
@@ -1273,7 +1195,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-  
   setupPeerConnectionEventHandlers() {
     if (!this.peerConnection) return;
     this.peerConnection.onicecandidate = (event) => {
@@ -1344,7 +1265,6 @@ class EnhancedGlobalWebRTCService {
       console.log('📡 Signaling state changed to:', state);
     };
   }
-
   handleRemoteStream(stream) {
     console.log('📺 Processing remote stream:', stream.id);
     this.remoteStream = stream;
@@ -1360,7 +1280,6 @@ class EnhancedGlobalWebRTCService {
     this.triggerCallback('onRemoteStream', this.remoteStream);
     this.triggerCallback('onCallStateChange', 'connection', { state: 'connected' });
   }
-
   closePeerConnection() {
     if (this.peerConnection) {
       try {
@@ -1379,7 +1298,6 @@ class EnhancedGlobalWebRTCService {
       this.peerConnectionReady = false;
     }
   }
-
   // ============ EXISTING CALL MANAGEMENT ============
   async initiateCall(calleeId, callType = 'video') {
     try {
@@ -1413,7 +1331,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   async acceptCall() {
     try {
       console.log('✅ Accepting call:', this.callId);
@@ -1460,7 +1377,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   async waitForSignalingReady() {
     return new Promise((resolve) => {
       const checkSignalingReady = () => {
@@ -1477,7 +1393,6 @@ class EnhancedGlobalWebRTCService {
       checkSignalingReady();
     });
   }
-
   async declineCall() {
     try {
       console.log('❌ Declining call:', this.callId);
@@ -1499,7 +1414,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   async endCall(duration = null) {
     try {
       console.log('🔚 Ending call:', this.callId);
@@ -1524,7 +1438,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   // ============ EXISTING SIGNALING ============
   async startSignaling() {
     try {
@@ -1545,7 +1458,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   async sendSignalingMessage(type, data) {
     if (!this.socket || !this.callId || !this.signalingRoom) {
       console.warn('⚠ Cannot send signaling: missing requirements');
@@ -1560,7 +1472,6 @@ class EnhancedGlobalWebRTCService {
     console.log(`📤 Sending ${type} signal`);
     this.socket.emit('webrtc_signal', signalData);
   }
-
   async handleSignaling(signalData) {
     if (!signalData || !signalData.type) {
       console.warn('⚠ Invalid signaling data:', signalData);
@@ -1594,7 +1505,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   async createOffer() {
     if (!this.peerConnection || !this.peerConnectionReady || !this.localMediaReady) {
       console.warn('⚠ Cannot create offer - peer connection or media not ready');
@@ -1621,7 +1531,6 @@ class EnhancedGlobalWebRTCService {
       throw error;
     }
   }
-
   async handleOffer(offerData) {
     if (this.isProcessingOffer) {
       console.log('⚠ Already processing offer, skipping');
@@ -1662,7 +1571,6 @@ class EnhancedGlobalWebRTCService {
       this.isProcessingOffer = false;
     }
   }
-
   async handleAnswer(answerData) {
     if (this.isProcessingAnswer) {
       console.log('⚠ Already processing answer, skipping');
@@ -1697,7 +1605,6 @@ class EnhancedGlobalWebRTCService {
       this.isProcessingAnswer = false;
     }
   }
-
   async handleIceCandidate(candidateData) {
     try {
       if (!candidateData || !candidateData.candidate) {
@@ -1721,7 +1628,6 @@ class EnhancedGlobalWebRTCService {
       console.warn('⚠ Failed to handle ICE candidate:', error);
     }
   }
-
   async processQueuedIceCandidates() {
     if (this.iceCandidatesQueue.length === 0) {
       console.log('🧊 No queued ICE candidates to process');
@@ -1742,7 +1648,6 @@ class EnhancedGlobalWebRTCService {
     }
     console.log('✅ Finished processing queued ICE candidates');
   }
-
   // ============ MEDIA CONTROLS ============
   async toggleCamera() {
     try {
@@ -1774,7 +1679,6 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   async toggleMicrophone() {
     if (this.localStream) {
       const audioTrack = this.localStream.getAudioTracks()[0];
@@ -1787,7 +1691,6 @@ class EnhancedGlobalWebRTCService {
     console.warn('⚠ No audio track to toggle');
     return false;
   }
-
   async switchCamera() {
     try {
       if (this.localStream) {
@@ -1805,7 +1708,6 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   // ============ STATS MONITORING ============
   startStatsMonitoring() {
     if (this.statsInterval) {
@@ -1823,7 +1725,6 @@ class EnhancedGlobalWebRTCService {
     }, 5000);
     console.log('📊 Started stats monitoring');
   }
-
   async getConnectionStats() {
     if (!this.peerConnection) return null;
     try {
@@ -1852,7 +1753,6 @@ class EnhancedGlobalWebRTCService {
       return null;
     }
   }
-
   analyzeConnectionQuality(stats) {
     try {
       let quality = 'good';
@@ -1870,7 +1770,6 @@ class EnhancedGlobalWebRTCService {
       console.error('❌ Error analyzing connection quality:', error);
     }
   }
-
   // ============ CLEANUP METHODS ============
   cleanupViewerConnection(viewerId) {
     const peerConnection = this.viewerConnections.get(viewerId);
@@ -1884,9 +1783,14 @@ class EnhancedGlobalWebRTCService {
     }
     this.connectedViewers.delete(viewerId);
   }
-
   cleanupStreaming() {
     console.log('🧹 Cleaning up streaming...');
+    
+    // Clear offer tracking
+    this.offerProcessed.clear();
+    this.processingOffer = false;
+    this.currentOfferConnectionId = null;
+    
     // Close all viewer connections
     this.viewerConnections.forEach((connection, viewerId) => {
       try {
@@ -1918,7 +1822,6 @@ class EnhancedGlobalWebRTCService {
     this.remoteStream = null;
     console.log('✅ Streaming cleanup completed');
   }
-
   cleanup() {
     console.log('🧹 Starting full WebRTC cleanup');
     // Cleanup streaming
@@ -1980,7 +1883,6 @@ class EnhancedGlobalWebRTCService {
     this.isProcessingAnswer = false;
     console.log('✅ Full cleanup completed');
   }
-
   // ============ UTILITY METHODS ============
   disconnect() {
     console.log('💔 Disconnecting WebRTC service');
@@ -1999,11 +1901,9 @@ class EnhancedGlobalWebRTCService {
     this.isInitialized = false;
     this.initializationPromise = null;
   }
-
   isReady() {
     return this.isInitialized && this.socket && this.socket.connected;
   }
-
   // ENHANCED: Debug socket connection
   getSocketStatus() {
     return {
@@ -2018,7 +1918,6 @@ class EnhancedGlobalWebRTCService {
       externalSocketConnected: this.externalSocket?.connected || false,
     };
   }
-
   // ENHANCED: Debug streaming state
   getStreamingDebugInfo() {
     return {
@@ -2035,7 +1934,6 @@ class EnhancedGlobalWebRTCService {
       socketStatus: this.getSocketStatus()
     };
   }
-
   // ENHANCED: Test socket connection
   testSocketConnection() {
     console.log('🧪 Testing socket connection...');
@@ -2061,7 +1959,6 @@ class EnhancedGlobalWebRTCService {
       return false;
     }
   }
-
   getCallState() {
     const videoTrack = this.localStream?.getVideoTracks()[0];
     const audioTrack = this.localStream?.getAudioTracks()[0];
@@ -2090,7 +1987,6 @@ class EnhancedGlobalWebRTCService {
       } : null
     };
   }
-
   getStreamState() {
     return {
       streamId: this.streamId,
@@ -2104,7 +2000,6 @@ class EnhancedGlobalWebRTCService {
       connectedViewers: this.connectedViewers.size,
     };
   }
-
   async ensureLocalStream() {
     if (!this.localStream || !this.localStream.active) {
       console.log('🔄 Local stream not available, getting new one...');
@@ -2112,7 +2007,6 @@ class EnhancedGlobalWebRTCService {
     }
     return this.localStream;
   }
-
   getCallDuration() {
     if (this.callStartTime) {
       return Math.floor((new Date() - this.callStartTime) / 1000);
@@ -2120,7 +2014,6 @@ class EnhancedGlobalWebRTCService {
     return 0;
   }
 }
-
 // Create a single global instance
 const enhancedGlobalWebRTCService = new EnhancedGlobalWebRTCService();
 export default enhancedGlobalWebRTCService;
