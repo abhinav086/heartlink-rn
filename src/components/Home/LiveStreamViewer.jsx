@@ -1,4 +1,4 @@
-// src/screens/LiveStreamViewer.js - FIXED & RESPONSIVE VERSION WITH SHARED SOCKET
+// src/screens/LiveStreamViewer.js - UPDATED WITH LOUDSPEAKER AUDIO
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -9,19 +9,19 @@ import {
   Alert,
   ActivityIndicator,
   TextInput,
-  ScrollView,
-  Dimensions, // Import Dimensions
+  Dimensions,
 } from 'react-native';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import enhancedGlobalWebRTCService from '../../services/EnhancedGlobalWebRTCService';
 import BASE_URL from '../../config/config';
 import { RTCView } from 'react-native-webrtc';
+import InCallManager from 'react-native-incall-manager';
 
 // Responsive utilities
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const scale = (size) => (SCREEN_WIDTH / 375) * size; // Base iPhone X width
-const verticalScale = (size) => (SCREEN_HEIGHT / 812) * size; // Base iPhone X height
+const scale = (size) => (SCREEN_WIDTH / 375) * size;
+const verticalScale = (size) => (SCREEN_HEIGHT / 812) * size;
 const moderateScale = (size, factor = 0.5) => size + (scale(size) - size) * factor;
 
 const LiveStreamViewer = ({ navigation, route }) => {
@@ -52,20 +52,56 @@ const LiveStreamViewer = ({ navigation, route }) => {
   const [connectionQuality, setConnectionQuality] = useState('unknown');
   const [streamState, setStreamState] = useState('idle');
   const [broadcasterStatus, setBroadcasterStatus] = useState('unknown');
-  const [socketDebugInfo, setSocketDebugInfo] = useState('');
+  const [audioEnabled, setAudioEnabled] = useState(true);
+  const [speakerEnabled, setSpeakerEnabled] = useState(true); // Track speaker state
   
   const flatListRef = useRef();
+
+  // ============ AUDIO MANAGEMENT FUNCTIONS ============
+  const enableLoudspeaker = () => {
+    try {
+      console.log('🔊 Enabling loudspeaker audio routing...');
+      
+      // Start InCallManager with speaker on (no ringtone)
+      InCallManager.start({ 
+        media: 'video', 
+        auto: false
+      });
+      
+      // Force speaker on
+      InCallManager.setForceSpeakerphoneOn(true);
+      
+      // Enable speaker
+      InCallManager.setSpeakerphoneOn(true);
+      
+      console.log('✅ Loudspeaker enabled');
+      setSpeakerEnabled(true);
+    } catch (error) {
+      console.error('❌ Error enabling loudspeaker:', error);
+    }
+  };
+
+  const disableLoudspeaker = () => {
+    try {
+      console.log('🔇 Disabling loudspeaker...');
+      
+      // Stop forcing speakerphone
+      InCallManager.setForceSpeakerphoneOn(false);
+      InCallManager.setSpeakerphoneOn(false);
+      InCallManager.stop();
+      
+      console.log('✅ Loudspeaker disabled');
+      setSpeakerEnabled(false);
+    } catch (error) {
+      console.error('❌ Error disabling loudspeaker:', error);
+    }
+  };
 
   // ============ SERVICE INITIALIZATION ============
   useEffect(() => {
     const initializeService = async () => {
       try {
         console.log('🚀 Initializing Enhanced WebRTC Service for Live Streaming');
-        console.log('🔌 Socket status:', { 
-          socketExists: !!socket, 
-          isConnected: isConnected,
-          socketId: socket?.id 
-        });
         
         if (!socket || !isConnected) {
           console.warn('⚠ Socket not ready, waiting...');
@@ -112,6 +148,10 @@ const LiveStreamViewer = ({ navigation, route }) => {
 
     return () => {
       console.log('🧹 LiveStreamViewer component unmounting');
+      
+      // Clean up audio routing
+      disableLoudspeaker();
+      
       if (offerTimeout) {
         clearTimeout(offerTimeout);
       }
@@ -122,69 +162,66 @@ const LiveStreamViewer = ({ navigation, route }) => {
     };
   }, [token, user, socket, isConnected, initialStreamId]);
 
-  // ============ SOCKET STATUS MONITORING ============
-  useEffect(() => {
-    const updateSocketDebugInfo = () => {
-      const debugInfo = {
-        socketExists: !!socket,
-        socketConnected: isConnected,
-        socketId: socket?.id || 'none',
-        serviceReady: enhancedGlobalWebRTCService.isReady(),
-        serviceSocketStatus: enhancedGlobalWebRTCService.getSocketStatus(),
-      };
-      setSocketDebugInfo(JSON.stringify(debugInfo, null, 2));
-    };
-
-    updateSocketDebugInfo();
-    const interval = setInterval(updateSocketDebugInfo, 2000);
-    return () => clearInterval(interval);
-  }, [socket, isConnected]);
-
   // ============ SERVICE CALLBACKS ============
   const handleLocalStream = (stream) => {
     console.log('📹 Local stream received:', stream?.id);
     setLocalStream(stream);
   };
 
-  // In LiveStreamViewer.js - Enhanced remote stream handling
-const handleRemoteStream = (stream) => {
-  console.log('📺 Processing remote stream:', stream?.id);
-  console.log('📺 Stream active:', stream?.active);
-  console.log('📺 Stream tracks:', stream?.getTracks().length);
-  
-  // ✅ CHECK AUDIO TRACKS IN REMOTE STREAM
-  if (stream) {
-    const audioTracks = stream.getAudioTracks();
-    const videoTracks = stream.getVideoTracks();
+  // Enhanced remote stream handling with loudspeaker audio
+  const handleRemoteStream = (stream) => {
+    console.log('📺 Processing remote stream:', stream?.id);
+    console.log('📺 Stream active:', stream?.active);
+    console.log('📺 Stream tracks:', stream?.getTracks().length);
     
-    console.log('📺 Remote audio tracks:', audioTracks.length);
-    console.log('📺 Remote video tracks:', videoTracks.length);
-    
-    audioTracks.forEach((track, index) => {
-      console.log(`🎵 Remote audio track ${index}:`, {
-        id: track.id,
-        enabled: track.enabled,
-        muted: track.muted,
-        readyState: track.readyState
+    if (stream) {
+      const audioTracks = stream.getAudioTracks();
+      const videoTracks = stream.getVideoTracks();
+      
+      console.log('📺 Remote audio tracks:', audioTracks.length);
+      console.log('📺 Remote video tracks:', videoTracks.length);
+      
+      // ✅ ENABLE AUDIO BY DEFAULT WITH MAX VOLUME
+      audioTracks.forEach((track, index) => {
+        track.enabled = true; // Ensure audio is enabled
+        console.log(`🎵 Audio track ${index} enabled:`, {
+          id: track.id,
+          enabled: track.enabled,
+          muted: track.muted,
+          readyState: track.readyState
+        });
       });
-    });
-    
-    if (audioTracks.length === 0) {
-      console.warn('⚠️ No audio tracks in remote stream!');
+      
+      // Enable video tracks as well
+      videoTracks.forEach((track, index) => {
+        track.enabled = true;
+        console.log(`📹 Video track ${index} enabled:`, {
+          id: track.id,
+          enabled: track.enabled,
+          readyState: track.readyState
+        });
+      });
+      
+      if (audioTracks.length === 0) {
+        console.warn('⚠️ No audio tracks in remote stream!');
+      } else {
+        // ✅ ENABLE LOUDSPEAKER WHEN STREAM STARTS
+        enableLoudspeaker();
+        // Note: Volume can be controlled using device volume buttons
+      }
     }
-  }
-  
-  setRemoteStream(stream);
-  setIsWebRTCConnected(true);
-  setError('');
-  setBroadcasterStatus('streaming');
-  
-  if (offerTimeout) {
-    clearTimeout(offerTimeout);
-    setOfferTimeout(null);
-  }
-  setConnectionAttempts(0);
-};
+    
+    setRemoteStream(stream);
+    setIsWebRTCConnected(true);
+    setError('');
+    setBroadcasterStatus('streaming');
+    
+    if (offerTimeout) {
+      clearTimeout(offerTimeout);
+      setOfferTimeout(null);
+    }
+    setConnectionAttempts(0);
+  };
 
   const handleStreamStateChange = (state, data) => {
     console.log('🔄 Stream state changed:', state, data);
@@ -211,13 +248,17 @@ const handleRemoteStream = (stream) => {
         setIsConnecting(false);
         setIsWebRTCConnected(true);
         setBroadcasterStatus('connected');
+        // ✅ ENSURE LOUDSPEAKER IS ON WHEN CONNECTED
+        enableLoudspeaker();
         break;
         
       case 'video_connected':
         setIsConnecting(false);
         setIsWebRTCConnected(true);
         setBroadcasterStatus('streaming');
-        console.log('✅ Video connection established!');
+        // ✅ ENSURE LOUDSPEAKER IS ON WHEN VIDEO CONNECTED
+        enableLoudspeaker();
+        console.log('✅ Video connection established with loudspeaker!');
         break;
         
       case 'ended':
@@ -285,6 +326,10 @@ const handleRemoteStream = (stream) => {
     setChatMessages([]);
     setCurrentViewerCount(0);
     setBroadcasterStatus('offline');
+    
+    // ✅ DISABLE LOUDSPEAKER WHEN STREAM ENDS
+    disableLoudspeaker();
+    
     if (offerTimeout) {
       clearTimeout(offerTimeout);
       setOfferTimeout(null);
@@ -312,6 +357,37 @@ const handleRemoteStream = (stream) => {
     }, 10000);
     
     setOfferTimeout(timeout);
+  };
+
+  // ============ AUDIO CONTROL (MUTE/UNMUTE) ============
+  const toggleAudio = () => {
+    if (remoteStream) {
+      const audioTracks = remoteStream.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = !audioEnabled;
+      });
+      setAudioEnabled(!audioEnabled);
+      
+      // If unmuting, ensure speaker is on
+      if (!audioEnabled) {
+        enableLoudspeaker();
+      }
+    }
+  };
+
+  // ============ SPEAKER CONTROL ============
+  const toggleSpeaker = () => {
+    if (speakerEnabled) {
+      // Switch to earpiece
+      InCallManager.setForceSpeakerphoneOn(false);
+      InCallManager.setSpeakerphoneOn(false);
+      setSpeakerEnabled(false);
+      console.log('📞 Switched to earpiece');
+    } else {
+      // Switch to loudspeaker
+      enableLoudspeaker();
+      console.log('🔊 Switched to loudspeaker');
+    }
   };
 
   // ============ STREAM MANAGEMENT ============
@@ -375,6 +451,12 @@ const handleRemoteStream = (stream) => {
       setStreamState('joining');
       setBroadcasterStatus('checking');
       setConnectionAttempts(0);
+      setAudioEnabled(true); // Enable audio by default
+      setSpeakerEnabled(true); // Enable speaker by default
+
+      // ✅ ENABLE LOUDSPEAKER WHEN JOINING STREAM
+      enableLoudspeaker();
+      // Note: Use device volume buttons to control volume level
 
       const stream = activeStreams.find(s => s.streamId === streamId);
       if (stream) {
@@ -391,7 +473,7 @@ const handleRemoteStream = (stream) => {
         throw new Error('Failed to join stream');
       }
 
-      console.log('✅ Service join initiated successfully');
+      console.log('✅ Service join initiated successfully with loudspeaker enabled');
     } catch (error) {
       console.error('❌ Error joining stream:', error);
       setError(error.message || 'Failed to join stream');
@@ -399,6 +481,7 @@ const handleRemoteStream = (stream) => {
       setCurrentStreamId(null);
       setStreamState('idle');
       setBroadcasterStatus('error');
+      disableLoudspeaker(); // Disable speaker on error
       Alert.alert('Error', error.message || 'Failed to join the stream.');
     }
   };
@@ -412,6 +495,9 @@ const handleRemoteStream = (stream) => {
     } catch (error) {
       console.error('❌ Error leaving stream:', error);
     }
+
+    // ✅ DISABLE LOUDSPEAKER WHEN LEAVING STREAM
+    disableLoudspeaker();
 
     setCurrentStreamId(null);
     setIsConnecting(false);
@@ -427,6 +513,8 @@ const handleRemoteStream = (stream) => {
     setStreamState('idle');
     setConnectionQuality('unknown');
     setBroadcasterStatus('unknown');
+    setAudioEnabled(true);
+    setSpeakerEnabled(true);
     
     if (offerTimeout) {
       clearTimeout(offerTimeout);
@@ -465,72 +553,57 @@ const handleRemoteStream = (stream) => {
     }
   }, [token, socket, isConnected]);
 
-  // ============ DEBUG INFO ============
-  const getDebugInfo = () => {
-    const debugInfo = enhancedGlobalWebRTCService.getStreamingDebugInfo();
-    return `
-🔍 ENHANCED LIVE STREAM DEBUG:
-- Stream State: ${streamState}
-- Broadcaster Status: ${broadcasterStatus}
-- Connection Attempts: ${connectionAttempts}/3
-- WebRTC Connected: ${isWebRTCConnected}
-- Has Remote Stream: ${!!remoteStream}
-- Remote Stream Active: ${remoteStream?.active || false}
-- Current Viewers: ${currentViewerCount}
-- Connection Quality: ${connectionQuality}
-
-🔌 SOCKET DEBUG:
-${socketDebugInfo}
-
-🎥 SERVICE DEBUG:
-- Service Ready: ${enhancedGlobalWebRTCService.isReady()}
-- Stream ID: ${debugInfo.streamId || 'none'}
-- Stream Role: ${debugInfo.streamRole || 'none'}
-- Has Broadcaster Connection: ${debugInfo.hasBroadcasterConnection}
-- Broadcaster Connection State: ${debugInfo.broadcasterConnectionState}
-    `.trim();
-  };
-
-  // ============ MANUAL DEBUGGING ============
-  const testSocketConnection = () => {
-    console.log('🧪 Testing socket connection manually...');
-    const socketOk = enhancedGlobalWebRTCService.testSocketConnection();
-    Alert.alert('Socket Test', socketOk ? 'Socket OK' : 'Socket Failed');
-  };
-
   // ============ RENDER FUNCTIONS ============
   const renderStreamItem = ({ item }) => (
-    <View style={styles.streamItem}>
-      <Text style={styles.streamTitle}>{item.title}</Text>
-      <Text style={styles.streamInfo}>
-        Streamer: {item.streamer?.fullName || item.streamer?.username || 'Unknown'}
-      </Text>
-      <Text style={styles.streamInfo}>Category: {item.category || 'General'}</Text>
-      <Text style={styles.streamInfo}>Viewers: {item.currentViewerCount || 0}</Text>
-      <Text style={styles.streamInfo}>Status: {item.status || 'LIVE'}</Text>
-      <TouchableOpacity
-        style={[
-          styles.joinButton,
-          (isConnecting && currentStreamId === item.streamId) && styles.joiningButton
-        ]}
-        onPress={() => joinStream(item.streamId)}
-        disabled={!!currentStreamId || isConnecting}
-      >
-        <Text style={styles.joinButtonText}>
-          {(isConnecting && currentStreamId === item.streamId) ? 'Joining...' :
-           currentStreamId ? 'In Stream' : 'Join Stream'}
+    <TouchableOpacity 
+      style={styles.streamItem}
+      onPress={() => joinStream(item.streamId)}
+      disabled={!!currentStreamId || isConnecting}
+      activeOpacity={0.8}
+    >
+      <View style={styles.streamItemHeader}>
+        <View style={styles.liveTag}>
+          <Text style={styles.liveTagText}>LIVE</Text>
+        </View>
+        <Text style={styles.viewerCountBadge}>{item.currentViewerCount || 0} viewers</Text>
+      </View>
+      
+      <Text style={styles.streamTitle} numberOfLines={2}>{item.title}</Text>
+      
+      <View style={styles.streamerInfo}>
+        <Text style={styles.streamerName}>
+          {item.streamer?.fullName || item.streamer?.username || 'Unknown'}
         </Text>
-      </TouchableOpacity>
-    </View>
+        <Text style={styles.streamCategory}>{item.category || 'General'}</Text>
+      </View>
+      
+      <View style={styles.joinButtonContainer}>
+        <TouchableOpacity
+          style={[
+            styles.joinButton,
+            (isConnecting && currentStreamId === item.streamId) && styles.joiningButton,
+            !!currentStreamId && styles.disabledButton
+          ]}
+          onPress={() => joinStream(item.streamId)}
+          disabled={!!currentStreamId || isConnecting}
+        >
+          <Text style={styles.joinButtonText}>
+            {(isConnecting && currentStreamId === item.streamId) ? 'Joining...' :
+             currentStreamId ? 'In Stream' : 'Join Stream'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </TouchableOpacity>
   );
 
   const renderReactionButtons = () => (
     <View style={styles.reactionContainer}>
-      {['❤', '👍', '😍', '🔥', '👏'].map((reaction) => (
+      {['❤️', '👍', '😍', '🔥', '👏'].map((reaction) => (
         <TouchableOpacity
           key={reaction}
           style={styles.reactionButton}
           onPress={() => sendReaction(reaction)}
+          activeOpacity={0.7}
         >
           <Text style={styles.reactionText}>{reaction}</Text>
         </TouchableOpacity>
@@ -541,21 +614,21 @@ ${socketDebugInfo}
   const getBroadcasterStatusMessage = () => {
     switch (broadcasterStatus) {
       case 'checking':
-        return 'Checking broadcaster status...';
+        return 'Connecting...';
       case 'not_ready':
-        return 'Waiting for broadcaster to start video...';
+        return 'Waiting for broadcaster...';
       case 'no_video':
-        return 'Broadcaster camera is not active. Please wait...';
+        return 'Broadcaster camera offline';
       case 'connected':
-        return 'Connected, waiting for video...';
+        return 'Connected';
       case 'streaming':
-        return 'Streaming';
+        return 'Live';
       case 'offline':
-        return 'Broadcaster is offline';
+        return 'Offline';
       case 'error':
         return 'Connection error';
       default:
-        return 'Establishing connection...';
+        return 'Connecting...';
     }
   };
 
@@ -565,30 +638,27 @@ ${socketDebugInfo}
       {/* Connection Status */}
       {!socket || !isConnected ? (
         <View style={styles.connectionWarning}>
-          <Text style={styles.connectionWarningText}>
-            🔌 Connecting to server...
-          </Text>
+          <ActivityIndicator size="small" color="#fff" style={styles.connectionLoader} />
+          <Text style={styles.connectionWarningText}>Connecting to server...</Text>
         </View>
       ) : null}
       
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-
-      {/* DEBUG INFO */}
-      {__DEV__ && (
-        <ScrollView style={styles.debugContainer}>
-          <Text style={styles.debugText}>{getDebugInfo()}</Text>
-          <TouchableOpacity style={styles.debugButton} onPress={testSocketConnection}>
-            <Text style={styles.debugButtonText}>Test Socket</Text>
-          </TouchableOpacity>
-        </ScrollView>
-      )}
+      {error ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      ) : null}
 
       {/* Stream List */}
       {!currentStreamId && (
         <View style={styles.streamListContainer}>
           <View style={styles.headerRow}>
-            <Text style={styles.header}>Active Live Streams</Text>
-            <TouchableOpacity onPress={fetchActiveStreams} disabled={loadingStreams}>
+            <Text style={styles.header}>Live Streams</Text>
+            <TouchableOpacity 
+              onPress={fetchActiveStreams} 
+              disabled={loadingStreams}
+              style={styles.refreshButton}
+            >
               <Text style={styles.refreshText}>
                 {loadingStreams ? 'Loading...' : 'Refresh'}
               </Text>
@@ -625,20 +695,45 @@ ${socketDebugInfo}
           {/* Stream Header */}
           <View style={styles.streamHeader}>
             <TouchableOpacity onPress={leaveStream} style={styles.leaveButton}>
-              <Text style={styles.leaveButtonText}>Leave</Text>
+              <Text style={styles.leaveButtonText}>✕</Text>
             </TouchableOpacity>
+            
             <View style={styles.streamInfoHeader}>
-              <Text style={styles.streamTitleHeader}>{streamTitle || 'Live Stream'}</Text>
-              <Text style={styles.streamerName}>{streamerName || 'Streamer'}</Text>
-              <Text style={styles.viewerCount}>👁 {currentViewerCount} • {streamStatus}</Text>
-              <Text style={styles.connectionStatus}>
-                Status: {getBroadcasterStatusMessage()}
+              <Text style={styles.streamTitleHeader} numberOfLines={1}>
+                {streamTitle || 'Live Stream'}
               </Text>
-              {connectionAttempts > 0 && (
-                <Text style={styles.connectionAttempts}>
-                  Connection attempt: {connectionAttempts}/3
-                </Text>
-              )}
+              <Text style={styles.streamerNameHeader}>{streamerName || 'Streamer'}</Text>
+            </View>
+            
+            <View style={styles.streamStatsContainer}>
+              <View style={styles.viewerCountContainer}>
+                <Text style={styles.viewerCountText}>{currentViewerCount}</Text>
+                <Text style={styles.viewerLabel}>viewers</Text>
+              </View>
+              <View style={styles.audioControls}>
+                {/* <TouchableOpacity 
+                  onPress={toggleAudio} 
+                  style={[
+                    styles.audioButton,
+                    { backgroundColor: audioEnabled ? '#4CAF50' : '#666' }
+                  ]}
+                >
+                  <Text style={styles.audioButtonText}>
+                    {audioEnabled ? '🔊' : '🔇'}
+                  </Text>
+                </TouchableOpacity> */}
+                <TouchableOpacity 
+                  onPress={toggleSpeaker} 
+                  style={[
+                    styles.audioButton,
+                    { backgroundColor: speakerEnabled ? '#2196F3' : '#666' }
+                  ]}
+                >
+                  <Text style={styles.audioButtonText}>
+                    {speakerEnabled ? '📢' : '📞'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
 
@@ -648,7 +743,7 @@ ${socketDebugInfo}
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color="#ed167e" />
                 <Text style={styles.loadingText}>Connecting to stream...</Text>
-                <Text style={styles.loadingSubText}>Please wait...</Text>
+                <Text style={styles.loadingSubText}>🔊 Loudspeaker enabled</Text>
               </View>
             )}
 
@@ -660,9 +755,18 @@ ${socketDebugInfo}
                   objectFit="cover"
                 />
                 <View style={styles.videoOverlay}>
-                  <Text style={styles.liveIndicator}>🔴 LIVE</Text>
+                  <View style={styles.liveIndicator}>
+                    <Text style={styles.liveText}>● LIVE</Text>
+                  </View>
                   {connectionQuality !== 'unknown' && (
-                    <Text style={styles.qualityIndicator}>{connectionQuality.toUpperCase()}</Text>
+                    <View style={styles.qualityIndicator}>
+                      <Text style={styles.qualityText}>{connectionQuality.toUpperCase()}</Text>
+                    </View>
+                  )}
+                  {speakerEnabled && (
+                    <View style={styles.speakerIndicator}>
+                      <Text style={styles.speakerText}>📢 Speaker</Text>
+                    </View>
                   )}
                 </View>
               </View>
@@ -670,8 +774,8 @@ ${socketDebugInfo}
               <View style={styles.videoPlaceholder}>
                 <Text style={styles.videoPlaceholderText}>
                   {broadcasterStatus === 'no_video' ?
-                    '📹 Broadcaster camera is off' :
-                    '📡 Waiting for video stream...'}
+                    '📹 Camera is off' :
+                    '📡 Connecting...'}
                 </Text>
                 <Text style={styles.videoSubText}>
                   {getBroadcasterStatusMessage()}
@@ -684,7 +788,7 @@ ${socketDebugInfo}
                       startOfferTimeout();
                     }}
                   >
-                    <Text style={styles.retryVideoText}>Retry Connection</Text>
+                    <Text style={styles.retryVideoText}>Retry</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -696,7 +800,13 @@ ${socketDebugInfo}
 
           {/* Chat Section */}
           <View style={styles.chatContainer}>
-            <Text style={styles.chatHeader}>Live Chat</Text>
+            <View style={styles.chatHeader}>
+              <Text style={styles.chatHeaderText}>Live Chat</Text>
+              <Text style={styles.chatStatus}>
+                {getBroadcasterStatusMessage()}
+              </Text>
+            </View>
+            
             <FlatList
               ref={flatListRef}
               data={chatMessages}
@@ -704,7 +814,7 @@ ${socketDebugInfo}
               renderItem={({ item }) => (
                 <View style={styles.messageContainer}>
                   <Text style={styles.messageUser}>
-                    {item.user?.fullName || item.user?.username || 'User'}:{' '}
+                    {item.user?.fullName || item.user?.username || 'User'}
                   </Text>
                   <Text style={styles.messageText}>{item.message}</Text>
                 </View>
@@ -712,6 +822,7 @@ ${socketDebugInfo}
               contentContainerStyle={styles.chatList}
               showsVerticalScrollIndicator={false}
             />
+            
             <View style={styles.inputContainer}>
               <TextInput
                 style={styles.chatInput}
@@ -748,62 +859,58 @@ const styles = StyleSheet.create({
   },
   connectionWarning: {
     backgroundColor: '#ff9500',
-    padding: moderateScale(8),
+    padding: moderateScale(12),
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+  },
+  connectionLoader: {
+    marginRight: moderateScale(8),
   },
   connectionWarningText: {
     color: '#fff',
-    fontWeight: 'bold',
-    fontSize: moderateScale(12),
+    fontWeight: '600',
+    fontSize: moderateScale(14),
+  },
+  errorContainer: {
+    backgroundColor: 'rgba(255, 107, 107, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 107, 107, 0.3)',
+    margin: moderateScale(10),
+    borderRadius: moderateScale(8),
   },
   errorText: {
     color: '#ff6b6b',
-    padding: moderateScale(10),
+    padding: moderateScale(12),
     textAlign: 'center',
-    backgroundColor: 'rgba(255, 107, 107, 0.1)',
     fontSize: moderateScale(14),
-  },
-  debugContainer: {
-    backgroundColor: '#111',
-    padding: moderateScale(10),
-    marginBottom: moderateScale(10),
-    maxHeight: verticalScale(200),
-  },
-  debugText: {
-    color: '#00ff00',
-    fontSize: moderateScale(10),
-    fontFamily: 'monospace',
-  },
-  debugButton: {
-    backgroundColor: '#333',
-    padding: moderateScale(8),
-    marginTop: moderateScale(5),
-    borderRadius: moderateScale(4),
-    alignItems: 'center',
-  },
-  debugButtonText: {
-    color: '#fff',
-    fontSize: moderateScale(10),
-    fontWeight: 'bold',
   },
   streamListContainer: {
     flex: 1,
-    padding: moderateScale(15),
+    padding: moderateScale(16),
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: moderateScale(15),
+    marginBottom: moderateScale(20),
   },
   header: {
-    fontSize: moderateScale(22),
+    fontSize: moderateScale(28),
     fontWeight: 'bold',
     color: '#fff',
   },
+  refreshButton: {
+    paddingHorizontal: moderateScale(12),
+    paddingVertical: moderateScale(6),
+    borderRadius: moderateScale(6),
+    backgroundColor: 'rgba(237, 22, 126, 0.1)',
+    borderWidth: 1,
+    borderColor: '#ed167e',
+  },
   refreshText: {
     color: '#ed167e',
-    fontSize: moderateScale(16),
+    fontSize: moderateScale(14),
     fontWeight: '600',
   },
   loadingContainer: {
@@ -813,13 +920,15 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     color: '#fff',
-    marginTop: moderateScale(10),
+    marginTop: moderateScale(12),
     fontSize: moderateScale(16),
+    fontWeight: '500',
   },
   loadingSubText: {
-    color: '#666',
-    marginTop: moderateScale(5),
-    fontSize: moderateScale(12),
+    color: '#4CAF50',
+    marginTop: moderateScale(8),
+    fontSize: moderateScale(14),
+    fontWeight: '500',
   },
   noStreamsContainer: {
     flex: 1,
@@ -829,52 +938,94 @@ const styles = StyleSheet.create({
   },
   noStreamsText: {
     color: '#666',
-    fontSize: moderateScale(16),
+    fontSize: moderateScale(18),
     textAlign: 'center',
-    marginBottom: moderateScale(20),
+    marginBottom: moderateScale(24),
+    fontWeight: '500',
   },
   retryButton: {
     backgroundColor: '#ed167e',
-    paddingHorizontal: moderateScale(20),
-    paddingVertical: moderateScale(10),
+    paddingHorizontal: moderateScale(24),
+    paddingVertical: moderateScale(12),
     borderRadius: moderateScale(8),
   },
   retryButtonText: {
     color: '#fff',
     fontWeight: '600',
-    fontSize: moderateScale(14),
+    fontSize: moderateScale(16),
   },
   listContent: {
     paddingBottom: moderateScale(20),
   },
   streamItem: {
     backgroundColor: '#1a1a1a',
-    padding: moderateScale(15),
-    marginBottom: moderateScale(12),
+    marginBottom: moderateScale(16),
     borderRadius: moderateScale(12),
     borderWidth: 1,
     borderColor: '#333',
+    overflow: 'hidden',
+  },
+  streamItemHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: moderateScale(12),
+    paddingBottom: moderateScale(8),
+  },
+  liveTag: {
+    backgroundColor: '#ff4757',
+    paddingHorizontal: moderateScale(8),
+    paddingVertical: moderateScale(4),
+    borderRadius: moderateScale(4),
+  },
+  liveTagText: {
+    color: '#fff',
+    fontSize: moderateScale(10),
+    fontWeight: 'bold',
+  },
+  viewerCountBadge: {
+    color: '#999',
+    fontSize: moderateScale(12),
+    fontWeight: '500',
   },
   streamTitle: {
     fontSize: moderateScale(18),
     fontWeight: 'bold',
     color: '#fff',
+    paddingHorizontal: moderateScale(12),
     marginBottom: moderateScale(8),
   },
-  streamInfo: {
+  streamerInfo: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: moderateScale(12),
+    marginBottom: moderateScale(12),
+  },
+  streamerName: {
     fontSize: moderateScale(14),
-    color: '#ccc',
-    marginBottom: moderateScale(4),
+    color: '#ed167e',
+    fontWeight: '600',
+  },
+  streamCategory: {
+    fontSize: moderateScale(12),
+    color: '#999',
+  },
+  joinButtonContainer: {
+    padding: moderateScale(12),
+    paddingTop: 0,
   },
   joinButton: {
-    marginTop: moderateScale(12),
-    padding: moderateScale(12),
+    padding: moderateScale(14),
     backgroundColor: '#ed167e',
     borderRadius: moderateScale(8),
     alignItems: 'center',
   },
   joiningButton: {
     backgroundColor: '#666',
+  },
+  disabledButton: {
+    backgroundColor: '#444',
   },
   joinButtonText: {
     color: '#fff',
@@ -886,22 +1037,25 @@ const styles = StyleSheet.create({
   },
   streamHeader: {
     flexDirection: 'row',
-    padding: moderateScale(15),
+    padding: moderateScale(16),
     backgroundColor: '#1a1a1a',
     alignItems: 'center',
     borderBottomWidth: 1,
     borderBottomColor: '#333',
   },
   leaveButton: {
-    padding: moderateScale(10),
+    width: moderateScale(36),
+    height: moderateScale(36),
     backgroundColor: '#ff4757',
-    borderRadius: moderateScale(8),
-    marginRight: moderateScale(15),
+    borderRadius: moderateScale(18),
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: moderateScale(12),
   },
   leaveButtonText: {
     color: '#fff',
     fontWeight: 'bold',
-    fontSize: moderateScale(14),
+    fontSize: moderateScale(18),
   },
   streamInfoHeader: {
     flex: 1,
@@ -910,33 +1064,48 @@ const styles = StyleSheet.create({
     fontSize: moderateScale(18),
     fontWeight: 'bold',
     color: '#fff',
+    marginBottom: moderateScale(2),
   },
-  streamerName: {
+  streamerNameHeader: {
     fontSize: moderateScale(14),
     color: '#ed167e',
     fontWeight: '600',
   },
-  viewerCount: {
-    fontSize: moderateScale(12),
+  streamStatsContainer: {
+    alignItems: 'center',
+  },
+  viewerCountContainer: {
+    alignItems: 'center',
+    marginBottom: moderateScale(8),
+  },
+  viewerCountText: {
+    fontSize: moderateScale(16),
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  viewerLabel: {
+    fontSize: moderateScale(11),
     color: '#999',
   },
-  connectionStatus: {
-    fontSize: moderateScale(11),
-    color: '#00ff00',
-    marginTop: moderateScale(2),
+  audioControls: {
+    flexDirection: 'row',
+    gap: moderateScale(8),
   },
-  connectionAttempts: {
-    fontSize: moderateScale(10),
-    color: '#ff9900',
-    marginTop: moderateScale(2),
+  audioButton: {
+    width: moderateScale(32),
+    height: moderateScale(32),
+    borderRadius: moderateScale(16),
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  audioButtonText: {
+    fontSize: moderateScale(16),
   },
   videoContainer: {
     flex: 2,
     backgroundColor: '#000',
     justifyContent: 'center',
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
   },
   videoWrapper: {
     width: '100%',
@@ -950,22 +1119,47 @@ const styles = StyleSheet.create({
   },
   videoOverlay: {
     position: 'absolute',
-    top: moderateScale(10),
-    left: moderateScale(10),
+    top: moderateScale(12),
+    left: moderateScale(12),
+    right: moderateScale(12),
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  liveIndicator: {
     backgroundColor: 'rgba(0,0,0,0.7)',
-    borderRadius: moderateScale(5),
+    borderRadius: moderateScale(6),
     paddingHorizontal: moderateScale(8),
     paddingVertical: moderateScale(4),
   },
-  liveIndicator: {
-    color: '#fff',
+  liveText: {
+    color: '#ff4757',
     fontSize: moderateScale(12),
     fontWeight: 'bold',
   },
   qualityIndicator: {
-    color: '#00ff00',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: moderateScale(6),
+    paddingHorizontal: moderateScale(8),
+    paddingVertical: moderateScale(4),
+  },
+  qualityText: {
+    color: '#4CAF50',
     fontSize: moderateScale(10),
-    marginTop: moderateScale(2),
+    fontWeight: 'bold',
+  },
+  speakerIndicator: {
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    borderRadius: moderateScale(6),
+    paddingHorizontal: moderateScale(8),
+    paddingVertical: moderateScale(4),
+    position: 'absolute',
+    right: 0,
+    top: moderateScale(30),
+  },
+  speakerText: {
+    color: '#2196F3',
+    fontSize: moderateScale(10),
+    fontWeight: 'bold',
   },
   videoPlaceholder: {
     alignItems: 'center',
@@ -978,15 +1172,15 @@ const styles = StyleSheet.create({
     fontSize: moderateScale(18),
     fontWeight: '600',
     textAlign: 'center',
+    marginBottom: moderateScale(8),
   },
   videoSubText: {
-    color: '#666',
-    fontSize: moderateScale(12),
-    marginTop: moderateScale(5),
+    color: '#999',
+    fontSize: moderateScale(14),
     textAlign: 'center',
+    marginBottom: moderateScale(12),
   },
   retryVideoButton: {
-    marginTop: moderateScale(15),
     backgroundColor: '#ed167e',
     paddingHorizontal: moderateScale(20),
     paddingVertical: moderateScale(10),
@@ -999,58 +1193,67 @@ const styles = StyleSheet.create({
   },
   reactionContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    padding: moderateScale(10),
+    justifyContent: 'space-evenly',
+    padding: moderateScale(12),
     backgroundColor: '#1a1a1a',
     borderBottomWidth: 1,
     borderBottomColor: '#333',
   },
   reactionButton: {
-    padding: moderateScale(8),
+    width: moderateScale(44),
+    height: moderateScale(44),
     backgroundColor: '#333',
-    borderRadius: moderateScale(20),
-    minWidth: moderateScale(40),
+    borderRadius: moderateScale(22),
+    justifyContent: 'center',
     alignItems: 'center',
   },
   reactionText: {
-    fontSize: moderateScale(18),
+    fontSize: moderateScale(20),
   },
   chatContainer: {
     flex: 1,
     backgroundColor: '#1a1a1a',
   },
   chatHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     padding: moderateScale(12),
-    fontWeight: 'bold',
     backgroundColor: '#2a2a2a',
-    color: '#fff',
-    fontSize: moderateScale(16),
     borderBottomWidth: 1,
     borderBottomColor: '#333',
   },
+  chatHeaderText: {
+    fontWeight: 'bold',
+    color: '#fff',
+    fontSize: moderateScale(16),
+  },
+  chatStatus: {
+    fontSize: moderateScale(12),
+    color: '#4CAF50',
+    fontWeight: '500',
+  },
   chatList: {
-    padding: moderateScale(10),
+    padding: moderateScale(12),
     flexGrow: 1,
   },
   messageContainer: {
-    flexDirection: 'row',
-    marginBottom: moderateScale(8),
-    flexWrap: 'wrap',
+    marginBottom: moderateScale(10),
   },
   messageUser: {
     fontWeight: 'bold',
     color: '#ed167e',
-    marginRight: moderateScale(5),
     fontSize: moderateScale(14),
+    marginBottom: moderateScale(2),
   },
   messageText: {
-    flex: 1,
     color: '#fff',
     fontSize: moderateScale(14),
+    lineHeight: moderateScale(20),
   },
   inputContainer: {
     flexDirection: 'row',
-    padding: moderateScale(10),
+    padding: moderateScale(12),
     borderTopWidth: 1,
     borderTopColor: '#333',
     alignItems: 'center',
@@ -1060,19 +1263,19 @@ const styles = StyleSheet.create({
     flex: 1,
     borderWidth: 1,
     borderColor: '#555',
-    borderRadius: moderateScale(8),
-    padding: moderateScale(10),
-    marginRight: moderateScale(10),
+    borderRadius: moderateScale(20),
+    paddingHorizontal: moderateScale(16),
+    paddingVertical: moderateScale(10),
+    marginRight: moderateScale(12),
     color: '#fff',
     backgroundColor: '#333',
     fontSize: moderateScale(14),
   },
   sendButton: {
-    padding: moderateScale(10),
+    paddingHorizontal: moderateScale(20),
+    paddingVertical: moderateScale(10),
     backgroundColor: '#ed167e',
-    borderRadius: moderateScale(8),
-    minWidth: moderateScale(60),
-    alignItems: 'center',
+    borderRadius: moderateScale(20),
   },
   sendButtonDisabled: {
     backgroundColor: '#666',
