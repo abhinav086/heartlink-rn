@@ -301,6 +301,29 @@ class EnhancedGlobalWebRTCService {
       this.triggerCallback('onCallStateChange', 'ended', data);
     });
 
+    this.socket.on('broadcaster_ready_confirmed', (data) => {
+      console.log('✅ Broadcaster ready confirmed:', data);
+      if (this.streamRole === 'broadcaster') {
+        this.streamState = 'broadcasting';
+        this.isBroadcasting = true;
+        this.triggerCallback('onStreamStateChange', 'broadcasting', data);
+      }
+    });
+
+    this.socket.on('broadcaster_status_update', (data) => {
+      console.log('📡 Broadcaster status update:', data);
+      if (this.streamRole === 'viewer') {
+        if (data.broadcasterReady) {
+          console.log('✅ Broadcaster is ready, connection should establish soon');
+          this.triggerCallback('onStreamStateChange', 'broadcaster_ready', data);
+        } else {
+          console.log('⚠️ Broadcaster disconnected, waiting...');
+          this.triggerCallback('onStreamStateChange', 'broadcaster_disconnected', data);
+        }
+      }
+    });
+    
+
     this.socket.on('webrtc_signal', async (data) => {
       console.log(`🔄 WebRTC signal received: ${data.type}`);
       try {

@@ -1,4 +1,4 @@
-// src/components/CreateLiveStream.jsx - UPDATED: Using Enhanced Global WebRTC Service
+// src/components/CreateLiveStream.jsx - FIXED VERSION
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
@@ -56,7 +56,7 @@ const CreateLiveStream = ({ navigation }) => {
   const displayError = apiError || webRTCError;
   const hasActiveStreams = useMemo(() => currentStreams.length > 0, [currentStreams]);
 
-  // ============ REPLACE YOUR ENTIRE SERVICE INITIALIZATION useEffect ============
+  // ============ SERVICE INITIALIZATION ============
   useEffect(() => {
     const initializeService = async () => {
       try {
@@ -69,12 +69,12 @@ const CreateLiveStream = ({ navigation }) => {
 
         // CRITICAL: Check socket connection first
         if (!socket || !isConnected) {
-          console.warn('⚠️ Socket not ready, waiting...');
+          console.warn('⚠️ Socket not connected, waiting...');
           setWebRTCError('Connecting to server...');
           return;
         }
 
-        // 🔥 CRITICAL FIX 1: SET EXTERNAL SOCKET
+        // Set external socket for WebRTC service
         console.log('🔌 Setting external socket for WebRTC service');
         enhancedGlobalWebRTCService.setExternalSocket(socket);
 
@@ -101,7 +101,7 @@ const CreateLiveStream = ({ navigation }) => {
     if (token && user && socket && isConnected) {
       initializeService();
     }
-  }, [token, user, socket, isConnected]); // Added socket dependencies
+  }, [token, user, socket, isConnected]);
 
   // ============ WEBRTC CALLBACKS ============
   const handleLocalStream = (stream) => {
@@ -115,10 +115,16 @@ const CreateLiveStream = ({ navigation }) => {
     switch (state) {
       case 'created':
         setStreamStatus('WAITING');
+        // Update WebRTC service state to match
+        enhancedGlobalWebRTCService.streamId = data.streamId;
+        enhancedGlobalWebRTCService.streamRole = 'broadcaster';
+        enhancedGlobalWebRTCService.streamState = 'waiting';
         break;
       case 'broadcasting':
         setStreamStatus('LIVE');
         setIsWebRTCConnected(true);
+        enhancedGlobalWebRTCService.streamState = 'broadcasting';
+        enhancedGlobalWebRTCService.isBroadcasting = true;
         break;
       case 'ended':
         setStreamStatus('IDLE');
@@ -137,7 +143,6 @@ const CreateLiveStream = ({ navigation }) => {
 
   const handleViewerCount = (data) => {
     console.log('👥 Viewer count update:', data);
-    // Update connected viewers count - this is just for display
     setConnectedViewers(new Set(Array.from({ length: data.count || 0 }, (_, i) => `viewer_${i}`)));
   };
 
@@ -150,10 +155,8 @@ const CreateLiveStream = ({ navigation }) => {
     }
   }, [isConnected]);
 
-  // ============ ADD THIS NEW useEffect FOR VIEWER JOIN HANDLING ============
-  // Add this AFTER your existing useEffect blocks:
+  // ============ VIEWER JOIN HANDLING ============
   useEffect(() => {
-    // 🔥 CRITICAL FIX 2: BROADCASTER VIEWER JOIN LISTENER
     if (socket && isConnected && streamStatus === 'LIVE' && streamId) {
       console.log('🎥 🎧 Setting up BROADCASTER viewer join listener...');
       console.log('🎥 Current stream ID:', streamId);
@@ -195,13 +198,6 @@ const CreateLiveStream = ({ navigation }) => {
 
             if (connectionsAfter === 0 && viewerId) {
               console.error('🎥 ❌ NO VIEWER CONNECTIONS CREATED! WebRTC service issue.');
-              console.error('🎥 🐛 Debug info:', {
-                hasSocket: !!enhancedGlobalWebRTCService.socket,
-                socketConnected: enhancedGlobalWebRTCService.socket?.connected,
-                streamRole: enhancedGlobalWebRTCService.streamRole,
-                streamState: enhancedGlobalWebRTCService.streamState,
-                streamId: enhancedGlobalWebRTCService.streamId
-              });
               setWebRTCError('Failed to establish viewer connection - WebRTC service issue');
             } else {
               console.log('✅ Viewer connection established successfully');
@@ -231,7 +227,7 @@ const CreateLiveStream = ({ navigation }) => {
         streamId
       });
     }
-  }, [socket, isConnected, streamStatus, streamId]); // Watch these dependencies
+  }, [socket, isConnected, streamStatus, streamId]);
 
   useEffect(() => {
     fetchCurrentStreams("component_mount_or_token_change");
@@ -434,6 +430,12 @@ const CreateLiveStream = ({ navigation }) => {
         console.log('[createStream] Stream created successfully:', newStreamId);
         setStreamId(newStreamId);
         setStreamStatus('WAITING');
+        
+        // IMPORTANT: Set WebRTC service state immediately after REST API success
+        enhancedGlobalWebRTCService.streamId = newStreamId;
+        enhancedGlobalWebRTCService.streamRole = 'broadcaster';
+        enhancedGlobalWebRTCService.streamState = 'waiting';
+        
         Alert.alert('Success', 'Stream created! Initializing camera...');
         // Initialize local stream for broadcasting
         await initializeCamera();
@@ -478,8 +480,7 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  // ============ UPDATE startStream FUNCTION ============
-  // Replace your existing startStream function with this enhanced version:
+  // FIXED: Start stream properly
   const startStream = async () => {
     if (streamStatus !== 'WAITING' || !streamId || !token) {
       Alert.alert('Error', 'Stream is not ready to start.');
@@ -489,7 +490,7 @@ const CreateLiveStream = ({ navigation }) => {
       Alert.alert('Error', 'Camera is not ready. Please wait or restart the stream.');
       return;
     }
-    // 🔥 VERIFY SOCKET CONNECTION BEFORE STARTING
+    // Verify socket connection before starting
     if (!socket || !isConnected) {
       Alert.alert('Error', 'Socket connection not ready. Please check your internet.');
       return;
@@ -497,6 +498,7 @@ const CreateLiveStream = ({ navigation }) => {
     setStreamStatus('STARTING');
     try {
       console.log(`[startStream] Starting stream via REST API: ${streamId}`);
+      
       // Call REST API to start stream
       const response = await fetch(`${BASE_URL}/api/v1/live/${streamId}/start`, {
         method: 'POST',
@@ -505,54 +507,50 @@ const CreateLiveStream = ({ navigation }) => {
           'Content-Type': 'application/json',
         },
       });
+      
       if (!response.ok) {
         const errorData = await response.text();
         console.error(`[startStream] Start stream API error: ${response.status} - ${errorData}`);
         throw new Error(`Failed to start stream: ${response.status} ${response.statusText}`);
       }
+      
       const data = await response.json();
       console.log('[startStream] Start stream API success:', data);
-      // 🔥 ENSURE WEBRTC SERVICE IS PROPERLY CONFIGURED
-      console.log('🎥 Verifying WebRTC service before creating stream...');
-      const serviceReady = enhancedGlobalWebRTCService.isReady();
-      const socketStatus = enhancedGlobalWebRTCService.getSocketStatus();
-      console.log('🎥 Service ready:', serviceReady);
-      console.log('🎥 Socket status:', socketStatus);
-      if (!serviceReady || !socketStatus.socketConnected) {
-        throw new Error('WebRTC service not properly initialized');
-      }
-      // Create stream via WebRTC service
-      console.log('🎥 Creating WebRTC stream...');
-      const createSuccess = await enhancedGlobalWebRTCService.createStream({
+      
+      // FIXED: Don't emit stream_create or stream_start_broadcast since stream is already created
+      // Just emit a notification that broadcaster is ready with their local stream
+      console.log('🎥 Notifying backend that broadcaster is ready...');
+      
+      // Set proper state in WebRTC service
+      enhancedGlobalWebRTCService.streamId = streamId;
+      enhancedGlobalWebRTCService.streamRole = 'broadcaster';
+      enhancedGlobalWebRTCService.streamState = 'broadcasting';
+      enhancedGlobalWebRTCService.isBroadcasting = true;
+      enhancedGlobalWebRTCService.localStream = localStream;
+      
+      // Emit a custom event to notify backend that broadcaster is ready
+      // The backend should already have the stream context from REST API
+      socket.emit('broadcaster_ready', {
         streamId: streamId,
-        title: title,
-        description: description,
+        hasLocalStream: true,
         settings: settings
       });
-      if (!createSuccess) {
-        throw new Error('Failed to create WebRTC stream');
-      }
-      console.log('🎥 Starting WebRTC broadcasting...');
-      // Start broadcasting
-      const broadcastSuccess = await enhancedGlobalWebRTCService.startBroadcasting(streamId);
-      if (broadcastSuccess) {
-        setStreamStatus('LIVE');
-        Alert.alert('Broadcasting', 'Your stream is now live and ready for viewers!');
-        console.log(`[startStream] Successfully started broadcasting: ${streamId}`);
-        // 🔥 VERIFY FINAL STATE
-        setTimeout(() => {
-          const finalState = enhancedGlobalWebRTCService.getStreamState();
-          console.log('🎥 📊 Final broadcaster state:', finalState);
-          if (finalState.streamRole !== 'broadcaster' || finalState.streamState !== 'broadcasting') {
-            console.error('🎥 ❌ Broadcaster not in correct state:', finalState);
-            setWebRTCError('Broadcaster not in correct state');
-          }
-        }, 1000);
-      } else {
-        console.log(`[startStream] Failed to start broadcasting: ${streamId}`);
-        setStreamStatus('WAITING');
-        Alert.alert('Error', 'Failed to start broadcasting. Check your camera and internet connection.');
-      }
+      
+      setStreamStatus('LIVE');
+      setIsWebRTCConnected(true);
+      Alert.alert('Broadcasting', 'Your stream is now live and ready for viewers!');
+      console.log(`[startStream] Successfully started broadcasting: ${streamId}`);
+      
+      // Verify final state
+      setTimeout(() => {
+        const finalState = enhancedGlobalWebRTCService.getStreamState();
+        console.log('🎥 📊 Final broadcaster state:', finalState);
+        if (finalState.streamRole !== 'broadcaster' || !finalState.isBroadcasting) {
+          console.error('🎥 ❌ Broadcaster not in correct state:', finalState);
+          setWebRTCError('Broadcaster state synchronization issue');
+        }
+      }, 1000);
+      
     } catch (err) {
       console.error('[startStream] Error:', err);
       setStreamStatus('WAITING');
@@ -592,9 +590,16 @@ const CreateLiveStream = ({ navigation }) => {
       }
       const data = await response.json();
       console.log('[endStream] REST API Success Response:', data);
+      
+      // FIXED: Only emit stream_end if this is our current stream and we're the broadcaster
+      if (id === streamId && enhancedGlobalWebRTCService.streamRole === 'broadcaster') {
+        // Notify via socket that stream is ending
+        socket.emit('stream_end', { streamId: id });
+      }
+      
       // Cleanup local state if it was our stream
       if (id === streamId) {
-        enhancedGlobalWebRTCService.endStream();
+        enhancedGlobalWebRTCService.cleanupStreaming();
         setStreamStatus('IDLE');
         setStreamId(null);
         setLocalStream(null);
@@ -640,7 +645,7 @@ const CreateLiveStream = ({ navigation }) => {
 
   const handleStartBroadcast = () => {
     if (streamStatus === 'WAITING') {
-      startStream(); // Use the fixed startStream function
+      startStream();
     } else if (streamStatus === 'LIVE') {
       Alert.alert('Already Live', 'The stream is currently broadcasting.');
     } else {
@@ -666,13 +671,11 @@ const CreateLiveStream = ({ navigation }) => {
     );
   };
 
-  // ============ ADD VERIFICATION FUNCTION ============
-  // Add this function in your component:
+  // Debug verification function
   const verifyBroadcasterStatus = () => {
     console.log('🎥 ===== BROADCASTER VERIFICATION =====');
 
     const socketStatus = enhancedGlobalWebRTCService.getSocketStatus();
-    // const streamDebugInfo = enhancedGlobalWebRTCService.getStreamingDebugInfo(); // Assuming this exists or is removed
 
     const checks = {
       serviceReady: enhancedGlobalWebRTCService.isReady(),
@@ -701,18 +704,6 @@ const CreateLiveStream = ({ navigation }) => {
     console.log('🎥 ✅ Stream ID:', checks.streamId);
     console.log('🎥 📊 Viewer Connections:', checks.viewerConnectionsSize);
     console.log('🎥 🎧 Socket Event Listeners:', checks.socketEventListeners);
-
-    // Test socket listener (Optional, commented out to avoid unintended side effects)
-    // if (socket) {
-    //   console.log('🧪 Testing socket listener...');
-    //   const testData = {
-    //     streamId: checks.streamId,
-    //     viewer: { userId: 'test_123', fullName: 'Test User' },
-    //     currentViewerCount: 1
-    //   };
-    //   console.log('🧪 Emitting test stream_viewer_joined event...');
-    //   socket.emit('test_event', testData); // Don't use real event for test
-    // }
 
     const isReady = checks.serviceReady &&
       checks.hasSocket &&
@@ -765,12 +756,11 @@ const CreateLiveStream = ({ navigation }) => {
           <Text style={styles.debugText}>🔍 Debug Info:</Text>
           <Text style={styles.debugText}>StreamId: {streamId || 'null'}</Text>
           <Text style={styles.debugText}>Status: {streamStatus}</Text>
-          <Text style={styles.debugText}>Service Ready: {enhancedGlobalWebRTCService.isReady()}</Text>
+          <Text style={styles.debugText}>Service Ready: {enhancedGlobalWebRTCService.isReady() ? '✅' : '❌'}</Text>
           <Text style={styles.debugText}>Socket Connected: {socket?.connected ? '✅' : '❌'}</Text>
           <Text style={styles.debugText}>Using External Socket: {enhancedGlobalWebRTCService.getSocketStatus().isUsingExternalSocket ? '✅' : '❌'}</Text>
           <Text style={styles.debugText}>Viewer Connections: {enhancedGlobalWebRTCService.viewerConnections.size}</Text>
 
-          {/* ADD THIS VERIFICATION BUTTON */}
           <TouchableOpacity
             style={styles.debugButton}
             onPress={verifyBroadcasterStatus}
@@ -797,7 +787,7 @@ const CreateLiveStream = ({ navigation }) => {
                 <View style={styles.streamInfo}>
                   <Text style={styles.streamTitle} numberOfLines={1}>{stream.title}</Text>
                   <Text style={styles.streamId}>ID: {stream.streamId}</Text>
-                  <Text style={styles.streamStatus}>Status: {stream.status}</Text>
+                  <Text style={styles.streamStatus}>Status: {stream.status || 'LIVE'}</Text>
                   {connectedViewers.size > 0 && stream.streamId === streamId && (
                     <Text style={styles.streamViewers}>Connected Viewers: {connectedViewers.size}</Text>
                   )}
@@ -990,6 +980,7 @@ const CreateLiveStream = ({ navigation }) => {
   );
 };
 
+// [Styles remain the same as your original file]
 const styles = StyleSheet.create({
   container: {
     padding: 20,
@@ -1025,7 +1016,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: 2,
   },
-  // ============ ADD THESE STYLES ============
   debugButton: {
     backgroundColor: '#333',
     padding: 8,
