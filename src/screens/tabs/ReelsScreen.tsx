@@ -1,4 +1,4 @@
-// src/screens/tabs/ReelsScreen.tsx
+
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   SafeAreaView,
@@ -34,6 +34,8 @@ const ReelsScreen = ({ navigation }) => {
   const [isAppActive, setIsAppActive] = useState(true);
   const [manualPaused, setManualPaused] = useState({});
   const [currentUser, setCurrentUser] = useState(null);
+  // State to track which reels have had their view counted in this session
+  const [viewCounted, setViewCounted] = useState(new Set());
 
   const flatListRef = useRef(null);
   const [preloadedVideos, setPreloadedVideos] = useState({});
@@ -51,50 +53,9 @@ const ReelsScreen = ({ navigation }) => {
   // Use consistent BASE_URL with v1
   const BASE_URL = 'https://backendforheartlink.in';
 
-  // Calculate dummy views based on video age
-  const calculateDummyViews = useCallback((createdAt) => {
-    if (!createdAt) return Math.floor(Math.random() * 31) + 20; // 20-50 for unknown dates
-
-    try {
-      const now = new Date();
-      const createdDate = new Date(createdAt);
-      const diffInHours = Math.floor((now - createdDate) / (1000 * 60 * 60));
-      const diffInDays = Math.floor(diffInHours / 24);
-
-      let baseViews;
-      let randomRange;
-
-      if (diffInHours < 24) {
-        // Less than 1 day: 20-50 views
-        baseViews = 20;
-        randomRange = 30;
-      } else if (diffInDays <= 7) {
-        // 1-7 days: 50-100 views
-        baseViews = 50;
-        randomRange = 50;
-      } else if (diffInDays <= 30) {
-        // 1-30 days: 100-130 views
-        baseViews = 100;
-        randomRange = 30;
-      } else {
-        // More than 30 days: 120-150 views
-        baseViews = 120;
-        randomRange = 30;
-      }
-
-      // Add some randomization and account for engagement
-      const randomViews = Math.floor(Math.random() * randomRange);
-      const finalViews = baseViews + randomViews;
-
-      return Math.min(Math.max(finalViews, 20), 150); // Ensure it's between 20-150
-    } catch (error) {
-      console.error('Error calculating views:', error);
-      return Math.floor(Math.random() * 31) + 20; // Default to 20-50
-    }
-  }, []);
-
-  // Format views count (e.g., 1.2K, 1M)
+  // Format views count (e.g., 1.2K, 1M) - Updated to handle realTimeViews
   const formatViewCount = useCallback((count) => {
+    if (count === undefined || count === null) return '0';
     if (count < 1000) return count.toString();
     if (count < 1000000) return `${(count / 1000).toFixed(1)}K`;
     return `${(count / 1000000).toFixed(1)}M`;
@@ -130,8 +91,8 @@ const ReelsScreen = ({ navigation }) => {
       } else {
         // Try alternative storage keys
         const altUserJson = await AsyncStorage.getItem('userData') ||
-                           await AsyncStorage.getItem('currentUser') ||
-                           await AsyncStorage.getItem('userInfo');
+          await AsyncStorage.getItem('currentUser') ||
+          await AsyncStorage.getItem('userInfo');
         if (altUserJson) {
           const user = JSON.parse(altUserJson);
           setCurrentUser(user);
@@ -184,10 +145,10 @@ const ReelsScreen = ({ navigation }) => {
             prevReels.map(reel =>
               reel._id === likeAction.reelId
                 ? {
-                    ...reel,
-                    likeCount: updatedData.data.likeCount || updatedData.data.realTimeLikes || reel.likeCount,
-                    likes: updatedData.data.reel?.likes || reel.likes
-                  }
+                  ...reel,
+                  likeCount: updatedData.data.likeCount || updatedData.data.realTimeLikes || reel.likeCount,
+                  likes: updatedData.data.reel?.likes || reel.likes
+                }
                 : reel
             )
           );
@@ -277,6 +238,7 @@ const ReelsScreen = ({ navigation }) => {
     }
   }, [navigation, currentUser]);
 
+  // Fetch reels data (posts of type reel)
   const fetchReels = useCallback(async () => {
     try {
       setError(null);
@@ -293,8 +255,6 @@ const ReelsScreen = ({ navigation }) => {
 
       if (response.ok && data.success && Array.isArray(data.data?.posts)) {
         const optimizedReels = data.data.posts.map(post => {
-          const dummyViews = calculateDummyViews(post.createdAt);
-
           return {
             _id: post._id,
             content: post.content,
@@ -312,9 +272,10 @@ const ReelsScreen = ({ navigation }) => {
             },
             likes: post.likes || [],
             comments: post.comments || [],
-            likeCount: post.likeCount || post.likes?.length || 0,
-            commentCount: post.commentCount || post.comments?.length || 0,
-            viewCount: dummyViews, // Add dummy views based on age
+            // Use realTimeViews from the backend response
+            viewCount: post.realTimeViews !== undefined ? post.realTimeViews : (post.views || 0),
+            likeCount: post.likeCount || post.realTimeLikes || post.likes?.length || 0,
+            commentCount: post.commentCount || post.realTimeComments || post.comments?.length || 0,
             type: post.type,
             // Add isLiked property for easier state management
             isLiked: false // Will be calculated below
@@ -333,6 +294,7 @@ const ReelsScreen = ({ navigation }) => {
         }
 
         setReels(optimizedReels);
+        setViewCounted(new Set()); // Reset view counted state when fetching new reels
 
         if (optimizedReels[0]?.video?.url) {
           setPreloadedVideos(prev => ({
@@ -350,7 +312,53 @@ const ReelsScreen = ({ navigation }) => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [calculateDummyViews]);
+  }, []);
+
+  // Register a view for a reel (Method 1: Implicit via GET /posts/:postId)
+  const registerReelView = useCallback(async (reelId) => {
+    // Prevent multiple view counts for the same reel in the same session
+    if (viewCounted.has(reelId)) {
+      return;
+    }
+
+    try {
+      const headers = await getAuthHeaders();
+
+      // Call the GET endpoint which implicitly counts the view
+      const response = await fetch(`${BASE_URL}/api/v1/posts/${reelId}`, {
+        method: 'GET',
+        headers,
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success && data.data?.post) {
+        const updatedReel = data.data.post;
+        // Update the specific reel's view count in the state
+        setReels(prevReels =>
+          prevReels.map(reel =>
+            reel._id === reelId
+              ? {
+                ...reel,
+                viewCount: updatedReel.realTimeViews !== undefined ? updatedReel.realTimeViews : (updatedReel.views || reel.viewCount || 0)
+              }
+              : reel
+          )
+        );
+        // Mark this reel as having its view counted in this session
+        setViewCounted(prev => new Set(prev).add(reelId));
+        console.log(`View registered for reel: ${reelId}`);
+      } else {
+        console.warn('Failed to register view via GET:', data.message || 'Unknown error');
+        // Even if the view registration fails, we mark it as counted to prevent retries
+        setViewCounted(prev => new Set(prev).add(reelId));
+      }
+    } catch (error) {
+      console.error('Error registering reel view:', error);
+      // Mark as counted on error to prevent continuous retries
+      setViewCounted(prev => new Set(prev).add(reelId));
+    }
+  }, [viewCounted, BASE_URL]);
 
   useEffect(() => {
     const handleAppStateChange = (nextAppState) => {
@@ -388,6 +396,14 @@ const ReelsScreen = ({ navigation }) => {
     }
   }, [currentIndex, reels, preloadedVideos]);
 
+  // Effect to register view when the current reel changes
+  useEffect(() => {
+    const currentReel = reels[currentIndex];
+    if (currentReel && currentReel._id) {
+       registerReelView(currentReel._id);
+    }
+  }, [currentIndex, reels, registerReelView]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchReels();
@@ -398,8 +414,6 @@ const ReelsScreen = ({ navigation }) => {
       const firstVisibleItem = viewableItems[0];
       if (firstVisibleItem && typeof firstVisibleItem.index === 'number') {
         setCurrentIndex(firstVisibleItem.index);
-        // Reset manual pause state when switching reels
-        setManualPaused({});
       }
     }
   }, []);
@@ -514,10 +528,10 @@ const ReelsScreen = ({ navigation }) => {
           prevReels.map(r =>
             r._id === reel._id
               ? {
-                  ...r,
-                  commentCount: newCommentCount,
-                  realTimeComments: realTimeComments
-                }
+                ...r,
+                commentCount: newCommentCount,
+                realTimeComments: realTimeComments
+              }
               : r
           )
         );
@@ -596,8 +610,8 @@ const ReelsScreen = ({ navigation }) => {
     const isPaused = manualPaused[item._id] || !isActive || !isFocused;
 
     return (
-      <TouchableWithoutFeedback onPress={() => togglePauseForReel(item._id)}>
-        <View style={styles.reelContainer}>
+      <View style={styles.reelContainer}>
+        <TouchableWithoutFeedback onPress={() => togglePauseForReel(item._id)}>
           <View style={styles.mediaContainer}>
             {isVideo ? (
               <View style={styles.videoWrapper}>
@@ -621,12 +635,6 @@ const ReelsScreen = ({ navigation }) => {
                     <ActivityIndicator size="large" color="#ed167e" />
                   </View>
                 )}
-                {/* Add pause indicator */}
-                {isPaused && manualPaused[item._id] && (
-                  <View style={styles.pauseIndicator}>
-                    <Icon name="play-circle" size={60} color="rgba(255,255,255,0.9)" />
-                  </View>
-                )}
               </View>
             ) : mediaSource ? (
               <Image source={{ uri: mediaSource }} style={styles.media} resizeMode="cover" />
@@ -637,103 +645,90 @@ const ReelsScreen = ({ navigation }) => {
               </View>
             )}
           </View>
+        </TouchableWithoutFeedback>
 
-          {index === currentIndex && <LikeAnimations />}
+        {index === currentIndex && <LikeAnimations />}
 
-          <View style={styles.bottomLeftInfo} pointerEvents="box-none">
-            {/* Made author name touchable */}
-            <TouchableOpacity
-              onPress={(e) => {
-                e.stopPropagation();
-                handleProfilePress(item.author);
-              }}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.authorName}>
-                {item.author?.fullName || item.author?.username || 'Unknown User'}
-              </Text>
-            </TouchableOpacity>
-            <Text style={styles.timeAgo}>{formatTimeAgo(item.createdAt)}</Text>
-            {item.content ? <Text style={styles.caption} numberOfLines={2}>{item.content}</Text> : null}
-          </View>
-
-          <View style={styles.bottomRightActions} pointerEvents="box-none">
-            {/* Like Button with Vector Icon - NO LOADING STATE */}
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={(e) => {
-                e.stopPropagation();
-                handleLike(item._id);
-              }}
-              activeOpacity={0.7}
-            >
-              <Icon
-                name={isLiked ? "heart" : "heart-outline"}
-                size={28}
-                color={isLiked ? "#ed167e" : "#fff"}
-                style={styles.actionIcon}
-              />
-              <Text style={styles.actionCount}>{item.likeCount || 0}</Text>
-            </TouchableOpacity>
-
-            {/* Comment Button */}
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={(e) => {
-                e.stopPropagation();
-                openComments(item);
-              }}
-              activeOpacity={0.7}
-            >
-              <Icon
-                name="chatbubble-outline"
-                size={26}
-                color="#fff"
-                style={styles.actionIcon}
-              />
-              <Text style={styles.actionCount}>{item.commentCount || 0}</Text>
-            </TouchableOpacity>
-
-            {/* Views Button */}
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={(e) => e.stopPropagation()}
-              activeOpacity={0.7}
-            >
-              <Icon
-                name="eye-outline"
-                size={26}
-                color="#fff"
-                style={styles.actionIcon}
-              />
-              <Text style={styles.actionCount}>{formatViewCount(item.viewCount || 0)}</Text>
-            </TouchableOpacity>
-
-            {/* Made Author Avatar touchable */}
-            <TouchableOpacity
-              style={styles.authorAvatar}
-              onPress={(e) => {
-                e.stopPropagation();
-                handleProfilePress(item.author);
-              }}
-              activeOpacity={0.8}
-            >
-              {item.author?.photoUrl ? (
-                <Image
-                  source={{ uri: item.author.photoUrl.url || item.author.photoUrl }}
-                  style={styles.authorAvatarImage}
-                />
-              ) : (
-                <View style={styles.authorAvatarPlaceholder}>
-                  <Text style={styles.authorAvatarText}>
-                    {getInitials(item.author?.fullName || item.author?.username)}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          </View>
+        <View style={styles.bottomLeftInfo}>
+          {/* Made author name touchable */}
+          <TouchableOpacity
+            onPress={() => handleProfilePress(item.author)}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.authorName}>
+              {item.author?.fullName || item.author?.username || 'Unknown User'}
+            </Text>
+          </TouchableOpacity>
+          <Text style={styles.timeAgo}>{formatTimeAgo(item.createdAt)}</Text>
+          {item.content ? <Text style={styles.caption} numberOfLines={2}>{item.content}</Text> : null}
         </View>
-      </TouchableWithoutFeedback>
+
+        <View style={styles.bottomRightActions}>
+          {/* Like Button with Vector Icon - NO LOADING STATE */}
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleLike(item._id)}
+            activeOpacity={0.7}
+          >
+            <Icon
+              name={isLiked ? "heart" : "heart-outline"}
+              size={28}
+              color={isLiked ? "#ed167e" : "#fff"}
+              style={styles.actionIcon}
+            />
+            <Text style={styles.actionCount}>{item.likeCount || 0}</Text>
+          </TouchableOpacity>
+
+          {/* Comment Button */}
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => openComments(item)}
+            activeOpacity={0.7}
+          >
+            <Icon
+              name="chatbubble-outline"
+              size={26}
+              color="#fff"
+              style={styles.actionIcon}
+            />
+            <Text style={styles.actionCount}>{item.commentCount || 0}</Text>
+          </TouchableOpacity>
+
+          {/* Views Button - Displays real view count */}
+          <TouchableOpacity
+            style={styles.actionButton}
+            activeOpacity={0.7}
+          >
+            <Icon
+              name="eye-outline"
+              size={26}
+              color="#fff"
+              style={styles.actionIcon}
+            />
+            <Text style={styles.actionCount}>{formatViewCount(item.viewCount || 0)}</Text>
+          </TouchableOpacity>
+
+          {/* Made Author Avatar touchable */}
+          <TouchableOpacity
+            style={styles.authorAvatar}
+            onPress={() => handleProfilePress(item.author)}
+            activeOpacity={0.8}
+          >
+            {item.author?.photoUrl ? (
+              <Image
+                source={{ uri: item.author.photoUrl.url || item.author.photoUrl }}
+                style={styles.authorAvatarImage}
+              />
+            ) : (
+              <View style={styles.authorAvatarPlaceholder}>
+                <Text style={styles.authorAvatarText}>
+                  {getInitials(item.author?.fullName || item.author?.username)}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      </View>
     );
   }, [
     currentIndex,
@@ -752,7 +747,7 @@ const ReelsScreen = ({ navigation }) => {
     togglePauseForReel,
     openComments,
     handleProfilePress,
-    formatViewCount
+    formatViewCount // Ensure formatViewCount is in the dependency array
   ]);
 
   const keyExtractor = useCallback((item) => item._id, []);
@@ -929,16 +924,6 @@ const styles = StyleSheet.create({
   },
   bufferingOverlay: {
     ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-  },
-  pauseIndicator: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.3)',

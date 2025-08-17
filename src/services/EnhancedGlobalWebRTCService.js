@@ -388,48 +388,99 @@ class EnhancedGlobalWebRTCService {
       this.triggerCallback('onViewerCount', { count: data.currentViewerCount });
     });
     // New viewer joined (for broadcaster) - FIXED VERSION
-    this.socket.on('stream_viewer_joined', async (data) => {
-      console.log('👥 Viewer joined stream (Broadcaster side):', data);
-      // FIX: Extract viewerId from the viewer object
-      const { streamId, viewer, currentViewerCount } = data;
-      const viewerId = viewer?.userId; // ← THIS IS THE FIX!
-      if (!viewerId) {
-        console.error('❌ No viewerId found in stream_viewer_joined event');
-        return;
-      }
-      console.log(`🔍 stream_viewer_joined: streamId: ${streamId}, viewerId: ${viewerId}`);
-      if (streamId === this.streamId && this.streamRole === 'broadcaster') {
-        console.log(`✅ Creating offer for viewer: ${viewerId}`);
-        try {
-          // Create peer connection for this viewer if it doesn't exist
-          let peerConnection = this.viewerConnections.get(viewerId);
-          if (!peerConnection) {
-            console.log(`🔗 Creating PeerConnection for viewer ${viewerId}...`);
-            peerConnection = await this.createViewerPeerConnection(viewerId);
-            console.log(`✅ PeerConnection created for viewer ${viewerId}`);
-          }
-          // Create and send offer
-          if (peerConnection && peerConnection.connectionState !== 'closed') {
-            console.log(`🎬 Creating offer for viewer ${viewerId}...`);
-            await this.createOfferForViewer(viewerId);
-            console.log(`✅ Offer sent to viewer ${viewerId}`);
-          } else {
-            console.error(`❌ Invalid peer connection for viewer ${viewerId}`);
-          }
-          // Update viewer count
-          this.streamViewerCount = currentViewerCount;
-          this.triggerCallback('onViewerCount', { count: currentViewerCount });
-        } catch (err) {
-          console.error(`❌ Error handling viewer ${viewerId} joining:`, err);
-          this.triggerCallback('onError', { 
-            type: 'viewer_join_failed', 
-            message: `Failed to create offer for viewer: ${err.message}` 
-          });
-        }
-      } else {
-        console.warn(`⚠️ Ignoring viewer join - wrong stream or not broadcaster`);
-      }
+   // Fixed stream_viewer_joined handler in EnhancedGlobalWebRTCService.js
+// Replace the existing handler in setupSocketListeners() method with this:
+this.socket.on('stream_viewer_joined', async (data) => {
+  console.log('👥 Viewer joined stream (Broadcaster side):', data);
+  const { streamId, viewer, currentViewerCount } = data;
+  const viewerId = viewer?.userId;
+  if (!viewerId) {
+    console.error('❌ No viewerId found in stream_viewer_joined event');
+    return;
+  }
+  console.log(`📍 stream_viewer_joined: streamId: ${streamId}, viewerId: ${viewerId}`);
+  console.log(`📍 My streamId: ${this.streamId}, My role: ${this.streamRole}`);
+  // CRITICAL: Only process if we're the broadcaster for THIS stream
+  if (streamId !== this.streamId || this.streamRole !== 'broadcaster') {
+    console.warn(`⚠️ Ignoring viewer join - not my stream or not broadcaster`);
+    return;
+  }
+  console.log(`✅ Processing viewer join for: ${viewerId}`);
+  try {
+    // CRITICAL: Check if local stream exists
+    if (!this.localStream || !this.localStream.active) {
+      console.error('❌ No local stream available for broadcaster!');
+      throw new Error('Broadcaster has no active stream');
+    }
+    // Log local stream status
+    const videoTracks = this.localStream.getVideoTracks();
+    const audioTracks = this.localStream.getAudioTracks();
+    console.log(`📹 Broadcaster stream status:`, {
+      hasVideo: videoTracks.length > 0,
+      hasAudio: audioTracks.length > 0,
+      videoEnabled: videoTracks[0]?.enabled,
+      audioEnabled: audioTracks[0]?.enabled
     });
+    // Check if we already have a connection for this viewer
+    let peerConnection = this.viewerConnections.get(viewerId);
+    if (peerConnection && peerConnection.connectionState !== 'closed') {
+      console.log(`♻️ Reusing existing connection for viewer ${viewerId}`);
+      console.log(`📊 Connection state: ${peerConnection.connectionState}`);
+    } else {
+      // Create new peer connection for this viewer
+      console.log(`🆕 Creating new PeerConnection for viewer ${viewerId}...`);
+      // CRITICAL: Await the connection creation properly
+      try {
+        peerConnection = await this.createViewerPeerConnection(viewerId);
+        console.log(`✅ PeerConnection created for viewer ${viewerId}`);
+      } catch (createError) {
+        console.error(`❌ Failed to create peer connection for viewer ${viewerId}:`, createError);
+        throw createError;
+      }
+      // CRITICAL: Verify it was stored properly
+      const storedConnection = this.viewerConnections.get(viewerId);
+      if (!storedConnection) {
+        console.error(`❌ Connection not found in map after creation!`);
+        console.log(`📊 Current map keys:`, Array.from(this.viewerConnections.keys()));
+        throw new Error(`Failed to store connection for viewer ${viewerId}`);
+      }
+      console.log(`✅ PeerConnection verified in map for viewer ${viewerId}`);
+      peerConnection = storedConnection; // Use the stored reference
+    }
+    // Small delay to ensure connection is stable
+    await new Promise(resolve => setTimeout(resolve, 100));
+    // Create and send offer
+    if (peerConnection && peerConnection.connectionState !== 'closed') {
+      console.log(`🎬 Creating offer for viewer ${viewerId}...`);
+      try {
+        await this.createOfferForViewer(viewerId);
+        console.log(`✅ Offer created and sent to viewer ${viewerId}`);
+      } catch (offerError) {
+        console.error(`❌ Failed to create offer for viewer ${viewerId}:`, offerError);
+        throw offerError;
+      }
+    } else {
+      throw new Error(`Invalid peer connection state for viewer ${viewerId}`);
+    }
+    // Update viewer count
+    this.streamViewerCount = currentViewerCount;
+    this.triggerCallback('onViewerCount', { count: currentViewerCount });
+    console.log(`✅ Successfully handled viewer ${viewerId} joining`);
+    console.log(`📊 Total connections in map:`, this.viewerConnections.size);
+    console.log(`📊 Map keys:`, Array.from(this.viewerConnections.keys()));
+  } catch (err) {
+    console.error(`❌ Error handling viewer ${viewerId} joining:`, err);
+    console.error(`❌ Error stack:`, err.stack);
+    // Clean up failed connection
+    this.cleanupViewerConnection(viewerId);
+    this.triggerCallback('onError', {
+      type: 'viewer_join_failed',
+      message: `Failed to establish connection with viewer: ${err.message}`,
+      viewerId: viewerId,
+      error: err
+    });
+  }
+});
     // Viewer left (for broadcaster)
     this.socket.on('stream_viewer_left', (data) => {
       console.log('👁 Viewer left:', data);
@@ -668,12 +719,19 @@ class EnhancedGlobalWebRTCService {
   }
   // Start broadcasting (broadcaster)
   // In EnhancedGlobalWebRTCService.js - Update startBroadcasting
+// Fixed startBroadcasting method with proper initialization
+// Replace the existing startBroadcasting method with this:
 async startBroadcasting(streamId) {
   try {
     console.log('📡 Starting broadcast for stream:', streamId);
     if (!this.socket || !this.socket.connected) {
       throw new Error('Socket not connected');
     }
+    // CRITICAL: Initialize collections
+    console.log('🗑️ Initializing viewer collections...');
+    this.viewerConnections = new Map();
+    this.connectedViewers = new Map();
+    console.log('✅ Viewer collections initialized');
     // Ensure we have a valid local stream with video
     if (!this.localStream || !this.localStream.active) {
       console.log('🎥 Local stream not ready, initializing...');
@@ -689,31 +747,70 @@ async startBroadcasting(streamId) {
     }
     // Verify video tracks exist
     const videoTracks = this.localStream.getVideoTracks();
+    const audioTracks = this.localStream.getAudioTracks();
+    console.log('📹 Local stream status:', {
+      id: this.localStream.id,
+      active: this.localStream.active,
+      videoTracks: videoTracks.length,
+      audioTracks: audioTracks.length
+    });
     if (videoTracks.length === 0) {
       throw new Error('No video tracks available. Please enable camera.');
     }
     // Enable all tracks
-    this.localStream.getTracks().forEach(track => {
+    videoTracks.forEach((track, index) => {
       track.enabled = true;
-      console.log(`✅ ${track.kind} track enabled:`, track.enabled);
+      console.log(`✅ Video track ${index} enabled:`, {
+        id: track.id,
+        enabled: track.enabled,
+        readyState: track.readyState
+      });
     });
+    audioTracks.forEach((track, index) => {
+      track.enabled = true;
+      console.log(`✅ Audio track ${index} enabled:`, {
+        id: track.id,
+        enabled: track.enabled,
+        readyState: track.readyState
+      });
+    });
+    // Set stream properties
     this.streamId = streamId;
     this.streamRole = 'broadcaster';
     this.streamState = 'starting';
+    this.isBroadcasting = false; // Will be set to true when confirmed
+    console.log('📡 WebRTC service state before broadcast:', {
+      streamId: this.streamId,
+      streamRole: this.streamRole,
+      hasLocalStream: !!this.localStream,
+      localStreamActive: this.localStream?.active,
+      viewerConnectionsSize: this.viewerConnections.size
+    });
     // Notify backend that broadcaster is ready
     this.socket.emit('broadcaster_ready', { 
       streamId,
       hasLocalStream: true,
       hasVideo: videoTracks.length > 0,
-      hasAudio: this.localStream.getAudioTracks().length > 0
+      hasAudio: audioTracks.length > 0,
+      videoEnabled: videoTracks[0]?.enabled,
+      audioEnabled: audioTracks[0]?.enabled
     });
     this.socket.emit('stream_start_broadcast', { streamId });
+    // Start debug monitoring
+    this.startDebugInterval();
+    console.log('✅ Broadcast start initiated for stream:', streamId);
     return true;
   } catch (error) {
     console.error('❌ Failed to start broadcasting:', error);
+    console.error('❌ Error stack:', error.stack);
+    // Clean up on failure
+    this.viewerConnections.clear();
+    this.connectedViewers.clear();
+    this.stopDebugInterval();
     this.triggerCallback('onError', {
       type: 'broadcast_start_error',
-      message: error.message
+      message: error.message,
+      error: error
     });
     return false;
   }
@@ -750,71 +847,109 @@ async startBroadcasting(streamId) {
     }
   }
   // Create offer for viewer (broadcaster) - FIXED VERSION
-  async createOfferForViewer(viewerId) {
-    try {
-      console.log(`🎬 Starting createOfferForViewer for viewer: ${viewerId}`);
-      console.log(`🎬 Current streamId: ${this.streamId}`);
-      console.log(`🎬 Socket connected: ${this.socket ? this.socket.connected : 'No Socket'}`);
-      console.log(`🎬 viewerConnections map keys:`, Array.from(this.viewerConnections.keys()));
-      const peerConnection = this.viewerConnections.get(viewerId);
-      console.log(`🎬 Retrieved PeerConnection for ${viewerId}:`, peerConnection ? 'Exists' : 'NULL');
-      if (peerConnection) {
-        console.log(`🎬 PeerConnection state for ${viewerId}:`, peerConnection.connectionState);
+ // Fixed createOfferForViewer method with failsafe
+// Replace the existing createOfferForViewer method with this:
+async createOfferForViewer(viewerId) {
+  try {
+    console.log(`🎬 Starting createOfferForViewer for viewer: ${viewerId}`);
+    console.log(`🎬 Current streamId: ${this.streamId}`);
+    console.log(`🎬 Socket connected: ${this.socket ? this.socket.connected : 'No Socket'}`);
+    console.log(`🎬 viewerConnections map size: ${this.viewerConnections.size}`);
+    console.log(`🎬 viewerConnections map keys:`, Array.from(this.viewerConnections.keys()));
+    let peerConnection = this.viewerConnections.get(viewerId);
+    console.log(`🎬 Retrieved PeerConnection for ${viewerId}:`, peerConnection ? 'Exists' : 'NULL');
+    // FAILSAFE: If connection doesn't exist, try to create it
+    if (!peerConnection) {
+      console.warn(`⚠️ No peer connection found for viewer ${viewerId}, attempting to create one...`);
+      // Verify we have a local stream first
+      if (!this.localStream || !this.localStream.active) {
+        throw new Error('Cannot create offer without local stream');
       }
-      if (!peerConnection || peerConnection.connectionState === 'closed') {
-        const errorMsg = `⚠️ No valid peer connection for viewer ${viewerId}. Cannot create offer. State: ${peerConnection ? peerConnection.connectionState : 'NULL'}`;
-        console.warn(errorMsg);
-        this.triggerCallback('onError', { type: 'offer_failed', message: errorMsg });
-        return;
+      try {
+        peerConnection = await this.createViewerPeerConnection(viewerId);
+        console.log(`✅ Failsafe: Created peer connection for viewer ${viewerId}`);
+        // Verify it was stored
+        peerConnection = this.viewerConnections.get(viewerId);
+        if (!peerConnection) {
+          throw new Error('Failed to store peer connection in failsafe');
+        }
+      } catch (createError) {
+        console.error(`❌ Failsafe failed to create connection:`, createError);
+        throw new Error(`Cannot create peer connection: ${createError.message}`);
       }
-      console.log(`🎬 Creating offer for viewer ${viewerId}...`);
-      const offer = await peerConnection.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: true,
-      });
-      console.log(`🎬 Offer created successfully for viewer ${viewerId}:`, offer.sdp.substring(0, 100) + '...');
-      await peerConnection.setLocalDescription(offer);
-      console.log(`🎬 Local Description (Offer) set successfully for viewer ${viewerId}.`);
-      // CRITICAL CHECKS before emitting
-      if (this.socket && this.socket.connected && this.streamId) {
-        console.log(`📡 Preparing to send offer for viewer ${viewerId} in stream ${this.streamId}`);
-        this.socket.emit('stream_webrtc_offer', {
-          streamId: this.streamId,
-          viewerId: viewerId,
-          offer: offer
-        });
-        console.log(`📡 ✅ Offer sent to backend for viewer ${viewerId} in stream ${this.streamId}`);
-      } else {
-        const socketError = !this.socket ? "No socket instance" : (!this.socket.connected ? "Socket disconnected" : "No streamId");
-        const errorMsg = `❌ Cannot send offer for viewer ${viewerId}: ${socketError}.`;
-        console.error(errorMsg);
-        this.triggerCallback('onError', { type: 'offer_failed', message: errorMsg });
-      }
-    } catch (error) {
-      console.error(`❌ Error in createOfferForViewer for viewer ${viewerId}:`, error);
-      this.triggerCallback('onError', { type: 'offer_failed', message: `Offer creation failed for ${viewerId}: ${error.message}` });
     }
+    // Check connection state
+    if (peerConnection.connectionState === 'closed') {
+      console.warn(`⚠️ Peer connection is closed for viewer ${viewerId}, recreating...`);
+      // Remove old connection and create new one
+      this.cleanupViewerConnection(viewerId);
+      peerConnection = await this.createViewerPeerConnection(viewerId);
+      console.log(`✅ Recreated peer connection for viewer ${viewerId}`);
+    }
+    console.log(`🎬 PeerConnection state for ${viewerId}:`, {
+      connectionState: peerConnection.connectionState,
+      signalingState: peerConnection.signalingState,
+      iceConnectionState: peerConnection.iceConnectionState
+    });
+    // Create the offer
+    console.log(`🎬 Creating offer for viewer ${viewerId}...`);
+    const offer = await peerConnection.createOffer({
+      offerToReceiveAudio: false, // Viewer doesn't send audio
+      offerToReceiveVideo: false, // Viewer doesn't send video
+    });
+    console.log(`🎬 Offer created successfully for viewer ${viewerId}`);
+    console.log(`🎬 Offer SDP length: ${offer.sdp.length}`);
+    // Set local description
+    await peerConnection.setLocalDescription(offer);
+    console.log(`🎬 Local Description set for viewer ${viewerId}`);
+    // Send offer via socket
+    if (this.socket && this.socket.connected && this.streamId) {
+      console.log(`📡 Sending offer to backend for viewer ${viewerId} in stream ${this.streamId}`);
+      this.socket.emit('stream_webrtc_offer', {
+        streamId: this.streamId,
+        viewerId: viewerId,
+        offer: {
+          type: offer.type,
+          sdp: offer.sdp
+        }
+      });
+      console.log(`📡 ✅ Offer sent successfully for viewer ${viewerId}`);
+    } else {
+      const socketError = !this.socket ? "No socket instance" : 
+                         (!this.socket.connected ? "Socket disconnected" : "No streamId");
+      throw new Error(`Cannot send offer: ${socketError}`);
+    }
+  } catch (error) {
+    console.error(`❌ Error in createOfferForViewer for viewer ${viewerId}:`, error);
+    console.error(`❌ Error stack:`, error.stack);
+    // Try to clean up the failed connection
+    if (viewerId) {
+      this.cleanupViewerConnection(viewerId);
+    }
+    this.triggerCallback('onError', { 
+      type: 'offer_failed', 
+      message: `Offer creation failed for ${viewerId}: ${error.message}`,
+      viewerId: viewerId,
+      error: error
+    });
   }
+}
   // Handle stream offer (viewer) - FIXED VERSION
   async handleStreamOffer(data) {
     try {
       console.log('📥 🎥 Handling stream offer from broadcaster:', data);
-      
       // Extract connection ID
       const connectionId = data.connectionId || `${this.streamId}_${this.socket.id}`;
-      
       // Check if we've already processed this offer
       if (this.offerProcessed.has(connectionId)) {
         console.log('⚠️ Offer already processed, skipping:', connectionId);
         return;
       }
-      
       // Check if we're already processing an offer
       if (this.processingOffer) {
         console.log('⚠️ Already processing an offer, skipping');
         return;
       }
-      
       // Check if peer connection is already in stable state with a remote description
       if (this.broadcasterConnection && 
           this.broadcasterConnection.signalingState === 'stable' &&
@@ -822,11 +957,9 @@ async startBroadcasting(streamId) {
         console.log('⚠️ Connection already established, ignoring duplicate offer');
         return;
       }
-      
       // Mark as processing
       this.processingOffer = true;
       this.currentOfferConnectionId = connectionId;
-      
       try {
         // Create broadcaster connection if it doesn't exist
         if (!this.broadcasterConnection) {
@@ -834,13 +967,11 @@ async startBroadcasting(streamId) {
           this.broadcasterConnection = await this.createBroadcasterPeerConnection();
           console.log('✅ Broadcaster peer connection created');
         }
-        
         // Set remote description (the offer)
         console.log('📝 Setting remote description (offer)...');
         const offerDescription = new RTCSessionDescription(data.offer);
         await this.broadcasterConnection.setRemoteDescription(offerDescription);
         console.log('✅ Remote description set successfully');
-        
         // Create answer
         console.log('📝 Creating answer...');
         const answer = await this.broadcasterConnection.createAnswer({
@@ -848,12 +979,10 @@ async startBroadcasting(streamId) {
           offerToReceiveVideo: true
         });
         console.log('✅ Answer created successfully');
-        
         // Set local description (the answer)
         console.log('📝 Setting local description (answer)...');
         await this.broadcasterConnection.setLocalDescription(answer);
         console.log('✅ Local description set successfully');
-        
         // Send answer back to broadcaster
         console.log('📤 Sending answer to broadcaster...');
         const answerData = {
@@ -863,25 +992,20 @@ async startBroadcasting(streamId) {
         };
         this.socket.emit('stream_webrtc_answer', answerData);
         console.log('✅ Answer sent to broadcaster');
-        
         // Mark this offer as processed
         this.offerProcessed.add(connectionId);
-        
         // Update state
         this.triggerCallback('onStreamStateChange', 'connecting', {
           streamId: this.streamId,
           message: 'WebRTC connection establishing...'
         });
-        
       } finally {
         // Reset processing flag
         this.processingOffer = false;
       }
-      
     } catch (error) {
       console.error('❌ Failed to handle stream offer:', error);
       this.processingOffer = false;
-      
       // Only trigger error if this is the first attempt
       if (!this.offerProcessed.has(this.currentOfferConnectionId)) {
         this.triggerCallback('onError', {
@@ -932,149 +1056,213 @@ async startBroadcasting(streamId) {
   }
   // Create peer connection for viewer (broadcaster side) - FIXED VERSION
   // In EnhancedGlobalWebRTCService.js - Add this to ensure broadcaster has video
-async createViewerPeerConnection(viewerId) {
-  try {
-    console.log(`🔗 Creating peer connection for viewer ${viewerId}...`);
-    const peerConnection = new RTCPeerConnection(this.rtcConfiguration);
-    // Add bandwidth optimization for poor networks
-    const transceivers = peerConnection.getTransceivers ? peerConnection.getTransceivers() : [];
-    transceivers.forEach(transceiver => {
-      const params = transceiver.sender.getParameters();
-      if (!params.encodings) {
-        params.encodings = [{}];
-      }
-      // Set lower bitrate for poor network conditions
-      params.encodings[0].maxBitrate = 100000; // 500kbps for video
-      if (transceiver.sender.track && transceiver.sender.track.kind === 'audio') {
-        params.encodings[0].maxBitrate = 32000; // 32kbps for audio
-      }
-      transceiver.sender.setParameters(params);
-    });
-    // Check if local stream has video before adding
-    if (this.localStream) {
-      const videoTracks = this.localStream.getVideoTracks();
-      const audioTracks = this.localStream.getAudioTracks();
-      console.log(`📹 Local stream has ${videoTracks.length} video tracks`);
-      console.log(`🎵 Local stream has ${audioTracks.length} audio tracks`);
-      if (videoTracks.length === 0) {
-        console.error('❌ Broadcaster has no video tracks!');
-        // Still add the stream even without video
-      }
-      // Add stream
-      if (typeof peerConnection.addStream === 'function') {
-        peerConnection.addStream(this.localStream);
-      } else if (typeof peerConnection.addTrack === 'function') {
-        this.localStream.getTracks().forEach(track => {
-          peerConnection.addTrack(track, this.localStream);
-        });
-      }
-    }
-    // Rest of the connection setup...
-    return peerConnection;
-  } catch (error) {
-    console.error(`❌ Failed to create viewer peer connection:`, error);
-    throw error;
-  }
-}
   // Create peer connection for broadcaster (viewer side) - FIXED VERSION
+  async createViewerPeerConnection(viewerId) {
+    try {
+      console.log(`🔗 Creating peer connection for viewer ${viewerId}...`);
+      const peerConnection = new RTCPeerConnection(this.rtcConfiguration);
+      // CRITICAL FIX: Store the peer connection in the map immediately!
+      this.viewerConnections.set(viewerId, peerConnection);
+      console.log(`💾 Stored peer connection for viewer ${viewerId} in viewerConnections map`);
+      // Setup ICE candidate handler for this specific viewer
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log(`🧊 Sending ICE candidate to viewer ${viewerId}`);
+          this.socket.emit('stream_webrtc_ice_candidate', {
+            streamId: this.streamId,
+            candidate: event.candidate,
+            from: 'broadcaster',
+            viewerId: viewerId
+          });
+        } else {
+          console.log(`🧊 ICE gathering complete for viewer ${viewerId}`);
+        }
+      };
+      // Connection state monitoring
+      peerConnection.onconnectionstatechange = () => {
+        const state = peerConnection.connectionState;
+        console.log(`🔗 Viewer ${viewerId} connection state: ${state}`);
+        if (state === 'failed' || state === 'closed') {
+          console.log(`❌ Connection to viewer ${viewerId} ${state}`);
+          this.cleanupViewerConnection(viewerId);
+        } else if (state === 'connected') {
+          console.log(`✅ Connected to viewer ${viewerId}`);
+          // Store viewer data
+          this.connectedViewers.set(viewerId, {
+            userId: viewerId,
+            connectionState: 'connected',
+            connectedAt: new Date()
+          });
+        }
+      };
+      // ICE connection state monitoring  
+      peerConnection.oniceconnectionstatechange = () => {
+        const iceState = peerConnection.iceConnectionState;
+        console.log(`🧊 Viewer ${viewerId} ICE state: ${iceState}`);
+        if (iceState === 'failed') {
+          console.log(`❌ ICE connection failed for viewer ${viewerId}`);
+          // Try to restart ICE
+          if (peerConnection.restartIce) {
+            console.log(`🔄 Attempting ICE restart for viewer ${viewerId}`);
+            peerConnection.restartIce();
+          }
+        }
+      };
+      // Add local stream to peer connection
+      if (this.localStream && this.localStream.active) {
+        const videoTracks = this.localStream.getVideoTracks();
+        const audioTracks = this.localStream.getAudioTracks();
+        console.log(`📹 Adding stream to viewer ${viewerId} connection:`, {
+          video: videoTracks.length,
+          audio: audioTracks.length,
+          streamId: this.localStream.id
+        });
+        // Check for video tracks
+        if (videoTracks.length === 0) {
+          console.warn(`⚠️ No video tracks available for viewer ${viewerId}!`);
+        }
+        // Add stream using appropriate method
+        if (typeof peerConnection.addStream === 'function') {
+          peerConnection.addStream(this.localStream);
+          console.log(`✅ Stream added via addStream for viewer ${viewerId}`);
+        } else if (typeof peerConnection.addTrack === 'function') {
+          this.localStream.getTracks().forEach(track => {
+            peerConnection.addTrack(track, this.localStream);
+            console.log(`✅ ${track.kind} track added via addTrack for viewer ${viewerId}`);
+          });
+        } else {
+          throw new Error('No suitable method to add stream to peer connection');
+        }
+        // Apply bandwidth optimization for poor networks
+        if (peerConnection.getSenders) {
+          const senders = peerConnection.getSenders();
+          senders.forEach(sender => {
+            if (sender.track) {
+              const params = sender.getParameters();
+              if (!params.encodings) {
+                params.encodings = [{}];
+              }
+              // Adaptive bitrate based on track type
+              if (sender.track.kind === 'video') {
+                params.encodings[0].maxBitrate = 500000; // 500kbps for video
+                params.encodings[0].maxFramerate = 30;
+              } else if (sender.track.kind === 'audio') {
+                params.encodings[0].maxBitrate = 64000; // 64kbps for audio  
+              }
+              sender.setParameters(params).catch(err => {
+                console.warn(`⚠️ Could not set parameters for ${sender.track.kind}:`, err);
+              });
+            }
+          });
+        }
+      } else {
+        console.error(`❌ No local stream available for viewer ${viewerId}!`);
+        throw new Error('Broadcaster has no active stream');
+      }
+      console.log(`✅ Peer connection created and configured for viewer ${viewerId}`);
+      console.log(`📊 Current viewerConnections:`, Array.from(this.viewerConnections.keys()));
+      return peerConnection;
+    } catch (error) {
+      console.error(`❌ Failed to create viewer peer connection for ${viewerId}:`, error);
+      // Clean up on failure
+      this.cleanupViewerConnection(viewerId);
+      throw error;
+    }
+  }
+
+  // ADDED METHOD: Create peer connection for broadcaster (viewer side)
   async createBroadcasterPeerConnection() {
     try {
-      console.log('🔗 Creating broadcaster peer connection...');
+      console.log('🔗 Creating broadcaster peer connection (viewer side)...');
+
       const peerConnection = new RTCPeerConnection(this.rtcConfiguration);
-      console.log('✅ RTCPeerConnection created with config:', this.rtcConfiguration);
-      // Setup ICE candidate handler - viewer side
+
+      // Setup ICE candidate handler
       peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
           console.log('🧊 Sending ICE candidate to broadcaster');
           this.socket.emit('stream_webrtc_ice_candidate', {
             streamId: this.streamId,
             candidate: event.candidate,
-            from: 'viewer'
-            // Don't send connectionId, let backend determine it
+            from: 'viewer',
+            connectionId: this.currentOfferConnectionId || `${this.streamId}_${this.socket.id}`
           });
         } else {
           console.log('🧊 ICE gathering complete for broadcaster connection');
         }
       };
-      // Handle remote stream (THIS IS CRITICAL FOR VIDEO)
-      peerConnection.ontrack = (event) => {
-        console.log('📺 🎉 ✅ REMOTE TRACK RECEIVED from broadcaster!', event);
-        console.log('📺 Event streams:', event.streams.length);
-        console.log('📺 Event track kind:', event.track.kind);
-        console.log('📺 Event track state:', event.track.readyState);
-        if (event.streams && event.streams[0]) {
-          const remoteStream = event.streams[0];
-          console.log('📺 Setting remote stream:', remoteStream.id);
-          console.log('📺 Remote stream tracks:', remoteStream.getTracks().length);
-          console.log('📺 Remote stream active:', remoteStream.active);
-          this.remoteStream = remoteStream;
-          // Immediately trigger the callback
-          this.triggerCallback('onRemoteStream', this.remoteStream);
-          this.triggerCallback('onStreamStateChange', 'video_connected', {
-            streamId: this.streamId,
-            remoteStream: this.remoteStream,
-            message: 'Video stream connected successfully!'
-          });
-          console.log('✅ Remote stream callbacks triggered successfully');
-        } else {
-          console.warn('⚠️ No streams in track event');
-        }
-      };
-      // ALSO handle onaddstream for compatibility
-      peerConnection.onaddstream = (event) => {
-        console.log('📺 🎉 ✅ REMOTE STREAM RECEIVED via onaddstream!', event);
-        if (event.stream && !this.remoteStream) {
-          console.log('📺 Setting remote stream via addstream:', event.stream.id);
-          this.remoteStream = event.stream;
-          this.triggerCallback('onRemoteStream', this.remoteStream);
-          this.triggerCallback('onStreamStateChange', 'video_connected', {
-            streamId: this.streamId,
-            remoteStream: this.remoteStream
-          });
-        }
-      };
+
       // Connection state monitoring
       peerConnection.onconnectionstatechange = () => {
         const state = peerConnection.connectionState;
-        console.log('🔗 Broadcaster connection state changed to:', state);
+        console.log('🔗 Broadcaster connection state:', state);
+
         if (state === 'connected') {
-          console.log('✅ ✅ Connected to broadcaster successfully!');
+          console.log('✅ Connected to broadcaster');
           this.triggerCallback('onStreamStateChange', 'connected', {
             streamId: this.streamId,
-            connectionState: state
+            message: 'Connected to broadcaster'
           });
-        } else if (state === 'failed') {
-          console.log('❌ Connection failed to broadcaster');
+        } else if (state === 'failed' || state === 'closed') {
+          console.log(`❌ Broadcaster connection ${state}`);
           this.triggerCallback('onError', {
-            type: 'connection_failed',
-            message: 'Failed to connect to broadcaster'
+            type: 'broadcaster_connection_failed',
+            message: `Connection to broadcaster ${state}`
           });
-        } else if (state === 'disconnected') {
-          console.log('💔 Disconnected from broadcaster');
-          this.triggerCallback('onStreamStateChange', 'disconnected', { streamId: this.streamId });
         }
       };
+
       // ICE connection state monitoring
       peerConnection.oniceconnectionstatechange = () => {
         const iceState = peerConnection.iceConnectionState;
-        console.log('🧊 ICE connection state changed to:', iceState);
+        console.log('🧊 Broadcaster ICE state:', iceState);
+
         if (iceState === 'connected' || iceState === 'completed') {
           console.log('✅ ICE connection established with broadcaster');
         } else if (iceState === 'failed') {
-          console.log('❌ ICE connection failed');
-          this.triggerCallback('onError', {
-            type: 'ice_connection_failed',
-            message: 'ICE connection to broadcaster failed'
+          console.log('❌ ICE connection failed, attempting restart...');
+          if (peerConnection.restartIce) {
+            peerConnection.restartIce();
+          }
+        }
+      };
+
+      // Handle incoming streams from broadcaster
+      peerConnection.onaddstream = (event) => {
+        console.log('📺 🎉 REMOTE STREAM RECEIVED from broadcaster via onaddstream!');
+        if (event.stream) {
+          this.remoteStream = event.stream;
+          this.triggerCallback('onRemoteStream', event.stream);
+          this.triggerCallback('onStreamStateChange', 'video_connected', {
+            streamId: this.streamId,
+            message: 'Video stream connected'
           });
         }
       };
-      console.log('✅ Broadcaster peer connection setup complete');
+
+      // Handle incoming tracks from broadcaster (fallback for newer browsers)
+      peerConnection.ontrack = (event) => {
+        console.log('📺 🎉 REMOTE TRACK RECEIVED from broadcaster via ontrack!');
+        if (event.streams && event.streams[0] && !this.remoteStream) {
+          this.remoteStream = event.streams[0];
+          this.triggerCallback('onRemoteStream', event.streams[0]);
+          this.triggerCallback('onStreamStateChange', 'video_connected', {
+            streamId: this.streamId,
+            message: 'Video stream connected'
+          });
+        }
+      };
+
+      console.log('✅ Broadcaster peer connection created successfully');
       return peerConnection;
+
     } catch (error) {
       console.error('❌ Failed to create broadcaster peer connection:', error);
       throw error;
     }
   }
+
+
   // Send chat message
   sendChatMessage(message) {
     try {
@@ -1785,12 +1973,10 @@ async createViewerPeerConnection(viewerId) {
   }
   cleanupStreaming() {
     console.log('🧹 Cleaning up streaming...');
-    
     // Clear offer tracking
     this.offerProcessed.clear();
     this.processingOffer = false;
     this.currentOfferConnectionId = null;
-    
     // Close all viewer connections
     this.viewerConnections.forEach((connection, viewerId) => {
       try {

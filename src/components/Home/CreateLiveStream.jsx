@@ -1,4 +1,4 @@
-// src/components/CreateLiveStream.jsx - FULL RESPONSIVE VERSION
+// src/components/CreateLiveStream.jsx - FULL UPDATED VERSION WITH VIDEO FIXES
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
@@ -54,6 +54,8 @@ const CreateLiveStream = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [checkingStreams, setCheckingStreams] = useState(true);
   const [endingAll, setEndingAll] = useState(false);
+  const [videoEnabled, setVideoEnabled] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(false);
 
   const displayError = apiError || webRTCError;
   const hasActiveStreams = useMemo(() => currentStreams.length > 0, [currentStreams]);
@@ -62,21 +64,27 @@ const CreateLiveStream = ({ navigation }) => {
   useEffect(() => {
     const initializeService = async () => {
       try {
-      // CRITICAL: Check socket connection first
+        // CRITICAL: Check socket connection first
         if (!socket || !isConnected) {
           setWebRTCError('Connecting to server...');
           return;
         }
+        
+        console.log('🚀 Initializing WebRTC service with external socket');
         enhancedGlobalWebRTCService.setExternalSocket(socket);
         await enhancedGlobalWebRTCService.initialize(token);
+        
         enhancedGlobalWebRTCService.setCallbacks({
           onLocalStream: handleLocalStream,
           onStreamStateChange: handleStreamStateChange,
           onError: handleWebRTCError,
           onViewerCount: handleViewerCount,
         });
+        
         setWebRTCError('');
+        console.log('✅ WebRTC service initialized successfully');
       } catch (error) {
+        console.error('❌ Service initialization failed:', error);
         setWebRTCError(`Service initialization failed: ${error.message}`);
       }
     };
@@ -88,11 +96,22 @@ const CreateLiveStream = ({ navigation }) => {
 
   // ============ WEBRTC CALLBACKS ============
   const handleLocalStream = (stream) => {
+    console.log('📹 Local stream received in component');
     setLocalStream(stream);
+    
+    // Check stream tracks
+    if (stream) {
+      const videoTracks = stream.getVideoTracks();
+      const audioTracks = stream.getAudioTracks();
+      setVideoEnabled(videoTracks.length > 0 && videoTracks[0].enabled);
+      setAudioEnabled(audioTracks.length > 0 && audioTracks[0].enabled);
+    }
+    
     setWebRTCError('');
   };
 
   const handleStreamStateChange = (state, data) => {
+    console.log('🔄 Stream state changed:', state, data);
     switch (state) {
       case 'created':
         setStreamStatus('WAITING');
@@ -112,15 +131,19 @@ const CreateLiveStream = ({ navigation }) => {
         setStreamId(null);
         setLocalStream(null);
         setConnectedViewers(new Set());
+        setVideoEnabled(false);
+        setAudioEnabled(false);
         break;
     }
   };
 
   const handleWebRTCError = (errorData) => {
+    console.error('❌ WebRTC error:', errorData);
     setWebRTCError(errorData.message || 'WebRTC error occurred');
   };
 
   const handleViewerCount = (data) => {
+    console.log('👥 Viewer count update:', data);
     setConnectedViewers(new Set(Array.from({ length: data.count || 0 }, (_, i) => `viewer_${i}`)));
   };
 
@@ -133,30 +156,63 @@ const CreateLiveStream = ({ navigation }) => {
     }
   }, [isConnected]);
 
-  // ============ VIEWER JOIN HANDLING ============
+  // ============ VIEWER JOIN HANDLING WITH VIDEO VERIFICATION ============
   useEffect(() => {
     if (socket && isConnected && streamStatus === 'LIVE' && streamId) {
-      const handleViewerJoin = (data) => {
-        const { streamId: eventStreamId, currentViewerCount } = data;
+      const handleViewerJoin = async (data) => {
+        const { streamId: eventStreamId, viewer, currentViewerCount } = data;
+        
         if (eventStreamId === streamId) {
-           setConnectedViewers(new Set(Array.from({ length: currentViewerCount || 0 }, (_, i) => `viewer_${i}`)));
-          // Verify offer creation after a delay (optional check)
-          setTimeout(() => {
-            const connectionsAfter = enhancedGlobalWebRTCService.viewerConnections.size;
-            if (connectionsAfter === 0) {
-              setWebRTCError('Failed to establish viewer connection - WebRTC service issue');
-            } else {
-              setWebRTCError('');
-            }
-          }, 2000);
+          console.log('👁 New viewer joined:', viewer);
+          
+          // Update viewer count
+          setConnectedViewers(new Set(Array.from({ length: currentViewerCount || 0 }, (_, i) => `viewer_${i}`)));
+          
+          // Verify local stream has video
+          if (localStream) {
+            const videoTracks = localStream.getVideoTracks();
+            const audioTracks = localStream.getAudioTracks();
+            
+            console.log('📡 Broadcaster stream status:', {
+              hasVideo: videoTracks.length > 0,
+              hasAudio: audioTracks.length > 0,
+              videoEnabled: videoTracks[0]?.enabled,
+              audioEnabled: audioTracks[0]?.enabled
+            });
+            
+            // Ensure tracks are enabled
+            videoTracks.forEach(track => {
+              track.enabled = true;
+              console.log('📹 Ensuring video track enabled:', track.id);
+            });
+            audioTracks.forEach(track => {
+              track.enabled = true;
+              console.log('🎵 Ensuring audio track enabled:', track.id);
+            });
+            
+            // Update state
+            setVideoEnabled(videoTracks.length > 0 && videoTracks[0].enabled);
+            setAudioEnabled(audioTracks.length > 0 && audioTracks[0].enabled);
+          }
+          
+          // Verify WebRTC service state
+          const serviceState = enhancedGlobalWebRTCService.getStreamState();
+          console.log('🔍 WebRTC service state:', serviceState);
+          
+          if (!serviceState.hasLocalStream) {
+            console.error('❌ WebRTC service missing local stream!');
+            enhancedGlobalWebRTCService.localStream = localStream;
+          }
         }
       };
+      
       socket.on('stream_viewer_joined', handleViewerJoin);
+      
       return () => {
         socket.off('stream_viewer_joined', handleViewerJoin);
       };
     }
-  }, [socket, isConnected, streamStatus, streamId]);
+  }, [socket, isConnected, streamStatus, streamId, localStream]);
 
   useEffect(() => {
     fetchCurrentStreams("component_mount_or_token_change");
@@ -258,7 +314,9 @@ const CreateLiveStream = ({ navigation }) => {
         setStreamStatus('IDLE');
         setStreamId(null);
         setLocalStream(null);
-        setDescription(''); // Reset description
+        setDescription('');
+        setVideoEnabled(false);
+        setAudioEnabled(false);
       }
       Alert.alert('Streams Ended', 'All your active streams have been ended. You can now create a new one.');
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -271,7 +329,7 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  // Create stream using backend API - FIXED TITLE, REMOVED VISIBILITY/CATEGORY UI
+  // Create stream using backend API
   const createStream = async () => {
     if (hasActiveStreams) {
       Alert.alert(
@@ -291,12 +349,11 @@ const CreateLiveStream = ({ navigation }) => {
     setStreamStatus('CREATING');
     setApiError('');
     try {
-      // FIXED: Hardcode title, visibility, and category
       const requestBody = {
         title: "Live", // Fixed title
         description: description.trim(),
-        visibility: 'PUBLIC', // Hardcoded
-        category: 'OTHER',    // Hardcoded
+        visibility: 'PUBLIC',
+        category: 'OTHER',
         settings: {
           allowChat: settings.allowChat,
           allowReactions: settings.allowReactions,
@@ -348,62 +405,130 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  // Initialize camera
- // In CreateLiveStream.jsx - Add audio verification after getting local stream
-const initializeCamera = async () => {
-  try {
-    const stream = await enhancedGlobalWebRTCService.getLocalStream(true);
-    if (stream) {
-      // ✅ ADD AUDIO VERIFICATION
-      const audioTracks = stream.getAudioTracks();
-      const videoTracks = stream.getVideoTracks();
+  // ✅ ENHANCED CAMERA INITIALIZATION WITH VIDEO VERIFICATION
+  const initializeCamera = async () => {
+    try {
+      console.log('📹 Starting camera initialization...');
       
-      console.log('🎵 Audio tracks:', audioTracks.length);
-      console.log('📹 Video tracks:', videoTracks.length);
+      // Ensure we request both audio and video explicitly
+      const mediaConstraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: {
+          facingMode: 'user',
+          width: { min: 320, ideal: 640, max: 1280 },
+          height: { min: 240, ideal: 480, max: 720 },
+          frameRate: { min: 15, ideal: 24, max: 30 }
+        }
+      };
       
-      if (audioTracks.length === 0) {
-        console.warn('⚠️ No audio tracks found!');
-        Alert.alert('Audio Warning', 'No microphone detected. Audio will not be available.');
-      } else {
-        console.log('✅ Audio track details:', {
-          enabled: audioTracks[0].enabled,
-          muted: audioTracks[0].muted,
-          readyState: audioTracks[0].readyState,
-          settings: audioTracks[0].getSettings?.()
+      // Get stream with explicit constraints
+      const stream = await enhancedGlobalWebRTCService.getUserMedia(mediaConstraints);
+      
+      if (stream) {
+        const audioTracks = stream.getAudioTracks();
+        const videoTracks = stream.getVideoTracks();
+        
+        console.log('🎵 Audio tracks:', audioTracks.length);
+        console.log('📹 Video tracks:', videoTracks.length);
+        
+        // ✅ CRITICAL: Verify and enable video tracks
+        if (videoTracks.length === 0) {
+          throw new Error('No video tracks available - camera access denied or not available');
+        }
+        
+        // Enable all tracks explicitly
+        videoTracks.forEach((track, index) => {
+          track.enabled = true;
+          console.log(`📹 Video track ${index}:`, {
+            id: track.id,
+            enabled: track.enabled,
+            muted: track.muted,
+            readyState: track.readyState,
+            label: track.label
+          });
         });
+        
+        if (audioTracks.length === 0) {
+          console.warn('⚠️ No audio tracks found!');
+          Alert.alert('Audio Warning', 'No microphone detected. Audio will not be available.');
+        } else {
+          audioTracks.forEach((track, index) => {
+            track.enabled = true;
+            console.log(`🎵 Audio track ${index}:`, {
+              id: track.id,
+              enabled: track.enabled,
+              muted: track.muted,
+              readyState: track.readyState
+            });
+          });
+        }
+        
+        // ✅ CRITICAL: Set the local stream in the WebRTC service
+        enhancedGlobalWebRTCService.localStream = stream;
+        
+        setLocalStream(stream);
+        setVideoEnabled(videoTracks.length > 0 && videoTracks[0].enabled);
+        setAudioEnabled(audioTracks.length > 0 && audioTracks[0].enabled);
+        setStreamStatus('WAITING');
+        
+        console.log('✅ Camera initialized successfully with video and audio');
+        return true;
+      } else {
+        throw new Error('Failed to get local stream');
       }
-      
-      setLocalStream(stream);
-      setStreamStatus('WAITING');
-      return true;
-    } else {
-      throw new Error('Failed to get local stream');
+    } catch (error) {
+      console.error('❌ Camera/Audio initialization error:', error);
+      setStreamStatus('ERROR');
+      setWebRTCError(`Camera initialization failed: ${error.message}`);
+      Alert.alert('Media Error', `Failed to access camera/microphone: ${error.message}`);
+      return false;
     }
-  } catch (error) {
-    console.error('❌ Camera/Audio initialization error:', error);
-    setStreamStatus('ERROR');
-    setWebRTCError('Failed to initialize camera/microphone. Please check permissions.');
-    Alert.alert('Media Error', 'Failed to access camera/microphone. Please check permissions and try again.');
-    return false;
-  }
-};
+  };
 
-  // FIXED: Start stream properly
+  // ✅ ENHANCED START STREAM WITH VIDEO VERIFICATION
   const startStream = async () => {
     if (streamStatus !== 'WAITING' || !streamId || !token) {
       Alert.alert('Error', 'Stream is not ready to start.');
       return;
     }
+    
     if (!localStream) {
       Alert.alert('Error', 'Camera is not ready. Please wait or restart the stream.');
       return;
     }
+    
+    // ✅ CRITICAL: Verify video tracks before starting
+    const videoTracks = localStream.getVideoTracks();
+    const audioTracks = localStream.getAudioTracks();
+    
+    if (videoTracks.length === 0) {
+      Alert.alert('Error', 'No video available. Please check camera permissions.');
+      return;
+    }
+    
+    console.log('📡 Starting stream with:', {
+      videoTracks: videoTracks.length,
+      audioTracks: audioTracks.length,
+      videoEnabled: videoTracks[0]?.enabled,
+      audioEnabled: audioTracks[0]?.enabled
+    });
+    
     if (!socket || !isConnected) {
       Alert.alert('Error', 'Socket connection not ready. Please check your internet.');
       return;
     }
+    
     setStreamStatus('STARTING');
+    
     try {
+      // First, ensure the local stream is set in the service
+      enhancedGlobalWebRTCService.localStream = localStream;
+      
+      // Start the broadcast via API
       const response = await fetch(`${BASE_URL}/api/v1/live/${streamId}/start`, {
         method: 'POST',
         headers: {
@@ -411,37 +536,43 @@ const initializeCamera = async () => {
           'Content-Type': 'application/json',
         },
       });
+      
       if (!response.ok) {
         const errorData = await response.text();
         throw new Error(`Failed to start stream: ${response.status} ${response.statusText}`);
       }
+      
       await response.json();
-
+      
       // Set proper state in WebRTC service
       enhancedGlobalWebRTCService.streamId = streamId;
       enhancedGlobalWebRTCService.streamRole = 'broadcaster';
       enhancedGlobalWebRTCService.streamState = 'broadcasting';
       enhancedGlobalWebRTCService.isBroadcasting = true;
-      enhancedGlobalWebRTCService.localStream = localStream;
-
-      // Emit a custom event to notify backend that broadcaster is ready
+      
+      // ✅ CRITICAL: Emit broadcaster_ready with video confirmation
       socket.emit('broadcaster_ready', {
         streamId: streamId,
         hasLocalStream: true,
+        hasVideo: videoTracks.length > 0,
+        hasAudio: audioTracks.length > 0,
         settings: settings
       });
-
+      
       setStreamStatus('LIVE');
       setIsWebRTCConnected(true);
-      Alert.alert('Broadcasting', 'Your stream is now live and ready for viewers!');
-
-      // Verify final state (optional check)
-      setTimeout(() => {
-        const finalState = enhancedGlobalWebRTCService.getStreamState();
-        if (finalState.streamRole !== 'broadcaster' || !finalState.isBroadcasting) {
-          setWebRTCError('Broadcaster state synchronization issue');
-        }
-      }, 1000);
+      Alert.alert('Broadcasting', 'Your stream is now live with video and audio!');
+      
+      // Log stream details for debugging
+      console.log('✅ Stream started successfully:', {
+        streamId,
+        videoTracks: videoTracks.length,
+        audioTracks: audioTracks.length,
+        videoEnabled: videoTracks[0]?.enabled,
+        audioEnabled: audioTracks[0]?.enabled,
+        serviceState: enhancedGlobalWebRTCService.getStreamState()
+      });
+      
     } catch (err) {
       setStreamStatus('WAITING');
       setWebRTCError(err.message);
@@ -477,7 +608,6 @@ const initializeCamera = async () => {
       }
       await response.json();
 
-      // FIXED: Only emit stream_end if this is our current stream and we're the broadcaster
       if (id === streamId && enhancedGlobalWebRTCService.streamRole === 'broadcaster') {
         socket.emit('stream_end', { streamId: id });
       }
@@ -488,7 +618,9 @@ const initializeCamera = async () => {
         setStreamStatus('IDLE');
         setStreamId(null);
         setLocalStream(null);
-        setDescription(''); // Reset description
+        setDescription('');
+        setVideoEnabled(false);
+        setAudioEnabled(false);
         Alert.alert('Stream Ended', 'Your live stream has finished.');
       } else {
         Alert.alert('Stream Ended', 'The selected live stream has finished.');
@@ -622,9 +754,8 @@ const initializeCamera = async () => {
         )}
       </View>
 
-      {/* Stream Creation Form - Simplified */}
+      {/* Stream Creation Form */}
       <View style={hasActiveStreams ? styles.disabledForm : null}>
-        {/* Description Input - Optional, can be removed if not needed */}
         <View style={styles.formGroup}>
           <Text style={styles.label}>Description (Optional)</Text>
           <TextInput
@@ -632,6 +763,7 @@ const initializeCamera = async () => {
             value={description}
             onChangeText={setDescription}
             placeholder="Add a description..."
+            placeholderTextColor="#666"
             multiline
             editable={!hasActiveStreams && streamStatus === 'IDLE'}
           />
@@ -645,9 +777,15 @@ const initializeCamera = async () => {
               Camera: {localStream ? '✅ Ready' : '❌ Not Ready'}
             </Text>
             <Text style={styles.statusText}>
+              Video: {videoEnabled ? '✅ Enabled' : '❌ Disabled'}
+            </Text>
+            <Text style={styles.statusText}>
+              Audio: {audioEnabled ? '✅ Enabled' : '❌ Disabled'}
+            </Text>
+            <Text style={styles.statusText}>
               Socket: {isConnected ? '✅ Connected' : '❌ Disconnected'}
             </Text>
-            {isWebRTCConnected && <Text style={styles.statusText}>WebRTC: Broadcasting</Text>}
+            {isWebRTCConnected && <Text style={styles.statusText}>WebRTC: ✅ Broadcasting</Text>}
             {connectedViewers.size > 0 && (
               <Text style={styles.statusText}>Connected Viewers: {connectedViewers.size}</Text>
             )}
@@ -729,18 +867,42 @@ const initializeCamera = async () => {
           )}
         </View>
 
+        {/* Enhanced Preview Container */}
         <View style={styles.previewContainer}>
           {localStream ? (
             <>
-              <RTCView streamURL={localStream.toURL()} style={styles.rtcView} objectFit="cover" />
-              <Text style={styles.previewText}>Your Camera Preview</Text>
+              <RTCView 
+                streamURL={localStream.toURL()} 
+                style={styles.rtcView} 
+                objectFit="cover"
+                mirror={true}
+                zOrder={0}
+              />
+              <View style={styles.previewOverlay}>
+                <Text style={styles.previewText}>Your Camera Preview</Text>
+                <View style={styles.streamStats}>
+                  <Text style={styles.statsText}>
+                    📹 {videoEnabled ? '✅' : '❌'}
+                  </Text>
+                  <Text style={styles.statsText}>
+                    🎵 {audioEnabled ? '✅' : '❌'}
+                  </Text>
+                </View>
+              </View>
+              {streamStatus === 'LIVE' && (
+                <View style={styles.liveIndicator}>
+                  <Text style={styles.liveText}>● LIVE</Text>
+                </View>
+              )}
             </>
           ) : (
-            <Text style={styles.previewText}>
-              {streamStatus === 'WAITING' ? 'Initializing Camera...' :
-                streamStatus === 'ERROR' ? 'Camera Error - Tap "Retry Camera"' :
-                  'Preview will appear here'}
-            </Text>
+            <View style={styles.previewPlaceholder}>
+              <Text style={styles.previewText}>
+                {streamStatus === 'WAITING' ? 'Initializing Camera...' :
+                  streamStatus === 'ERROR' ? 'Camera Error - Tap "Retry Camera"' :
+                    'Preview will appear here'}
+              </Text>
+            </View>
           )}
         </View>
       </View>
@@ -883,18 +1045,59 @@ const styles = StyleSheet.create({
     marginTop: isSmallScreen ? 15 : 20,
     borderWidth: 1,
     borderColor: '#333',
+    position: 'relative',
   },
   rtcView: {
     width: '100%',
     height: '100%',
   },
-  previewText: {
+  previewOverlay: {
     position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    padding: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  previewPlaceholder: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  previewText: {
     color: '#fff',
     backgroundColor: 'rgba(0,0,0,0.7)',
     padding: isSmallScreen ? 4 : 5,
     borderRadius: 3,
     fontSize: isSmallScreen ? 12 : 14,
+  },
+  streamStats: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  statsText: {
+    color: '#fff',
+    fontSize: 12,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    padding: 4,
+    borderRadius: 4,
+  },
+  liveIndicator: {
+    position: 'absolute',
+    bottom: 10,
+    left: 10,
+    backgroundColor: 'rgba(255,0,0,0.9)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 4,
+  },
+  liveText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   currentStreamsContainer: {
     marginTop: isSmallScreen ? 8 : 10,
