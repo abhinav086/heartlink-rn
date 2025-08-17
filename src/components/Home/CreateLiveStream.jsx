@@ -1,4 +1,4 @@
-// src/components/CreateLiveStream.jsx - FULL UPDATED VERSION WITH VIDEO FIXES
+// src/components/CreateLiveStream.jsx - FULL UPDATED VERSION WITH FULLSCREEN PREVIEW
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
@@ -56,6 +56,7 @@ const CreateLiveStream = ({ navigation }) => {
   const [endingAll, setEndingAll] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false); // New state for fullscreen mode
 
   const displayError = apiError || webRTCError;
   const hasActiveStreams = useMemo(() => currentStreams.length > 0, [currentStreams]);
@@ -124,6 +125,8 @@ const CreateLiveStream = ({ navigation }) => {
         setIsWebRTCConnected(true);
         enhancedGlobalWebRTCService.streamState = 'broadcasting';
         enhancedGlobalWebRTCService.isBroadcasting = true;
+        // Enter fullscreen when broadcasting starts
+        setIsFullscreen(true);
         break;
       case 'ended':
         setStreamStatus('IDLE');
@@ -133,6 +136,8 @@ const CreateLiveStream = ({ navigation }) => {
         setConnectedViewers(new Set());
         setVideoEnabled(false);
         setAudioEnabled(false);
+        // Exit fullscreen when stream ends
+        setIsFullscreen(false);
         break;
     }
   };
@@ -317,6 +322,8 @@ const CreateLiveStream = ({ navigation }) => {
         setDescription('');
         setVideoEnabled(false);
         setAudioEnabled(false);
+        // Exit fullscreen
+        setIsFullscreen(false);
       }
       Alert.alert('Streams Ended', 'All your active streams have been ended. You can now create a new one.');
       await new Promise(resolve => setTimeout(resolve, 2000));
@@ -621,6 +628,8 @@ const CreateLiveStream = ({ navigation }) => {
         setDescription('');
         setVideoEnabled(false);
         setAudioEnabled(false);
+        // Exit fullscreen
+        setIsFullscreen(false);
         Alert.alert('Stream Ended', 'Your live stream has finished.');
       } else {
         Alert.alert('Stream Ended', 'The selected live stream has finished.');
@@ -680,6 +689,11 @@ const CreateLiveStream = ({ navigation }) => {
     );
   };
 
+  // Function to exit fullscreen mode
+  const exitFullscreen = () => {
+    setIsFullscreen(false);
+  };
+
   if (checkingStreams) {
     return (
       <View style={styles.centeredContainer}>
@@ -690,6 +704,51 @@ const CreateLiveStream = ({ navigation }) => {
   }
 
   const isCreateButtonDisabled = !token || hasActiveStreams || streamStatus !== 'IDLE';
+
+  // Fullscreen preview component
+  if (isFullscreen && localStream) {
+    return (
+      <View style={styles.fullscreenContainer}>
+        <RTCView 
+          streamURL={localStream.toURL()} 
+          style={styles.fullscreenVideo}
+          objectFit="cover"
+          mirror={true}
+          zOrder={0}
+        />
+        
+        {/* Top bar with Live button and viewer count */}
+        <View style={styles.fullscreenTopBar}>
+          <TouchableOpacity 
+            style={styles.liveButton}
+            onPress={() => {}}
+          >
+            <Text style={styles.liveButtonText}>● LIVE</Text>
+          </TouchableOpacity>
+          
+          <Text style={styles.viewerCount}>
+            {connectedViewers.size} {connectedViewers.size === 1 ? 'viewer' : 'viewers'}
+          </Text>
+        </View>
+        
+        {/* End stream button */}
+        <TouchableOpacity 
+          style={styles.fullscreenEndButton}
+          onPress={() => handleEndStream(streamId)}
+        >
+          <Text style={styles.fullscreenEndButtonText}>End Stream</Text>
+        </TouchableOpacity>
+        
+        {/* Exit fullscreen button */}
+        <TouchableOpacity 
+          style={styles.exitFullscreenButton}
+          onPress={exitFullscreen}
+        >
+          <Text style={styles.exitFullscreenText}>×</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -1194,6 +1253,82 @@ const styles = StyleSheet.create({
     backgroundColor: '#555',
     borderColor: '#444',
     opacity: 0.7,
+  },
+  
+  // Fullscreen styles
+  fullscreenContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+    position: 'relative',
+  },
+  fullscreenVideo: {
+    width: '100%',
+    height: '100%',
+  },
+  fullscreenTopBar: {
+    position: 'absolute',
+    top: 40, // Lowered from 0 to 40
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 15,
+    paddingVertical: 10, // Reduced padding
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    zIndex: 10,
+  },
+  liveButton: {
+    backgroundColor: '#cc0000',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 4,
+  },
+  liveButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  viewerCount: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 4,
+  },
+  fullscreenEndButton: {
+    position: 'absolute',
+    top: 40,
+    right: 15,
+    backgroundColor: '#cc0000',
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    borderRadius: 5,
+    zIndex: 10,
+  },
+  fullscreenEndButtonText: {
+    color: '#fff',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  exitFullscreenButton: {
+    position: 'absolute',
+    bottom: 30,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  exitFullscreenText: {
+    color: '#fff',
+    fontSize: 30,
+    fontWeight: 'bold',
   },
 });
 
