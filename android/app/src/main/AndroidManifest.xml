@@ -100,7 +100,7 @@
             </intent-filter>
         </activity>
 
-        <!-- ✅ FIX: tools:replace added -->
+        
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

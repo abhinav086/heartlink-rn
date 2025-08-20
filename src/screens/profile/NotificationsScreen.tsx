@@ -52,7 +52,9 @@ const NotificationsScreen = () => {
         limit: 20,
         ...(typeParam !== 'all' && { type: typeParam })
       });
-
+      
+      console.log('Fetching notifications with params:', params.toString());
+      
       const response = await fetch(
         `https://backendforheartlink.in/api/v1/notifications?${params}`,
         {
@@ -65,10 +67,33 @@ const NotificationsScreen = () => {
       );
 
       const data = await response.json();
+      console.log('API Response:', data);
       
       if (data.statusCode === 200) {
-        // Transform API response to app format
+        // Transform API response to app format with proper null handling
         const transformedData = data.data.notifications.map(item => {
+          // FIXED: Handle null sender case
+          if (!item.sender || !item.sender._id) {
+            console.warn('Found notification with null/invalid sender:', item._id);
+            // Skip notifications with invalid senders or provide default values
+            return {
+              _id: item._id,
+              type: item.type || 'system',
+              user: {
+                _id: 'deleted-user',
+                fullName: 'Deleted User',
+                username: 'deleted',
+                photoUrl: null,
+                isOnline: false
+              },
+              message: item.message || 'This notification is from a deleted user',
+              icon: 'person-remove-outline',
+              color: '#9E9E9E',
+              timeAgo: item.timeAgo || 'Unknown time',
+              isRead: item.isRead || false
+            };
+          }
+          
           // Determine icon and color based on type
           let icon, color;
           switch (item.type) {
@@ -94,28 +119,31 @@ const NotificationsScreen = () => {
             type: item.type,
             user: {
               _id: item.sender._id,
-              fullName: item.sender.fullName,
-              username: item.sender.username,
+              fullName: item.sender.fullName || 'Unknown User',
+              username: item.sender.username || 'unknown',
               photoUrl: item.sender.photoUrl,
-              isOnline: item.sender.isOnline
+              isOnline: item.sender.isOnline || false
             },
-            message: item.message,
+            message: item.message || 'No message',
             icon,
             color,
-            timeAgo: item.timeAgo,
+            timeAgo: item.timeAgo || 'Unknown time',
+            isRead: item.isRead || false,
             // For like notifications, add post preview
-            ...(item.type === 'like' && {
+            ...(item.type === 'like' && item.metadata?.postContent && {
               post: {
                 _id: item.relatedContent?.contentId,
-                content: item.metadata?.postContent || ''
+                content: item.metadata.postContent || ''
               }
             })
           };
-        });
+        }).filter(Boolean); // Filter out any null/undefined items
         
+        console.log('Transformed notifications:', transformedData.length);
         setNotifications(transformedData);
         setPagination(data.data.pagination);
       } else {
+        console.error('API Error:', data.message);
         Alert.alert('Error', data.message || 'Failed to fetch notifications');
       }
     } catch (error) {
@@ -133,10 +161,19 @@ const NotificationsScreen = () => {
   };
 
   const handleUserPress = (userId) => {
+    // Don't navigate if user is deleted
+    if (userId === 'deleted-user') {
+      Alert.alert('User Not Available', 'This user is no longer available.');
+      return;
+    }
     navigation.navigate('UserProfile', { userId });
   };
 
   const handlePostPress = (postId) => {
+    if (!postId) {
+      Alert.alert('Post Not Available', 'This post is no longer available.');
+      return;
+    }
     navigation.navigate('PostDetail', { postId });
   };
 
@@ -286,7 +323,7 @@ const NotificationsScreen = () => {
       {/* Tab Bar */}
       <View style={styles.tabBar}>
         {renderTabButton('all', 'notifications-outline', 'All')}
-        {renderTabButton('impressions', 'eye-outline', 'Views')}
+        {/* {renderTabButton('impressions', 'eye-outline', 'Views')} */}
         {renderTabButton('follows', 'person-add-outline', 'Follows')}
         {renderTabButton('likes', 'heart-outline', 'Likes')}
       </View>

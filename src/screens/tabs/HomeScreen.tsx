@@ -718,6 +718,8 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
         initialNumToRender={5}
         // ADDED: Force re-render when refresh count changes
         extraData={refreshCount}
+        // ADDED: Bottom padding for navbar spacing
+        contentContainerStyle={styles.flatListContent}
       />
     </View>
   );
@@ -727,6 +729,10 @@ const styles = StyleSheet.create({
   container: { 
     flex: 1, 
     backgroundColor: 'black' 
+  },
+  // ADDED: Bottom padding for navbar spacing
+  flatListContent: {
+    paddingBottom: 100, // Adjust this value based on your navbar height
   },
   loadingContainer: {
     justifyContent: 'flex-start',

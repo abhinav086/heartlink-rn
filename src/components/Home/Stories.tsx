@@ -1,5 +1,5 @@
-// AllStories.js (FIXED VERSION with correct endpoints and live stream integration)
-import React, { useState, useEffect } from "react";
+// AllStories.js (FIXED VERSION - No Double Reload)
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { 
   View, 
   ScrollView, 
@@ -24,66 +24,22 @@ const AllStories = () => {
   const [stories, setStories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  
+  // ADDED: Track if component has loaded initially to prevent double calls
+  const hasInitiallyLoaded = useRef(false);
+  const isLoadingRef = useRef(false);
 
-  useEffect(() => {
-    fetchStoriesData();
-
-    // Socket listeners for live stream updates (WebRTC backend)
-    if (socket && isConnected) {
-      const handleStreamWentLive = (streamData) => {
-        console.log('🔴 Live stream went live (socket):', streamData);
-        fetchStoriesData(); // Refresh stories to show new live stream
-      };
-
-      const handleStreamEnded = (streamData) => {
-        console.log('⚫ Live stream ended (socket):', streamData);
-        // Update stories to remove live indicator for the streamer
-        setStories(prevStories =>
-          prevStories.map(story =>
-            story.user?._id === streamData.streamer?._id
-              ? { ...story, isLive: false, liveStream: null }
-              : story
-          )
-        );
-      };
-
-      const handleViewerUpdate = (updateData) => {
-        console.log('👥 Viewer count updated (socket):', updateData);
-        // Update viewer count for the specific live stream
-        setStories(prevStories =>
-          prevStories.map(story =>
-            story.liveStream?.streamId === updateData.streamId
-              ? {
-                  ...story,
-                  liveStream: {
-                    ...story.liveStream,
-                    viewersCount: updateData.count || updateData.viewersCount || updateData.currentViewers || 0
-                  }
-                }
-              : story
-          )
-        );
-      };
-
-      // Register socket listeners
-      socket.on('stream:went_live', handleStreamWentLive);
-      socket.on('stream:ended', handleStreamEnded);
-      socket.on('stream:viewer_count', handleViewerUpdate);
-      socket.on('stream:viewer_update', handleViewerUpdate); // Alternative event name
-
-      // Cleanup listeners on unmount or socket change
-      return () => {
-        socket.off('stream:went_live', handleStreamWentLive);
-        socket.off('stream:ended', handleStreamEnded);
-        socket.off('stream:viewer_count', handleViewerUpdate);
-        socket.off('stream:viewer_update', handleViewerUpdate);
-      };
+  // FIXED: Memoize fetchStoriesData to prevent recreation on every render
+  const fetchStoriesData = useCallback(async () => {
+    // Prevent multiple simultaneous calls
+    if (isLoadingRef.current) {
+      console.log('🚫 fetchStoriesData already in progress, skipping');
+      return;
     }
-  }, [socket, isConnected]);
 
-  const fetchStoriesData = async () => {
     try {
-      setLoading(true);
+      isLoadingRef.current = true;
+      setLoading(!hasInitiallyLoaded.current);
       setRefreshing(false); // Reset refreshing flag regardless of outcome
 
       if (!token) {
@@ -479,20 +435,86 @@ const AllStories = () => {
       });
 
       setStories(sortedStories);
+      hasInitiallyLoaded.current = true;
 
     } catch (error) {
       console.error('Error fetching stories:', error);
-      // Alert.alert(
-      //   'Error Loading Stories',
-      //   'Could not load stories. Please check your connection and try again.',
-      //   [{ text: 'OK' }]
-      // );
       setFallbackStory();
+      hasInitiallyLoaded.current = true;
     } finally {
       setLoading(false);
-      if (refreshing) setRefreshing(false); // Ensure refreshing is turned off
+      if (refreshing) setRefreshing(false);
+      isLoadingRef.current = false;
     }
-  };
+  }, [token, currentUser]); // FIXED: Only depend on token and currentUser
+
+  // FIXED: Separate useEffect for initial load
+  useEffect(() => {
+    if (!hasInitiallyLoaded.current && token && currentUser) {
+      console.log('🚀 Initial stories load');
+      fetchStoriesData();
+    }
+  }, [fetchStoriesData, token, currentUser]);
+
+  // FIXED: Separate useEffect for socket listeners to prevent double loading
+  useEffect(() => {
+    if (socket && isConnected && hasInitiallyLoaded.current) {
+      console.log('🔌 Setting up socket listeners');
+
+      const handleStreamWentLive = (streamData) => {
+        console.log('🔴 Live stream went live (socket):', streamData);
+        // FIXED: Only refresh if we're not already loading
+        if (!isLoadingRef.current) {
+          fetchStoriesData();
+        }
+      };
+
+      const handleStreamEnded = (streamData) => {
+        console.log('⚫ Live stream ended (socket):', streamData);
+        // Update stories to remove live indicator for the streamer
+        setStories(prevStories =>
+          prevStories.map(story =>
+            story.user?._id === streamData.streamer?._id
+              ? { ...story, isLive: false, liveStream: null }
+              : story
+          )
+        );
+      };
+
+      const handleViewerUpdate = (updateData) => {
+        console.log('👥 Viewer count updated (socket):', updateData);
+        // Update viewer count for the specific live stream
+        setStories(prevStories =>
+          prevStories.map(story =>
+            story.liveStream?.streamId === updateData.streamId
+              ? {
+                  ...story,
+                  liveStream: {
+                    ...story.liveStream,
+                    viewersCount: updateData.count || updateData.viewersCount || updateData.currentViewers || 0
+                  }
+                }
+              : story
+          )
+        );
+      };
+
+      // Register socket listeners
+      socket.on('stream:went_live', handleStreamWentLive);
+      socket.on('stream:ended', handleStreamEnded);
+      socket.on('stream:viewer_count', handleViewerUpdate);
+      socket.on('stream:viewer_update', handleViewerUpdate);
+
+      // Cleanup listeners on unmount or socket change
+      return () => {
+        console.log('🔌 Cleaning up socket listeners');
+        socket.off('stream:went_live', handleStreamWentLive);
+        socket.off('stream:ended', handleStreamEnded);
+        socket.off('stream:viewer_count', handleViewerUpdate);
+        socket.off('stream:viewer_update', handleViewerUpdate);
+      };
+    }
+  }, [socket, isConnected, fetchStoriesData]); // FIXED: Only run when socket changes and after initial load
 
   // Enhanced profile pic extraction using the same fields as UpdateProfileScreen
   const getSafeProfilePic = (userData) => {
@@ -586,7 +608,7 @@ const AllStories = () => {
     return result;
   };
 
-  const setFallbackStory = () => {
+  const setFallbackStory = useCallback(() => {
     const fallbackUser = currentUser || { 
       fullName: 'You', 
       username: 'You', 
@@ -609,7 +631,7 @@ const AllStories = () => {
       latestStoryTimestamp: null,
       liveStreamStartTime: null,
     }]);
-  };
+  }, [currentUser]);
 
   // --- UPDATED handleStoryPress ---
   const handleStoryPress = (story) => {
@@ -693,10 +715,13 @@ const AllStories = () => {
     }
   };
 
-  const onRefresh = () => {
+  // FIXED: Memoize onRefresh to prevent recreation
+  const onRefresh = useCallback(() => {
+    console.log('🔄 Manual refresh triggered');
     setRefreshing(true);
+    hasInitiallyLoaded.current = false; // Reset to allow refresh
     fetchStoriesData();
-  };
+  }, [fetchStoriesData]);
 
   const getInitials = (name) => {
     if (!name || typeof name !== 'string' || name === 'Unknown User') return '?';
@@ -837,7 +862,7 @@ const AllStories = () => {
     );
   };
 
-  if (loading) {
+  if (loading && !hasInitiallyLoaded.current) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="small" color="#ed167e" />
