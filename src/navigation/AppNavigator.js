@@ -536,6 +536,7 @@ const AppNavigator = ({ initialRouteName }) => {
         options={callScreenOptions}
       />
       
+      
       {/* <Stack.Screen 
         name="CallPage" 
         component={CallPage}

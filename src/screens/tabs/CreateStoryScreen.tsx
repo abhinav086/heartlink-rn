@@ -1,11 +1,11 @@
-// screens/tabs/CreateStoryScreen.js - UPDATED TO NAVIGATE TO NEW DEDICATED LIVE STREAM SCREEN
-import React, { useState, useEffect } from 'react';
+// screens/tabs/CreateStoryScreen.js
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
-  Image,
+  ImageBackground,
   Alert,
   Dimensions,
   StatusBar,
@@ -13,116 +13,137 @@ import {
   ActivityIndicator,
   Platform,
   PermissionsAndroid,
+  Animated,
+  Easing,
 } from 'react-native';
-import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
-import { useNavigation } from '@react-navigation/native'; // We will use this for navigation
+import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BASE_URL from '../../config/config';
-// --- REMOVED OLD IMPORT ---
-// import { LiveStreamCreator } from '../../components/LiveStreamManager';
 import Icon from 'react-native-vector-icons/Ionicons';
 import MaterialIcon from 'react-native-vector-icons/MaterialIcons';
 import Feather from 'react-native-vector-icons/Feather';
+import { launchImageLibrary } from 'react-native-image-picker';
+import {
+  Camera,
+  useCameraDevice,
+  useCameraPermission,
+  useCodeScanner,
+} from 'react-native-vision-camera';
+import { useFocusEffect } from '@react-navigation/native';
 
 const { width, height } = Dimensions.get('window');
 
+// Define theme colors for a consistent look and feel
+const COLORS = {
+  primary: '#ed167e',
+  dark: '#121212',
+  darkSecondary: '#1E1E1E',
+  lightText: '#FFFFFF',
+  mediumText: '#A9A9A9',
+  darkText: '#333333',
+  red: '#ff0000',
+  black: '#000000',
+};
+
 const CreateStoryScreen = () => {
-  const navigation = useNavigation(); // Hook for navigation
+  const navigation = useNavigation();
   const [selectedImage, setSelectedImage] = useState(null);
   const [storyText, setStoryText] = useState('');
   const [uploading, setUploading] = useState(false);
   const [showSuccessOptions, setShowSuccessOptions] = useState(false);
-  // --- REMOVED OLD STATE ---
-  // const [showLiveCreator, setShowLiveCreator] = useState(false); // WebRTC Live stream modal
+  const [cameraPosition, setCameraPosition] = useState('back');
+  const [flash, setFlash] = useState('off');
+  const [isCameraActive, setIsCameraActive] = useState(true);
+  const [zoom, setZoom] = useState(0);
+  const cameraRef = useRef(null);
+  const device = useCameraDevice(cameraPosition);
+  const { hasPermission, requestPermission } = useCameraPermission();
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useFocusEffect(
+    React.useCallback(() => {
+      setIsCameraActive(true);
+      return () => setIsCameraActive(false);
+    }, [])
+  );
 
   useEffect(() => {
     requestPermissions();
   }, []);
 
+  useEffect(() => {
+    if (selectedImage) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 300,
+        easing: Easing.ease,
+        useNativeDriver: true,
+      }).start();
+    } else {
+      fadeAnim.setValue(0);
+    }
+  }, [selectedImage, fadeAnim]);
+
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
       try {
-        console.log('--- Permissions Request Initiated ---');
-        console.log('Current Android Platform Version:', Platform.Version);
-
         const permissionsToRequest = [PermissionsAndroid.PERMISSIONS.CAMERA];
 
         if (Platform.Version >= 33) {
-          console.log('Requesting READ_MEDIA_IMAGES for Android 13+');
           permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES);
-        } else if (Platform.Version <= 28) {
-          console.log('Requesting READ_EXTERNAL_STORAGE and WRITE_EXTERNAL_STORAGE for Android 9 and below');
-          permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
-          permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE);
         } else {
-          console.log('Requesting READ_EXTERNAL_STORAGE for Android 10-12 (Scoped Storage)');
           permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
         }
-
-        console.log('Permissions array to request:', permissionsToRequest);
 
         const grantedStatus = await PermissionsAndroid.requestMultiple(permissionsToRequest);
-        console.log('Raw granted status results:', grantedStatus);
+        const allPermissionsGranted = Object.values(grantedStatus).every(
+          status => status === PermissionsAndroid.RESULTS.GRANTED
+        );
 
-        let allPermissionsGranted = true;
-        let missingPermissions = [];
-
-        for (const permission of permissionsToRequest) {
-          if (grantedStatus[permission] !== PermissionsAndroid.RESULTS.GRANTED) {
-            allPermissionsGranted = false;
-            missingPermissions.push(permission);
-            console.log(`Permission ${permission} NOT GRANTED. Status: ${grantedStatus[permission]}`);
-          } else {
-            console.log(`Permission ${permission} GRANTED.`);
-          }
-        }
-
-        console.log('Overall allPermissionsGranted:', allPermissionsGranted);
-        if (missingPermissions.length > 0) {
-            console.warn('Missing permissions:', missingPermissions.join(', '));
-            Alert.alert(
-                'Permissions Required',
-                `Please grant the following permissions to create stories: ${missingPermissions.map(p => p.split('.').pop()).join(', ')}. You may need to go to app settings if prompted "Don\'t ask again."`,
-                [{ text: 'OK', onPress: () => navigation.goBack() }]
-            );
-        } else if (!allPermissionsGranted) {
-            Alert.alert(
-                'Permissions Required',
-                'Please grant camera and storage permissions to create stories. You may need to go to app settings if prompted "Don\'t ask again."',
-                [{ text: 'OK', onPress: () => navigation.goBack() }]
-            );
+        if (!allPermissionsGranted) {
+          Alert.alert(
+            'Permissions Required',
+            'Please grant camera and storage permissions to create stories.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          );
         }
       } catch (err) {
-        console.error('Error during permission request process:', err);
+        console.error('Error during permission request:', err);
       }
+    } else {
+      await requestPermission();
     }
   };
 
-  const openCamera = () => {
-    const options = {
-      mediaType: 'photo',
-      quality: 0.8,
-      maxWidth: 1080,
-      maxHeight: 1920,
-      includeBase64: false,
-      saveToPhotos: true,
-    };
+  const toggleCamera = () => {
+    setCameraPosition(prev => (prev === 'back' ? 'front' : 'back'));
+  };
 
-    launchCamera(options, (response) => {
-      if (response.didCancel) {
-        console.log('User cancelled camera picker');
-        return;
-      } else if (response.errorMessage) {
-        console.error('ImagePicker Error: ', response.errorMessage);
-        Alert.alert('Camera Error', response.errorMessage);
-        return;
-      }
-
-      if (response.assets && response.assets[0]) {
-        console.log('Camera photo selected:', response.assets[0].uri);
-        setSelectedImage(response.assets[0]);
-      }
+  const toggleFlash = () => {
+    setFlash(prev => {
+      if (prev === 'off') return 'on';
+      if (prev === 'on') return 'auto';
+      return 'off';
     });
+  };
+
+  const takePhoto = async () => {
+    if (cameraRef.current && device) {
+      try {
+        const photo = await cameraRef.current.takePhoto({
+          flash: flash,
+          qualityPrioritization: 'quality',
+        });
+        setSelectedImage({
+          uri: `file://${photo.path}`,
+          type: 'image/jpeg',
+          fileName: `story_${Date.now()}.jpg`,
+        });
+      } catch (error) {
+        console.error('Error taking photo:', error);
+        Alert.alert('Camera Error', 'Failed to capture photo. Please try again.');
+      }
+    }
   };
 
   const openGallery = () => {
@@ -151,32 +172,10 @@ const CreateStoryScreen = () => {
     });
   };
 
-  // --- REPLACED OLD HANDLER ---
-  // WebRTC: Handle Go Live button press - Now navigates to the new screen
   const handleGoLive = () => {
     console.log('Go Live pressed - navigating to CreateLiveStream screen');
-    // Navigate to the new dedicated live stream creation screen
-    // Make sure this screen name matches your AppNavigator setup
-    navigation.navigate('CreateLiveStream'); 
-    // Optional: Close this screen if you don't want it in the stack behind
-    // navigation.replace('CreateLiveStream'); 
+    navigation.navigate('CreateLiveStream');
   };
-
-  // --- REMOVED OLD HANDLERS ---
-  /*
-  // WebRTC: Handle successful live stream creation
-  const handleLiveStreamStarted = (streamData) => {
-    console.log('WebRTC Live stream started:', streamData);
-    // The LiveStreamCreator component handles navigation to the viewer
-    // We just need to close this screen
-  };
-
-  // WebRTC: Handle live stream creator close
-  const handleLiveStreamCreatorClose = () => {
-    console.log('WebRTC Live stream creator closed');
-    setShowLiveCreator(false);
-  };
-  */
 
   const uploadStory = async () => {
     if (!selectedImage) {
@@ -194,9 +193,6 @@ const CreateStoryScreen = () => {
         return;
       }
 
-      console.log('Starting story upload...');
-      console.log('Selected image:', selectedImage);
-
       const formData = new FormData();
       formData.append('media', {
         uri: selectedImage.uri,
@@ -208,23 +204,17 @@ const CreateStoryScreen = () => {
         formData.append('content', storyText.trim());
       }
 
-      console.log('FormData prepared, making API call to:', `${BASE_URL}/api/v1/stories/story`);
-
       const response = await fetch(`${BASE_URL}/api/v1/stories/story`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
-          // 'Content-Type': 'multipart/form-data',
         },
         body: formData,
       });
 
-      console.log('Story upload response status:', response.status);
       const data = await response.json();
-      console.log('Story upload response data:', data);
 
       if (response.ok && data.success) {
-        console.log('Story uploaded successfully!');
         resetStory();
         setShowSuccessOptions(true);
       } else {
@@ -253,7 +243,6 @@ const CreateStoryScreen = () => {
 
   const handleCreateAnother = () => {
     setShowSuccessOptions(false);
-    // Story is already reset from uploadStory
   };
 
   const handleDone = () => {
@@ -261,193 +250,344 @@ const CreateStoryScreen = () => {
     navigation.goBack();
   };
 
-  // Success options modal
   if (showSuccessOptions) {
     return (
-      <View style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="black" />
-
-        <View style={styles.successContainer}>
-          <View style={styles.successContent}>
-            <MaterialIcon name="check-circle" size={60} color="#ed167e" style={styles.successIcon} />
-            <Text style={styles.successTitle}>Story Posted!</Text>
-            <Text style={styles.successSubtitle}>Your story has been shared successfully</Text>
-
-            <View style={styles.successButtons}>
-              <TouchableOpacity
-                style={styles.createAnotherButton}
-                onPress={handleCreateAnother}
-              >
-                <Feather name="plus" size={18} color="white" />
-                <Text style={styles.createAnotherText}>Create Another</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.doneButton}
-                onPress={handleDone}
-              >
-                <Text style={styles.doneText}>Done</Text>
-              </TouchableOpacity>
-            </View>
+      <View style={styles.successContainer}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.black} />
+        <View style={styles.successContent}>
+          <MaterialIcon name="check-circle" size={60} color={COLORS.primary} style={styles.successIcon} />
+          <Text style={styles.successTitle}>Story Posted!</Text>
+          <Text style={styles.successSubtitle}>Your story has been shared successfully.</Text>
+          <View style={styles.successButtons}>
+            <TouchableOpacity
+              style={styles.createAnotherButton}
+              onPress={handleCreateAnother}
+            >
+              <Feather name="plus" size={18} color={COLORS.lightText} />
+              <Text style={styles.createAnotherText}>Create Another</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.doneButton}
+              onPress={handleDone}
+            >
+              <Text style={styles.doneText}>Done</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
     );
   }
 
+  if (selectedImage) {
+    return (
+      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+        <StatusBar barStyle="light-content" backgroundColor={COLORS.black} />
+        <ImageBackground source={{ uri: selectedImage.uri }} style={styles.previewImageBackground}>
+          <View style={styles.previewHeader}>
+            <TouchableOpacity style={styles.headerIconContainer} onPress={resetStory}>
+              <Icon name="arrow-back" size={28} color={COLORS.lightText} />
+            </TouchableOpacity>
+            {/* <View style={styles.previewTools}>
+              <TouchableOpacity style={styles.headerIconContainer}>
+                <Icon name="text" size={28} color={COLORS.lightText} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.headerIconContainer}>
+                <Icon name="color-filter-outline" size={28} color={COLORS.lightText} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.headerIconContainer}>
+                <Icon name="musical-notes-outline" size={28} color={COLORS.lightText} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.headerIconContainer}>
+                <Icon name="happy-outline" size={28} color={COLORS.lightText} />
+              </TouchableOpacity>
+            </View> */}
+          </View>
+
+          {/* <View style={styles.textInputContainer}>
+            <TextInput
+              style={styles.textInput}
+              placeholder="Add text..."
+              placeholderTextColor="rgba(255,255,255,0.7)"
+              value={storyText}
+              onChangeText={setStoryText}
+              multiline
+            />
+          </View> */}
+
+          <View style={styles.previewFooter}>
+            <TouchableOpacity
+              style={[styles.postButton, uploading && styles.disabledButton]}
+              onPress={uploadStory}
+              disabled={uploading}
+            >
+              {uploading ? (
+                <ActivityIndicator size="small" color={COLORS.lightText} />
+              ) : (
+                <Text style={styles.postButtonText}>Post Story</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </ImageBackground>
+      </Animated.View>
+    );
+  }
+
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="black" />
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      
+      {device && hasPermission ? (
+        <Camera
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          device={device}
+          isActive={isCameraActive}
+          photo
+          flash={flash}
+          zoom={zoom}
+        />
+      ) : (
+        <View style={styles.cameraPlaceholder}>
+          <Text style={styles.cameraPlaceholderText}>
+            {hasPermission 
+              ? 'Camera not available' 
+              : 'Grant camera permission to continue'}
+          </Text>
+        </View>
+      )}
 
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.headerButton}
-          onPress={() => navigation.goBack()}
-        >
-          <Icon name="close" size={30} color="white" />
+      {/* Lowered Header */}
+      <View style={styles.creatorHeader}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
+          <Icon name="close" size={30} color={COLORS.lightText} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Create Story</Text>
-        <View style={styles.placeholder} />
+        <Text style={styles.creatorTitle}>New Story</Text>
+        <View style={styles.headerSpacer} />
       </View>
 
-      {/* --- REMOVED OLD MODAL COMPONENT ---
-      <LiveStreamCreator
-        visible={showLiveCreator}
-        onClose={handleLiveStreamCreatorClose}
-        onStreamStarted={handleLiveStreamStarted}
-      />
-      */}
+      {/* Camera Controls */}
+      <View style={styles.creatorControls}>
+        <View style={styles.leftControls}>
+          <TouchableOpacity style={styles.controlButton} onPress={openGallery}>
+            <Icon name="images-outline" size={28} color={COLORS.lightText} />
+            <Text style={styles.controlButtonText}>Gallery</Text>
+          </TouchableOpacity>
+        </View>
 
-      {/* Content */}
-      <View style={styles.content}>
-        {selectedImage ? (
-          <View style={styles.previewContainer}>
-            <Image source={{ uri: selectedImage.uri }} style={styles.previewImage} />
+        <TouchableOpacity style={styles.shutterButton} onPress={takePhoto}>
+          <View style={styles.shutterButtonInner} />
+        </TouchableOpacity>
 
-            {/* Text overlay input */}
-            <View style={styles.textOverlay}>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Add text to your story..."
-                placeholderTextColor="rgba(255,255,255,0.7)"
-                value={storyText}
-                onChangeText={setStoryText}
-                multiline
-                maxLength={100}
-              />
-            </View>
+        <View style={styles.rightControls}>
+          <TouchableOpacity style={styles.controlButton} onPress={toggleCamera}>
+            <Icon name="camera-reverse-outline" size={28} color={COLORS.lightText} />
+            <Text style={styles.controlButtonText}>Flip</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
 
-            {/* Action buttons */}
-            <View style={styles.actionButtons}>
-              <TouchableOpacity
-                style={styles.resetButton}
-                onPress={resetStory}
-              >
-                <Icon name="refresh" size={20} color="white" />
-                <Text style={styles.buttonText}>Reset</Text>
-              </TouchableOpacity>
+      {/* Go Live Button */}
+      <View style={styles.liveButtonContainer}>
+        <TouchableOpacity style={styles.liveButton} onPress={handleGoLive}>
+          <Icon name="radio" size={24} color={COLORS.red} />
+          <Text style={styles.liveButtonText}>Go Live</Text>
+        </TouchableOpacity>
+      </View>
 
-              <TouchableOpacity
-                style={[styles.shareButton, uploading && styles.disabledButton]}
-                onPress={uploadStory}
-                disabled={uploading}
-              >
-                {uploading ? (
-                  <ActivityIndicator size="small" color="white" />
-                ) : (
-                  <>
-                    <Icon name="share-outline" size={20} color="white" />
-                    <Text style={styles.buttonText}>Share</Text>
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.optionsContainer}>
-            <Text style={styles.title}>Create Your Story</Text>
-            <Text style={styles.subtitle}>Share a moment with your followers</Text>
-
-            <View style={styles.options}>
-              <TouchableOpacity
-                style={styles.option}
-                onPress={openCamera}
-              >
-                <View style={styles.optionIcon}>
-                  <Icon name="camera" size={32} color="#ed167e" />
-                </View>
-                <Text style={styles.optionTitle}>Take Photo</Text>
-                <Text style={styles.optionSubtitle}>Capture a new moment</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.option}
-                onPress={openGallery}
-              >
-                <View style={styles.optionIcon}>
-                  <Icon name="images" size={32} color="#ed167e" />
-                </View>
-                <Text style={styles.optionTitle}>Choose from Gallery</Text>
-                <Text style={styles.optionSubtitle}>Select an existing photo</Text>
-              </TouchableOpacity>
-
-              {/* WebRTC: Go Live Option - Updated to use navigation */}
-              <TouchableOpacity
-                style={[styles.option, styles.liveOption]}
-                onPress={handleGoLive} // <-- Updated handler
-              >
-                <View style={[styles.optionIcon, styles.liveOptionIcon]}>
-                  <Icon name="radio" size={32} color="#ff0000" />
-                </View>
-                <Text style={[styles.optionTitle, styles.liveOptionTitle]}>Go Live</Text>
-                <Text style={styles.optionSubtitle}>Stream live with WebRTC to your followers</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
+      {/* Flash Toggle (moved to side controls) */}
+      <View style={styles.sideControls}>
+        <TouchableOpacity style={styles.sideControlButton} onPress={toggleFlash}>
+          <Icon 
+            name={flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-outline' : 'flash-off'} 
+            size={24} 
+            color={flash === 'off' ? COLORS.mediumText : COLORS.lightText} 
+          />
+        </TouchableOpacity>
       </View>
     </View>
   );
 };
 
-// Styles remain the same
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'black',
+    backgroundColor: COLORS.black,
   },
-  header: {
+  // --- Creator Screen Styles ---
+  creatorHeader: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 80 : 50, // Lowered from 50/20 to 80/50
+    left: 0,
+    right: 0,
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 50 : 20,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
+    paddingHorizontal: 20,
+    zIndex: 10,
   },
-  headerButton: {
-    padding: 8,
-  },
-  headerButtonText: {
-    color: 'white',
-    fontSize: 24,
-    fontWeight: '300',
-  },
-  headerTitle: {
-    flex: 1,
-    color: 'white',
+  creatorTitle: {
+    color: COLORS.lightText,
     fontSize: 18,
     fontWeight: '600',
-    textAlign: 'center',
   },
-  placeholder: {
-    width: 40,
+  headerSpacer: {
+    width: 30, // Placeholder for removed flash icon
   },
-  content: {
+  cameraPlaceholder: {
     flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: COLORS.dark,
   },
-  // Success Modal Styles
+  cameraPlaceholderText: {
+    color: COLORS.mediumText,
+    fontSize: 16,
+  },
+  creatorControls: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 40 : 20,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  leftControls: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  rightControls: {
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  controlButton: {
+    alignItems: 'center',
+    width: 70,
+  },
+  controlButtonText: {
+    color: COLORS.lightText,
+    fontSize: 12,
+    marginTop: 4,
+  },
+  shutterButton: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: COLORS.lightText,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 4,
+    borderColor: 'rgba(255,255,255,0.5)',
+  },
+  shutterButtonInner: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: COLORS.lightText,
+    borderWidth: 2,
+    borderColor: COLORS.black,
+  },
+  // Go Live Button
+  liveButtonContainer: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 140 : 120,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 5,
+  },
+  liveButton: {
+    backgroundColor: 'rgba(255, 0, 0, 0.1)',
+    borderWidth: 2,
+    borderColor: COLORS.red,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 25,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  liveButtonText: {
+    color: COLORS.red,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // Side Controls
+  sideControls: {
+    position: 'absolute',
+    right: 20,
+    top: '50%',
+    transform: [{ translateY: -50 }],
+    zIndex: 5,
+  },
+  sideControlButton: {
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    padding: 12,
+    borderRadius: 50,
+    marginBottom: 15,
+  },
+  // --- Preview Screen Styles ---
+  previewImageBackground: {
+    flex: 1,
+    width: width,
+    height: height,
+    justifyContent: 'space-between',
+  },
+  previewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 15,
+    paddingTop: Platform.OS === 'ios' ? 80 : 50, // Lowered to match main header
+  },
+  previewTools: {
+    flexDirection: 'row',
+    gap: 15,
+  },
+  headerIconContainer: {
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    padding: 8,
+    borderRadius: 50,
+  },
+  textInputContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  textInput: {
+    color: COLORS.lightText,
+    fontSize: 28,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: {width: -1, height: 1},
+    textShadowRadius: 10,
+  },
+  previewFooter: {
+    paddingHorizontal: 20,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+  },
+  postButton: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: 16,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  postButtonText: {
+    color: COLORS.lightText,
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  disabledButton: {
+    opacity: 0.6,
+  },
+  // --- Success Modal Styles ---
   successContainer: {
     flex: 1,
     justifyContent: 'center',
@@ -455,38 +595,35 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.9)',
   },
   successContent: {
-    backgroundColor: '#1a1a1a',
+    backgroundColor: COLORS.darkSecondary,
     borderRadius: 20,
-    padding: 40,
+    padding: 30,
     alignItems: 'center',
-    marginHorizontal: 40,
-    minWidth: 280,
+    marginHorizontal: 30,
+    width: '90%',
   },
   successIcon: {
     marginBottom: 20,
   },
   successTitle: {
-    color: 'white',
+    color: COLORS.lightText,
     fontSize: 24,
     fontWeight: 'bold',
     marginBottom: 8,
-    textAlign: 'center',
   },
   successSubtitle: {
-    color: '#666',
+    color: COLORS.mediumText,
     fontSize: 16,
     marginBottom: 30,
     textAlign: 'center',
-    lineHeight: 22,
   },
   successButtons: {
     width: '100%',
     gap: 12,
   },
   createAnotherButton: {
-    backgroundColor: '#ed167e',
+    backgroundColor: COLORS.primary,
     paddingVertical: 14,
-    paddingHorizontal: 24,
     borderRadius: 12,
     alignItems: 'center',
     flexDirection: 'row',
@@ -494,152 +631,20 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   createAnotherText: {
-    color: 'white',
+    color: COLORS.lightText,
     fontSize: 16,
     fontWeight: '600',
   },
   doneButton: {
     backgroundColor: 'transparent',
     paddingVertical: 14,
-    paddingHorizontal: 24,
     borderRadius: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#333',
+    borderColor: COLORS.darkText,
   },
   doneText: {
-    color: '#666',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  // Existing styles
-  optionsContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  title: {
-    color: 'white',
-    fontSize: 24,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  subtitle: {
-    color: '#666',
-    fontSize: 16,
-    marginBottom: 40,
-    textAlign: 'center',
-  },
-  options: {
-    width: '100%',
-  },
-  option: {
-    backgroundColor: '#1a1a1a',
-    padding: 24,
-    borderRadius: 12,
-    marginBottom: 16,
-    alignItems: 'center',
-  },
-  // WebRTC: Live option styles
-  liveOption: {
-    borderWidth: 2,
-    borderColor: '#ff0000',
-    backgroundColor: 'rgba(255, 0, 0, 0.05)',
-  },
-  optionIcon: {
-    width: 64,
-    height: 64,
-    backgroundColor: 'rgba(237, 22, 126, 0.1)',
-    borderRadius: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  // WebRTC: Live option icon styles
-  liveOptionIcon: {
-    backgroundColor: 'rgba(255, 0, 0, 0.1)',
-    borderWidth: 2,
-    borderColor: '#ff0000',
-  },
-  iconText: {
-    fontSize: 32,
-  },
-  optionTitle: {
-    color: 'white',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  // WebRTC: Live option title styles
-  liveOptionTitle: {
-    color: '#ff0000',
-  },
-  optionSubtitle: {
-    color: '#666',
-    fontSize: 14,
-    textAlign: 'center',
-  },
-  // Preview styles
-  previewContainer: {
-    flex: 1,
-    position: 'relative',
-  },
-  previewImage: {
-    width: width,
-    height: height - 100, // Account for header
-    resizeMode: 'cover',
-  },
-  textOverlay: {
-    position: 'absolute',
-    bottom: 100,
-    left: 20,
-    right: 20,
-  },
-  textInput: {
-    color: 'white',
-    fontSize: 18,
-    fontWeight: '600',
-    textAlign: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  actionButtons: {
-    position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  resetButton: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 8,
-    minWidth: 80,
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-  },
-  shareButton: {
-    backgroundColor: '#ed167e',
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 8,
-    minWidth: 120,
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-  },
-  disabledButton: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: 'white',
+    color: COLORS.mediumText,
     fontSize: 16,
     fontWeight: '600',
   },
