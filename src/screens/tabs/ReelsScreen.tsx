@@ -14,6 +14,7 @@ import {
   Animated,
   AppState,
   TouchableWithoutFeedback,
+  Platform,
 } from 'react-native';
 import Video from 'react-native-video';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -34,26 +35,28 @@ const ReelsScreen = ({ navigation }) => {
   const [isAppActive, setIsAppActive] = useState(true);
   const [manualPaused, setManualPaused] = useState({});
   const [currentUser, setCurrentUser] = useState(null);
-  // State to track which reels have had their view counted in this session
   const [viewCounted, setViewCounted] = useState(new Set());
+  const [viewCountAnimations, setViewCountAnimations] = useState({});
+  const [viewRegistrationInProgress, setViewRegistrationInProgress] = useState(new Set());
+  
   const flatListRef = useRef(null);
   const [preloadedVideos, setPreloadedVideos] = useState({});
   const isFocused = useIsFocused();
   const [likeAnimations, setLikeAnimations] = useState([]);
   const animationId = useRef(0);
-  // Queue system for like operations
   const [likeQueue, setLikeQueue] = useState([]);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const queueRef = useRef([]);
   const processingRef = useRef(false);
+  const viewStartTime = useRef({});
+  const viewTimers = useRef({});
+  const sessionId = useRef(Math.random().toString(36).substring(2, 15));
 
-  // Use consistent BASE_URL with v1 - Ensure no trailing space
   const BASE_URL = 'https://backendforheartlink.in';
 
   // --- START: Functions from ReelsViewerScreen for consistency ---
-  // Calculate dummy views based on video age (if needed)
   const calculateDummyViews = useCallback((createdAt) => {
-    if (!createdAt) return Math.floor(Math.random() * 31) + 20; // 20-50 for unknown dates
+    if (!createdAt) return Math.floor(Math.random() * 31) + 20;
     try {
       const now = new Date();
       const createdDate = new Date(createdAt);
@@ -62,33 +65,27 @@ const ReelsScreen = ({ navigation }) => {
       let baseViews;
       let randomRange;
       if (diffInHours < 24) {
-        // Less than 1 day: 20-50 views
         baseViews = 20;
         randomRange = 30;
       } else if (diffInDays <= 7) {
-        // 1-7 days: 50-100 views
         baseViews = 50;
         randomRange = 50;
       } else if (diffInDays <= 30) {
-        // 1-30 days: 100-130 views
         baseViews = 100;
         randomRange = 30;
       } else {
-        // More than 30 days: 120-150 views
         baseViews = 120;
         randomRange = 30;
       }
-      // Add some randomization and account for engagement
       const randomViews = Math.floor(Math.random() * randomRange);
       const finalViews = baseViews + randomViews;
-      return Math.min(Math.max(finalViews, 20), 150); // Ensure it's between 20-150
+      return Math.min(Math.max(finalViews, 20), 150);
     } catch (error) {
       console.error('Error calculating views:', error);
-      return Math.floor(Math.random() * 31) + 20; // Default to 20-50
+      return Math.floor(Math.random() * 31) + 20;
     }
   }, []);
 
-  // Format views count (e.g., 1.2K, 1M) - From ReelsViewerScreen
   const formatViewCount = useCallback((count) => {
     if (count < 1000) return count.toString();
     if (count < 1000000) return `${(count / 1000).toFixed(1)}K`;
@@ -96,7 +93,6 @@ const ReelsScreen = ({ navigation }) => {
   }, []);
   // --- END: Functions from ReelsViewerScreen ---
 
-  // Get auth headers (matching CommentScreen approach)
   const getAuthHeaders = async () => {
     try {
       const token = await AsyncStorage.getItem('token');
@@ -114,7 +110,6 @@ const ReelsScreen = ({ navigation }) => {
     }
   };
 
-  // Get current user (matching CommentScreen approach)
   const getCurrentUser = async () => {
     try {
       const userJson = await AsyncStorage.getItem('user');
@@ -123,7 +118,6 @@ const ReelsScreen = ({ navigation }) => {
         setCurrentUser(user);
         return user;
       } else {
-        // Try alternative storage keys
         const altUserJson =
           (await AsyncStorage.getItem('userData')) ||
           (await AsyncStorage.getItem('currentUser')) ||
@@ -140,7 +134,6 @@ const ReelsScreen = ({ navigation }) => {
     return null;
   };
 
-  // Process like queue in background - MATCHES ReelsViewerScreen
   const processLikeQueue = useCallback(async () => {
     if (processingRef.current || queueRef.current.length === 0) {
       return;
@@ -148,13 +141,12 @@ const ReelsScreen = ({ navigation }) => {
     processingRef.current = true;
     setIsProcessingQueue(true);
     while (queueRef.current.length > 0) {
-      const likeAction = queueRef.current.shift(); // Remove from ref
+      const likeAction = queueRef.current.shift();
       try {
         console.log('=== PROCESSING LIKE QUEUE (MAIN SCREEN) ===');
         console.log('Reel ID:', likeAction.reelId);
         console.log('Action:', likeAction.action);
         const headers = await getAuthHeaders();
-        // --- CHANGED URL TO MATCH ReelsViewerScreen ---
         const response = await fetch(`${BASE_URL}/api/v1/posts/${likeAction.reelId}/like`, {
           method: 'PATCH',
           headers,
@@ -162,20 +154,17 @@ const ReelsScreen = ({ navigation }) => {
         if (!response.ok) {
           const errorData = await response.json();
           console.error('Like queue processing error:', errorData.message);
-          // Don't revert UI since user already saw the change
-          // Just log the error and continue processing
-          continue; // Continue with next item in queue
+          continue;
         }
         const updatedData = await response.json();
         console.log('Like queue success:', updatedData);
-        // --- UPDATED STATE UPDATE LOGIC TO MATCH ReelsViewerScreen ---
         if (updatedData.success && updatedData.data) {
           setReels((prevReels) =>
             prevReels.map((reel) =>
               reel._id === likeAction.reelId
                 ? {
                     ...reel,
-                    likes: updatedData.data.reel?.likes || reel.likes || [], // Use server's likes array
+                    likes: updatedData.data.reel?.likes || reel.likes || [],
                   }
                 : reel
             )
@@ -183,46 +172,39 @@ const ReelsScreen = ({ navigation }) => {
         }
       } catch (error) {
         console.error('Error processing like queue:', error);
-        // Continue processing other items in queue
-        continue; // Continue with next item in queue
+        continue;
       }
-      // Small delay to prevent overwhelming the server
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     processingRef.current = false;
     setIsProcessingQueue(false);
-  }, [BASE_URL]); // Added BASE_URL dependency
+  }, [BASE_URL]);
 
-  // Add like action to queue - MATCHES ReelsViewerScreen
   const addToLikeQueue = useCallback(
     (reelId, action) => {
       const likeAction = {
         reelId,
-        action, // 'like' or 'unlike'
+        action,
         timestamp: Date.now(),
       };
-      // Remove any existing action for this reel to avoid duplicates
       queueRef.current = queueRef.current.filter((item) => item.reelId !== reelId);
-      // Add new action
       queueRef.current.push(likeAction);
       setLikeQueue((prev) => {
         const filtered = prev.filter((item) => item.reelId !== reelId);
         return [...filtered, likeAction];
       });
-      // Start processing queue
-      processLikeQueue(); // This will now use the latest processLikeQueue
+      processLikeQueue();
     },
-    [processLikeQueue] // Added processLikeQueue to dependency array
+    [processLikeQueue]
   );
 
-  // Profile press handler (similar to Post.js and ReelsViewerScreen)
   const handleProfilePress = useCallback(
     (authorData) => {
       try {
         console.log('Profile press triggered for:', authorData?.fullName || authorData?.username);
         console.log('Navigation object:', !!navigation);
         console.log('Author data:', authorData);
-        const userId = authorData?._id; // Assuming _id is standard
+        const userId = authorData?._id;
         const authorName = authorData?.fullName || authorData?.username;
         if (!navigation) {
           console.error('Navigation prop not passed to ReelsScreen component');
@@ -234,7 +216,6 @@ const ReelsScreen = ({ navigation }) => {
           Alert.alert('Error', 'Unable to view profile');
           return;
         }
-        // Check if it's the current user's profile
         const isOwnProfile = currentUser && (userId === currentUser._id || userId === currentUser.id);
         if (isOwnProfile) {
           console.log('Navigating to own profile');
@@ -259,7 +240,6 @@ const ReelsScreen = ({ navigation }) => {
     [navigation, currentUser]
   );
 
-  // Fetch reels data (posts of type reel)
   const fetchReels = useCallback(async () => {
     try {
       setError(null);
@@ -275,7 +255,6 @@ const ReelsScreen = ({ navigation }) => {
         const userId = currentUserData?._id || currentUserData?.id;
 
         const optimizedReels = data.data.posts.map((post) => {
-          // Calculate isLiked based on current user ID - MATCHES ReelsViewerScreen logic
           const isLiked = post.likes?.some((like) =>
             (typeof like === 'object' ? like.user || like._id : like) === userId
           ) || false;
@@ -297,19 +276,17 @@ const ReelsScreen = ({ navigation }) => {
               username: post.author?.username,
               photoUrl: post.author?.photoUrl,
             },
-            likes: post.likes || [], // Ensure likes array is present
+            likes: post.likes || [],
             comments: post.comments || [],
-            // Use realTimeViews from the backend response, fallback if needed
             viewCount: post.realTimeViews !== undefined ? post.realTimeViews : (post.views || 0),
-            // likeCount will be derived from likes.length in render or state update
             commentCount: post.commentCount || post.realTimeComments || post.comments?.length || 0,
             type: post.type,
-            isLiked: isLiked, // Set calculated isLiked
+            isLiked: isLiked,
           };
         });
 
         setReels(optimizedReels);
-        setViewCounted(new Set()); // Reset view counted state when fetching new reels
+        setViewCounted(new Set());
         if (optimizedReels[0]?.video?.url) {
           setPreloadedVideos((prev) => ({
             ...prev,
@@ -326,55 +303,158 @@ const ReelsScreen = ({ navigation }) => {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [BASE_URL]); // Added BASE_URL dependency
+  }, [BASE_URL]);
 
-  // Register a view for a reel (Method 1: Implicit via GET /posts/:postId)
+  // Enhanced view registration with analytics and session tracking
   const registerReelView = useCallback(
-    async (reelId) => {
-      // Prevent multiple view counts for the same reel in the same session
-      if (viewCounted.has(reelId)) {
+    async (reelId, analyticsData = {}) => {
+      // Prevent duplicate registrations
+      if (viewRegistrationInProgress.has(reelId) || viewCounted.has(reelId)) {
+        console.log(`View already registered/in progress for reel ${reelId}`);
         return;
       }
+
       try {
+        setViewRegistrationInProgress(prev => new Set(prev).add(reelId));
+        
         const headers = await getAuthHeaders();
-        // Call the GET endpoint which implicitly counts the view
-        const response = await fetch(`${BASE_URL}/api/v1/posts/${reelId}`, {
-          method: 'GET',
-          headers,
-        });
+        
+        // Enhanced payload with analytics
+        const payload = {
+          sessionId: sessionId.current,
+          watchDuration: analyticsData.watchDuration || 0,
+          watchPercentage: analyticsData.watchPercentage || 0,
+          deviceInfo: {
+            userAgent: 'React Native',
+            platform: Platform.OS,
+            version: Platform.Version
+          },
+          ...analyticsData
+        };
+        
+        // Use the enhanced view endpoint
+        const response = await fetch(
+          `${BASE_URL}/api/v1/posts/reels/${reelId}/view`,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload)
+          }
+        );
+
         const data = await response.json();
-        if (response.ok && data.success && data.data?.post) {
-          const updatedReel = data.data.post;
-          // Update the specific reel's view count in the state
-          setReels((prevReels) =>
-            prevReels.map((reel) =>
+        
+        if (response.ok && data.success) {
+          const { viewResult, analytics } = data.data;
+          
+          // Update reel with enhanced view data
+          setReels(prevReels => 
+            prevReels.map(reel => 
               reel._id === reelId
-                ? {
-                    ...reel,
-                    viewCount:
-                      updatedReel.realTimeViews !== undefined
-                        ? updatedReel.realTimeViews
-                        : updatedReel.views || reel.viewCount || 0,
+                ? { 
+                    ...reel, 
+                    viewCount: viewResult.viewCount,
+                    // Add analytics data for rich display
+                    viewAnalytics: {
+                      totalViews: analytics.totalViews,
+                      uniqueViewers: analytics.uniqueViewers,
+                      engagement: analytics.engagement,
+                      lastUpdated: Date.now()
+                    },
+                    // Track view quality
+                    viewQuality: data.data.metadata?.quality || 'unknown'
                   }
                 : reel
             )
           );
-          // Mark this reel as having its view counted in this session
-          setViewCounted((prev) => new Set(prev).add(reelId));
-          console.log(`View registered for reel: ${reelId}`);
-        } else {
-          console.warn('Failed to register view via GET:', data.message || 'Unknown error');
-          // Even if the view registration fails, we mark it as counted to prevent retries
-          setViewCounted((prev) => new Set(prev).add(reelId));
+          
+          // Mark as viewed only if actually counted
+          if (viewResult.counted) {
+            setViewCounted(prev => new Set(prev).add(reelId));
+            console.log(`✅ View registered for reel ${reelId}: ${viewResult.viewCount} views (${viewResult.source})`);
+            
+            // Optional: Show view count animation
+            if (viewResult.uniqueView) {
+              showViewCountAnimation(reelId, viewResult.viewCount);
+            }
+          } else {
+            console.log(`ℹ️ View not counted for reel ${reelId}: ${viewResult.reason}`);
+          }
         }
       } catch (error) {
-        console.error('Error registering reel view:', error);
-        // Mark as counted on error to prevent continuous retries
-        setViewCounted((prev) => new Set(prev).add(reelId));
+        console.error('Error registering enhanced view:', error);
+      } finally {
+        setViewRegistrationInProgress(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(reelId);
+          return newSet;
+        });
       }
     },
-    [viewCounted, BASE_URL] // Added BASE_URL dependency
+    [viewCounted, BASE_URL, viewRegistrationInProgress]
   );
+
+  // Show view count animation (optional visual feedback)
+  const showViewCountAnimation = useCallback((reelId, newCount) => {
+    // Create a brief animation to show view count increase
+    setViewCountAnimations(prev => ({
+      ...prev,
+      [reelId]: {
+        count: newCount,
+        timestamp: Date.now()
+      }
+    }));
+    
+    // Remove animation after 2 seconds
+    setTimeout(() => {
+      setViewCountAnimations(prev => {
+        const newAnimations = { ...prev };
+        delete newAnimations[reelId];
+        return newAnimations;
+      });
+    }, 2000);
+  }, []);
+
+  // Enhanced view tracking with watch time analytics
+  const startViewTracking = useCallback((reelId) => {
+    viewStartTime.current[reelId] = Date.now();
+    
+    // Register view after 3 seconds with initial analytics
+    viewTimers.current[reelId] = setTimeout(() => {
+      const watchDuration = Date.now() - viewStartTime.current[reelId];
+      registerReelView(reelId, {
+        watchDuration,
+        watchPercentage: Math.min(30, (watchDuration / 10000) * 100),
+        isComplete: false,
+        trigger: 'auto_3s'
+      });
+    }, 3000);
+  }, [registerReelView]);
+
+  // Enhanced view tracking completion with full analytics
+  const stopViewTracking = useCallback((reelId) => {
+    if (viewTimers.current[reelId]) {
+      clearTimeout(viewTimers.current[reelId]);
+      delete viewTimers.current[reelId];
+    }
+    
+    if (viewStartTime.current[reelId]) {
+      const watchDuration = Date.now() - viewStartTime.current[reelId];
+      delete viewStartTime.current[reelId];
+      
+      // Send comprehensive analytics if watched for meaningful duration
+      if (watchDuration > 1000) {
+        const watchPercentage = Math.min(100, (watchDuration / 15000) * 100);
+        registerReelView(reelId, {
+          watchDuration,
+          watchPercentage,
+          isComplete: watchPercentage >= 90,
+          trigger: 'view_end',
+          quality: watchPercentage >= 80 ? 'high' : watchPercentage >= 50 ? 'medium' : 'low'
+        });
+      }
+    }
+  }, [registerReelView]);
 
   useEffect(() => {
     const handleAppStateChange = (nextAppState) => {
@@ -390,7 +470,6 @@ const ReelsScreen = ({ navigation }) => {
       if (subscription?.remove) {
         subscription.remove();
       } else {
-        // Fallback for older RN versions
         AppState.removeEventListener('change', handleAppStateChange);
       }
     };
@@ -418,9 +497,12 @@ const ReelsScreen = ({ navigation }) => {
   useEffect(() => {
     const currentReel = reels[currentIndex];
     if (currentReel && currentReel._id) {
-      registerReelView(currentReel._id);
+      startViewTracking(currentReel._id);
+      return () => {
+        stopViewTracking(currentReel._id);
+      };
     }
-  }, [currentIndex, reels, registerReelView]);
+  }, [currentIndex, reels, startViewTracking, stopViewTracking]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -474,7 +556,6 @@ const ReelsScreen = ({ navigation }) => {
     });
   }, []);
 
-  // Instant like functionality with queue processing - MATCHES ReelsViewerScreen
   const handleLike = useCallback(
     async (reelId) => {
       if (!reelId || !currentUser) {
@@ -493,47 +574,39 @@ const ReelsScreen = ({ navigation }) => {
         const wasLiked = currentReel.isLiked;
         const userId = currentUser._id || currentUser.id;
 
-        // INSTANT UI UPDATE - No loading, no waiting - MATCHES ReelsViewerScreen
         setReels((prevReels) =>
           prevReels.map((reel) => {
             if (reel._id === reelId) {
-              // Update likes array directly like ReelsViewerScreen
               const newLikes = wasLiked
                 ? reel.likes?.filter(
                     (like) => (typeof like === 'object' ? like.user || like._id : like) !== userId
                   ) || []
-                : [...(reel.likes || []), { user: userId, _id: Date.now().toString() }]; // Simple ID for UI
+                : [...(reel.likes || []), { user: userId, _id: Date.now().toString() }];
 
               return {
                 ...reel,
                 isLiked: !wasLiked,
-                likes: newLikes, // Update the likes array
-                // likeCount derived from newLikes.length in render or state update callback if needed
+                likes: newLikes,
               };
             }
             return reel;
           })
         );
 
-        // Show animation only when liking (not unliking) - MATCHES ReelsViewerScreen
         if (!wasLiked) {
           createLikeAnimation();
         }
 
-        // Add to queue for background processing
         const action = wasLiked ? 'unlike' : 'like';
         addToLikeQueue(reelId, action);
         console.log(`✅ Reel ${action} updated instantly, queued for processing`);
       } catch (error) {
         console.error('Error in instant like:', error);
-        // Even if there's an error, we don't revert the UI
-        // The queue will handle the API call
       }
     },
     [currentUser, reels, createLikeAnimation, addToLikeQueue]
   );
 
-  // Navigate to comments screen
   const openComments = useCallback(
     (reel) => {
       if (!navigation) {
@@ -545,7 +618,6 @@ const ReelsScreen = ({ navigation }) => {
         reelData: reel,
         contentType: 'reel',
         onCommentUpdate: (newCommentCount, realTimeComments) => {
-          // Update comment count in reels list
           setReels((prevReels) =>
             prevReels.map((r) =>
               r._id === reel._id
@@ -586,7 +658,7 @@ const ReelsScreen = ({ navigation }) => {
     const names = name.trim().split(/\s+/);
     if (names.length === 0) return '?';
     if (names.length === 1) return names[0][0].toUpperCase();
-    return (names[0][0] + (names[names.length - 1][0] || '')).toUpperCase(); // Safer access
+    return (names[0][0] + (names[names.length - 1][0] || '')).toUpperCase();
   }, []);
 
   const getMediaSource = useCallback((item) => {
@@ -634,12 +706,12 @@ const ReelsScreen = ({ navigation }) => {
       const isActive = index === currentIndex && isAppActive;
       const mediaSource = getMediaSource(item);
       const isVideo = !!item.video?.url;
-      const isLiked = item.isLiked; // Use the isLiked property directly
+      const isLiked = item.isLiked;
       const isPaused = manualPaused[item._id] || !isActive || !isFocused;
-      // Derive likeCount from the length of the likes array for accurate display
       const likeCount = item.likes?.length || 0;
       const commentCount = item.commentCount || item.comments?.length || 0;
       const viewCount = item.viewCount || 0;
+      const viewAnimation = viewCountAnimations[item._id];
 
       return (
         <View style={styles.reelContainer}>
@@ -680,7 +752,6 @@ const ReelsScreen = ({ navigation }) => {
           </TouchableWithoutFeedback>
           {index === currentIndex && <LikeAnimations />}
           <View style={styles.bottomLeftInfo}>
-            {/* Made author name touchable */}
             <TouchableOpacity onPress={() => handleProfilePress(item.author)} activeOpacity={0.8}>
               <Text style={styles.authorName}>
                 {item.author?.fullName || item.author?.username || 'Unknown User'}
@@ -694,7 +765,6 @@ const ReelsScreen = ({ navigation }) => {
             ) : null}
           </View>
           <View style={styles.bottomRightActions}>
-            {/* Like Button with Vector Icon - NO LOADING STATE - MATCHES ReelsViewerScreen */}
             <TouchableOpacity
               style={styles.actionButton}
               onPress={() => handleLike(item._id)}
@@ -708,7 +778,6 @@ const ReelsScreen = ({ navigation }) => {
               />
               <Text style={styles.actionCount}>{likeCount}</Text>
             </TouchableOpacity>
-            {/* Comment Button */}
             <TouchableOpacity
               style={styles.actionButton}
               onPress={() => openComments(item)}
@@ -717,12 +786,27 @@ const ReelsScreen = ({ navigation }) => {
               <Icon name="chatbubble-outline" size={26} color="#fff" style={styles.actionIcon} />
               <Text style={styles.actionCount}>{commentCount}</Text>
             </TouchableOpacity>
-            {/* Views Button - Displays real view count */}
             <TouchableOpacity style={styles.actionButton} activeOpacity={0.7}>
               <Icon name="eye-outline" size={26} color="#fff" style={styles.actionIcon} />
               <Text style={styles.actionCount}>{formatViewCount(viewCount)}</Text>
+              {viewAnimation && (
+                <Animated.View
+                  style={[
+                    styles.viewCountAnimation,
+                    {
+                      opacity: viewAnimation.timestamp ? 1 : 0,
+                      transform: [
+                        {
+                          translateY: viewAnimation.timestamp ? 0 : -20,
+                        },
+                      ],
+                    },
+                  ]}
+                >
+                  <Text style={styles.viewCountText}>+1</Text>
+                </Animated.View>
+              )}
             </TouchableOpacity>
-            {/* Made Author Avatar touchable */}
             <TouchableOpacity
               style={styles.authorAvatar}
               onPress={() => handleProfilePress(item.author)}
@@ -755,7 +839,7 @@ const ReelsScreen = ({ navigation }) => {
       getMediaSource,
       formatTimeAgo,
       getInitials,
-      handleLike, // Ensure handleLike is stable
+      handleLike,
       currentUser,
       preloadedVideos,
       likeAnimations,
@@ -764,7 +848,8 @@ const ReelsScreen = ({ navigation }) => {
       togglePauseForReel,
       openComments,
       handleProfilePress,
-      formatViewCount, // Ensure formatViewCount is stable
+      formatViewCount,
+      viewCountAnimations,
     ]
   );
 
@@ -840,7 +925,6 @@ const ReelsScreen = ({ navigation }) => {
       <TouchableOpacity style={styles.muteIndicator} onPress={toggleMute} activeOpacity={0.7}>
         <Icon name={isMuted ? 'volume-mute' : 'volume-high'} size={22} color="#fff" />
       </TouchableOpacity>
-      {/* Optional: Debug indicator for queue processing (remove in production) */}
       {isProcessingQueue && (
         <View style={styles.queueIndicator}>
           <Text style={styles.queueText}>Syncing...</Text>
@@ -992,6 +1076,7 @@ const styles = StyleSheet.create({
   actionButton: {
     alignItems: 'center',
     marginBottom: 20,
+    position: 'relative',
   },
   actionIcon: {
     marginBottom: 4,
@@ -1006,6 +1091,16 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(0,0,0,0.8)',
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
+  },
+  viewCountAnimation: {
+    position: 'absolute',
+    top: -20,
+    alignItems: 'center',
+  },
+  viewCountText: {
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   authorAvatar: {
     width: 40,
@@ -1061,4 +1156,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default ReelsScreen;
+export default ReelsScreen; 

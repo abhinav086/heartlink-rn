@@ -56,7 +56,12 @@ const FollowersList = ({ route, navigation }) => {
       const data = await response.json();
 
       if (response.ok && data.success && Array.isArray(data.data?.followers)) {
-        setFollowers(prev => isRefresh ? data.data.followers : [...prev, ...data.data.followers]);
+        // Deduplicate followers by _id to prevent duplicate keys
+        const uniqueFollowers = isRefresh
+          ? [...new Map(data.data.followers.map(item => [item._id, item])).values()]
+          : [...new Map([...followers, ...data.data.followers].map(item => [item._id, item])).values()];
+
+        setFollowers(uniqueFollowers);
         setHasMore(data.data.pagination.hasNext);
         setPage(currentPage + 1);
       } else {
@@ -72,10 +77,10 @@ const FollowersList = ({ route, navigation }) => {
   };
 
   const handleRefresh = () => {
-    setFollowers([]);
-    setPage(1);
-    setHasMore(true);
-    fetchFollowers(true);
+    setFollowers([]);       // Clear current list
+    setPage(1);             // Reset page to 1
+    setHasMore(true);       // Allow loading more
+    fetchFollowers(true);   // Fetch fresh data
   };
 
   const handleEndReached = () => {
@@ -85,8 +90,6 @@ const FollowersList = ({ route, navigation }) => {
   };
 
   const handleUserPress = (user) => {
-    // Navigate to the user's profile using correct screen name
-    console.log('Navigating to user profile:', user._id, user.fullName);
     navigation.push('UserProfile', { userId: user._id });
   };
 
@@ -111,13 +114,6 @@ const FollowersList = ({ route, navigation }) => {
   };
 
   const renderItem = ({ item }) => {
-    console.log('Rendering follower item:', {
-      id: item._id,
-      name: item.fullName,
-      photoUrl: item.photoUrl,
-      hasPhotoUrl: !!item.photoUrl
-    });
-
     return (
       <TouchableOpacity style={styles.userItem} onPress={() => handleUserPress(item)}>
         <View style={[styles.userAvatar, { backgroundColor: getAvatarColor(item.fullName) }]}>
@@ -125,10 +121,6 @@ const FollowersList = ({ route, navigation }) => {
             <Image 
               source={{ uri: item.photoUrl }} 
               style={styles.avatarImage}
-              onLoad={() => console.log('Avatar loaded for:', item.fullName)}
-              onError={(error) => {
-                console.log('Avatar load error for:', item.fullName, error.nativeEvent?.error);
-              }}
             />
           ) : (
             <Text style={styles.avatarText}>
@@ -141,16 +133,17 @@ const FollowersList = ({ route, navigation }) => {
           {item.username && <Text style={styles.userHandle}>@{item.username}</Text>}
           {item.bio && <Text style={styles.userBio} numberOfLines={2}>{item.bio}</Text>}
         </View>
-        {/* You can add a follow/unfollow button here if item.isCurrentUserFollowing is available */}
-        {/* {item._id.toString() !== currentUser._id.toString() && (
-          <TouchableOpacity style={styles.followButton}>
-            <Text style={styles.followButtonText}>
-              {item.isCurrentUserFollowing ? 'Following' : 'Follow'}
-            </Text>
-          </TouchableOpacity>
-        )} */}
       </TouchableOpacity>
     );
+  };
+
+  // Safe key extractor with deduplication
+  const keyExtractor = (item) => {
+    if (!item._id) {
+      // Generate a unique key if _id is missing
+      return `missing-id-${Math.random().toString(36).substr(2, 9)}`;
+    }
+    return item._id.toString();
   };
 
   return (
@@ -178,7 +171,7 @@ const FollowersList = ({ route, navigation }) => {
         <FlatList
           data={followers}
           renderItem={renderItem}
-          keyExtractor={(item) => item._id}
+          keyExtractor={keyExtractor}
           onEndReached={handleEndReached}
           onEndReachedThreshold={0.5}
           ListFooterComponent={() => loading && hasMore && <ActivityIndicator size="small" color="#ed167e" style={{ marginVertical: 20 }} />}
@@ -299,17 +292,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
   },
-  // followButton: {
-  //   backgroundColor: '#ed167e',
-  //   paddingVertical: 8,
-  //   paddingHorizontal: 15,
-  //   borderRadius: 20,
-  // },
-  // followButtonText: {
-  //   color: 'white',
-  //   fontSize: 14,
-  //   fontWeight: '600',
-  // },
 });
 
 export default FollowersList;

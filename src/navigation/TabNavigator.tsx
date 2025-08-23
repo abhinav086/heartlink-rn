@@ -1,3 +1,4 @@
+// TabNavigator.js - Enhanced with gesture navigation protection
 import React, { useRef, useEffect } from 'react';
 import {
   View,
@@ -8,6 +9,7 @@ import {
   Dimensions,
   ImageSourcePropType,
   GestureResponderEvent,
+  Platform,
 } from 'react-native';
 import { createBottomTabNavigator, BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
 import { useNavigation } from '@react-navigation/native';
@@ -16,7 +18,7 @@ import HomeScreen from '../screens/tabs/HomeScreen';
 import CreateScreen from '../screens/tabs/CreateScreen';
 import WChatScreen from '../screens/tabs/WChatScreen';
 import ProfileScreen from '../screens/tabs/ProfileScreen';
-import ReelsScreen from '../screens/tabs/ReelsScreen'; // Make sure this import is correct
+import ReelsScreen from '../screens/tabs/ReelsScreen';
 import type { TabParamList } from '../types/tabnavigation';
 
 // Centralized theme
@@ -141,6 +143,29 @@ const TabNavigator: React.FC = () => {
     console.log('homeScreenRef.current:', homeScreenRef.current);
   }, []);
 
+  // ENHANCED: Get platform-specific tab navigation options
+  const getTabScreenOptions = () => ({
+    headerShown: false,
+    // CRITICAL: Disable gesture on individual tabs to prevent app exit
+    gestureEnabled: false,
+    // Enhanced Android configuration
+    ...(Platform.OS === 'android' && {
+      gestureDirection: 'horizontal',
+      gestureResponseDistance: {
+        horizontal: 0, // Disable horizontal gestures at tab level
+        vertical: -1,
+      },
+      gestureVelocityImpact: 0,
+    }),
+    // iOS specific configurations
+    ...(Platform.OS === 'ios' && {
+      gestureDirection: 'horizontal',
+      gestureResponseDistance: {
+        horizontal: 0, // Disable horizontal gestures at tab level
+      },
+    }),
+  });
+
   return (
     <Tab.Navigator
       screenOptions={{
@@ -151,6 +176,26 @@ const TabNavigator: React.FC = () => {
           { marginHorizontal: screenWidth * 0.03 },
         ],
         tabBarHideOnKeyboard: false,
+        // ENHANCED: Root level gesture protection
+        gestureEnabled: false,
+        // Prevent tab switching gestures that might interfere with navigation
+        swipeEnabled: false,
+        // Enhanced gesture configuration for tabs
+        ...(Platform.OS === 'android' && {
+          gestureDirection: 'horizontal',
+          gestureResponseDistance: {
+            horizontal: 0, // Completely disable horizontal gestures
+            vertical: -1,
+          },
+          gestureVelocityImpact: 0,
+        }),
+        // iOS specific tab configurations
+        ...(Platform.OS === 'ios' && {
+          gestureDirection: 'horizontal',
+          gestureResponseDistance: {
+            horizontal: 0, // Completely disable horizontal gestures
+          },
+        }),
       }}
     >
       {/* Home Tab */}
@@ -158,6 +203,7 @@ const TabNavigator: React.FC = () => {
         name="Home"
         options={{
           tabBarButton: (props) => <HomeTabButton {...props} homeScreenRef={homeScreenRef} />,
+          ...getTabScreenOptions(),
         }}
       >
         {() => {
@@ -174,6 +220,7 @@ const TabNavigator: React.FC = () => {
           tabBarIcon: ({ focused }) => (
             <TabIcon icon={icons.chat} color={theme.inactive} focused={focused} label="Chat" />
           ),
+          ...getTabScreenOptions(),
         }}
       />
 
@@ -183,6 +230,7 @@ const TabNavigator: React.FC = () => {
         component={CreateScreen}
         options={{
           tabBarButton: (props) => <CreateTabButton {...props} />,
+          ...getTabScreenOptions(),
         }}
       />
 
@@ -200,6 +248,7 @@ const TabNavigator: React.FC = () => {
               label="Reels"
             />
           ),
+          ...getTabScreenOptions(),
         }}
       />
 
@@ -216,6 +265,7 @@ const TabNavigator: React.FC = () => {
               label="Profile"
             />
           ),
+          ...getTabScreenOptions(),
         }}
       />
     </Tab.Navigator>
@@ -236,6 +286,8 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 5,
     elevation: 5,
+    // ENHANCED: Additional z-index to ensure tab bar stays on top
+    zIndex: 1000,
   },
   iconContainer: {
     alignItems: 'center',
@@ -262,6 +314,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     top: Dimensions.get('window').height * -0.03,
+    // ENHANCED: Ensure button stays interactive
+    zIndex: 1001,
   },
   middleButtonWrapper: {
     backgroundColor: theme.primary,

@@ -1,3 +1,4 @@
+// StoryViewer.js - Complete Single File with All Logic
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -9,22 +10,80 @@ import {
   StatusBar,
   ActivityIndicator,
   Alert,
-  PanGestureHandler,
-  Animated
+  Animated,
+  TextInput,
+  ScrollView,
+  FlatList,
+  RefreshControl,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import Video from 'react-native-video';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import Modal from 'react-native-modal';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import BASE_URL from '../../config/config';
+import { useAuth } from '../../context/AuthContext';
 
 const { width, height } = Dimensions.get('window');
+
+// =============================================
+// SIMPLIFIED UTILITY FUNCTIONS
+// =============================================
+
+const getInitials = (name) => {
+  if (!name || typeof name !== 'string' || name === 'Unknown User') return '?';
+  const names = name.trim().split(' ');
+  if (names.length === 1) {
+    return names[0].charAt(0).toUpperCase();
+  }
+  return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
+};
+
+const getAvatarColor = (name) => {
+  const colors = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
+    '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
+  ];
+  if (!name || typeof name !== 'string') return colors[0];
+  const charCodeSum = name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return colors[charCodeSum % colors.length];
+};
+
+const getTimeAgo = (createdAt) => {
+  if (!createdAt) return '';
+  const now = new Date();
+  const storyTime = new Date(createdAt);
+  const diffInMs = now - storyTime;
+  const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+  const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+
+  if (diffInMinutes < 1) return 'now';
+  else if (diffInHours < 1) return `${diffInMinutes}m`;
+  else if (diffInHours < 24) return `${diffInHours}h`;
+  else return `${Math.floor(diffInHours / 24)}d`;
+};
+
+const getValidMediaUrl = (mediaUrl) => {
+  if (!mediaUrl || typeof mediaUrl !== 'string') return null;
+  const trimmedUrl = mediaUrl.trim();
+  if (trimmedUrl === '') return null;
+  if (trimmedUrl.startsWith('http')) return trimmedUrl;
+  else if (trimmedUrl.startsWith('/')) return `${BASE_URL}${trimmedUrl}`;
+  else return trimmedUrl;
+};
+
+// =============================================
+// MAIN STORYVIEWER COMPONENT
+// =============================================
 
 const StoryViewer = () => {
   const navigation = useNavigation();
   const route = useRoute();
   const { stories: initialStories, currentIndex = 0, userName, userAvatar, userId, isOwnStory = false } = route.params;
+  const { user: currentUser, token } = useAuth();
 
+  // Story States
   const [stories, setStories] = useState(initialStories);
   const [currentStoryIndex, setCurrentStoryIndex] = useState(currentIndex);
   const [progress, setProgress] = useState(0);
@@ -32,11 +91,52 @@ const StoryViewer = () => {
   const [paused, setPaused] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [mediaError, setMediaError] = useState(false);
-  
+
+  // Comment Modal States
+  const [showCommentModal, setShowCommentModal] = useState(false);
+  const [comments, setComments] = useState([]);
+  const [commentText, setCommentText] = useState('');
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [refreshingComments, setRefreshingComments] = useState(false);
+
+  // Story Interaction States
+  const [isLiked, setIsLiked] = useState(false);
+  const [likesCount, setLikesCount] = useState(0);
+  const [repliesCount, setRepliesCount] = useState(0);
+  const [liking, setLiking] = useState(false);
+
+  // Inline Reply States
+  const [inlineReplyText, setInlineReplyText] = useState('');
+  const [sendingInlineReply, setSendingInlineReply] = useState(false);
+
+  // Views Tracking States
+  const [viewsCount, setViewsCount] = useState(0);
+  const [viewers, setViewers] = useState([]);
+  const [showViewersModal, setShowViewersModal] = useState(false);
+  const [loadingViewers, setLoadingViewers] = useState(false);
+
+  // Refs
   const progressRef = useRef(new Animated.Value(0)).current;
   const intervalRef = useRef(null);
   const videoRef = useRef(null);
-  const storyDuration = 5000; // 5 seconds per story
+  const commentInputRef = useRef(null);
+  const inlineInputRef = useRef(null);
+
+  // Constants
+  const storyDuration = 5000;
+  const MAX_COMMENT_LENGTH = 500;
+
+  // Auth Headers Helper
+  const getAuthHeaders = () => ({
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    'Accept': 'application/json'
+  });
+
+  // =============================================
+  // EFFECTS
+  // =============================================
 
   useEffect(() => {
     StatusBar.setHidden(true);
@@ -45,229 +145,46 @@ const StoryViewer = () => {
 
   useEffect(() => {
     if (stories && stories.length > 0) {
-      setMediaError(false); // Reset media error for new story
+      setMediaError(false);
       startStoryProgress();
       markStoryAsViewed(stories[currentStoryIndex]);
-      checkStoryExpiration(stories[currentStoryIndex]);
-    }
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+      const currentStory = stories[currentStoryIndex];
+      if (currentStory) {
+        setIsLiked(!!currentStory.isLiked || !!currentStory.liked || false);
+        setLikesCount(currentStory.likesCount || currentStory.likes?.length || 0);
+        setRepliesCount(currentStory.repliesCount || currentStory.replies?.length || 0);
+        setViewsCount(currentStory.viewsCount || currentStory.views?.length || 0);
       }
+    }
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [currentStoryIndex, stories]);
 
-  // Enhanced avatar handling matching AllStories component
-  const getInitials = (name) => {
-    if (!name || typeof name !== 'string' || name === 'Unknown User') return '?';
-    const names = name.trim().split(' ');
-    if (names.length === 1) {
-      return names[0].charAt(0).toUpperCase();
-    }
-    return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
-  };
-
-  const getAvatarColor = (name) => {
-    const colors = [
-      '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
-      '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
-    ];
-    
-    if (!name || typeof name !== 'string') return colors[0];
-    const charCodeSum = name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
-    return colors[charCodeSum % colors.length];
-  };
-
-  // Enhanced media URL validation
-  const getValidMediaUrl = (mediaUrl) => {
-    if (!mediaUrl || typeof mediaUrl !== 'string') return null;
-    
-    const trimmedUrl = mediaUrl.trim();
-    if (trimmedUrl === '') return null;
-    
-    // Handle relative URLs by making them absolute if needed
-    if (trimmedUrl.startsWith('http')) {
-      return trimmedUrl;
-    } else if (trimmedUrl.startsWith('/')) {
-      return `${BASE_URL}${trimmedUrl}`;
-    } else {
-      return trimmedUrl;
-    }
-  };
-
-  // Enhanced avatar URL validation
-  const getValidAvatarUrl = (avatarUrl) => {
-    if (!avatarUrl || typeof avatarUrl !== 'string') return null;
-    
-    const trimmedUrl = avatarUrl.trim();
-    if (trimmedUrl === '') return null;
-    
-    // Handle relative URLs by making them absolute if needed
-    if (trimmedUrl.startsWith('http')) {
-      return trimmedUrl;
-    } else if (trimmedUrl.startsWith('/')) {
-      return `${BASE_URL}${trimmedUrl}`;
-    } else {
-      return trimmedUrl;
-    }
-  };
-
-  const checkStoryExpiration = (story) => {
-    if (!story || !isOwnStory) return;
-
-    const now = new Date();
-    const storyTime = new Date(story.createdAt);
-    const diffInHours = (now - storyTime) / (1000 * 60 * 60);
-
-    // Auto-delete stories older than 24 hours
-    if (diffInHours >= 24) {
-      console.log('Story expired, auto-deleting:', story._id);
-      handleDeleteStory(story._id, true); // true for silent deletion
-    }
-  };
+  // =============================================
+  // STORY PROGRESS FUNCTIONS
+  // =============================================
 
   const startStoryProgress = () => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-    }
-
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (showCommentModal || showViewersModal) return;
+    
     progressRef.setValue(0);
     setProgress(0);
-
-    const progressStep = 100 / (storyDuration / 50); // Update every 50ms
-
+    const progressStep = 100 / (storyDuration / 50);
+    
     intervalRef.current = setInterval(() => {
-      if (!paused && !mediaError) {
+      if (!paused && !mediaError && !showCommentModal && !showViewersModal) {
         setProgress(prev => {
           const newProgress = prev + progressStep;
           if (newProgress >= 100) {
             handleNextStory();
-            return 0; // Reset progress for the next story
+            return 0;
           }
           return newProgress;
         });
       }
     }, 50);
-  };
-
-  const markStoryAsViewed = async (story) => {
-    if (!story || isOwnStory) return;
-
-    try {
-      const token = await AsyncStorage.getItem('token');
-      if (!token) {
-        console.warn('No token found for marking story as viewed.');
-        return;
-      }
-
-      const response = await fetch(`${BASE_URL}/api/v1/stories/stories/${story._id}/view`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (response.ok) {
-        console.log('Story marked as viewed:', story._id);
-      } else {
-        const errorData = await response.json();
-        console.error('Failed to mark story as viewed:', response.status, errorData);
-      }
-    } catch (error) {
-      console.error('Error marking story as viewed:', error);
-    }
-  };
-
-  const handleDeleteStory = async (storyId, silent = false) => {
-    try {
-      setDeleting(true);
-      const token = await AsyncStorage.getItem('token');
-      
-      if (!token) {
-        if (!silent) {
-          Alert.alert('Error', 'Authentication token not found');
-        }
-        return;
-      }
-
-      const response = await fetch(`${BASE_URL}/api/v1/stories/stories/${storyId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (response.ok) {
-        const responseData = await response.json();
-        console.log('Story deleted successfully:', responseData);
-
-        // Remove the deleted story from the current stories array
-        const updatedStories = stories.filter(story => story._id !== storyId);
-        setStories(updatedStories);
-
-        if (!silent) {
-          Alert.alert('Success', 'Story deleted successfully');
-        }
-
-        // If no more stories, go back
-        if (updatedStories.length === 0) {
-          navigation.goBack();
-          return;
-        }
-
-        // Adjust current index if necessary
-        if (currentStoryIndex >= updatedStories.length) {
-          setCurrentStoryIndex(updatedStories.length - 1);
-        } else if (currentStoryIndex > 0 && currentStoryIndex >= updatedStories.length) {
-          handlePreviousStory();
-        } else {
-          // Restart progress for the current story
-          startStoryProgress();
-        }
-
-      } else {
-        const errorData = await response.json();
-        console.error('Failed to delete story:', response.status, errorData);
-        
-        if (!silent) {
-          Alert.alert(
-            'Error', 
-            errorData.message || 'Failed to delete story. Please try again.'
-          );
-        }
-      }
-    } catch (error) {
-      console.error('Error deleting story:', error);
-      if (!silent) {
-        Alert.alert('Error', 'Network error. Please check your connection and try again.');
-      }
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  const confirmDeleteStory = () => {
-    const currentStory = stories[currentStoryIndex];
-    if (!currentStory) return;
-
-    Alert.alert(
-      'Delete Story',
-      'Are you sure you want to delete this story? This action cannot be undone.',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => handleDeleteStory(currentStory._id),
-        },
-      ]
-    );
   };
 
   const handleNextStory = () => {
@@ -286,173 +203,473 @@ const StoryViewer = () => {
     }
   };
 
-  const handlePress = (event) => {
-    const { locationX } = event.nativeEvent;
-    const screenWidth = width;
-    
-    if (locationX < screenWidth / 2) {
-      handlePreviousStory();
-    } else {
-      handleNextStory();
+  // =============================================
+  // API FUNCTIONS
+  // =============================================
+
+  const markStoryAsViewed = async (story) => {
+    if (!story || isOwnStory) return;
+    try {
+      await fetch(`${BASE_URL}/api/v1/stories/stories/${story._id}/view`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+      });
+    } catch (error) {
+      console.error('Error marking story as viewed:', error);
     }
   };
 
-  const handleLongPress = () => {
-    setPaused(true);
+  const loadComments = async () => {
+    const currentStory = stories[currentStoryIndex];
+    if (!currentStory) return;
+
+    try {
+      setLoadingComments(true);
+      console.log('💬 Loading comments for story:', currentStory._id);
+      console.log('💬 API URL:', `${BASE_URL}/api/v1/stories/${currentStory._id}/replies`);
+      
+      const response = await fetch(`${BASE_URL}/api/v1/stories/${currentStory._id}/replies`, {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      });
+
+      console.log('💬 Comments API response status:', response.status);
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('💬 RAW API RESPONSE:', JSON.stringify(result, null, 2));
+        
+        if (result.success && result.data) {
+          const replies = result.data.replies || [];
+          console.log('💬 REPLIES ARRAY LENGTH:', replies.length);
+          
+          // COMPREHENSIVE DEBUG LOG FOR EACH REPLY
+          replies.forEach((reply, index) => {
+            console.log(`👤 REPLY ${index + 1} COMPLETE DATA:`, {
+              replyId: reply._id,
+              text: reply.text?.substring(0, 20) + '...',
+              user: reply.user,
+              userExists: !!reply.user,
+              userId: reply.user?._id,
+              username: reply.user?.username,
+              fullName: reply.user?.fullName,
+              photoUrl: reply.user?.photoUrl,
+              photoUrlType: typeof reply.user?.photoUrl,
+              photoUrlLength: reply.user?.photoUrl?.length,
+              hasPhotoUrl: !!reply.user?.photoUrl,
+              userKeys: reply.user ? Object.keys(reply.user) : []
+            });
+          });
+          
+          setComments(replies);
+          setRepliesCount(result.data.totalReplies || replies.length);
+        } else {
+          console.error('❌ Comments API returned success=false:', result);
+        }
+      } else {
+        console.error('❌ Comments API failed with status:', response.status);
+        const errorText = await response.text();
+        console.error('❌ Comments API error response:', errorText);
+      }
+    } catch (error) {
+      console.error('❌ Error loading comments:', error);
+    } finally {
+      setLoadingComments(false);
+      setRefreshingComments(false);
+    }
   };
 
-  const handlePressOut = () => {
-    setPaused(false);
-  };
-
-  const handleClose = () => {
-    navigation.goBack();
-  };
-
-  const handleMediaError = (error, mediaType) => {
-    console.error(`${mediaType} load error:`, error);
-    setMediaError(true);
-    setLoading(false);
+  const addComment = async () => {
+    const trimmedComment = commentText.trim();
+    const currentStory = stories[currentStoryIndex];
     
-    // Don't show alert for every media error, just log it
-    console.warn(`Could not load ${mediaType.toLowerCase()}`);
+    if (!trimmedComment || !currentStory || !currentUser) return;
+
+    try {
+      setSubmittingComment(true);
+      const response = await fetch(`${BASE_URL}/api/v1/stories/${currentStory._id}/reply`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ text: trimmedComment }),
+      });
+
+      if (response.ok) {
+        const newComment = {
+          _id: Date.now().toString(),
+          text: trimmedComment,
+          user: {
+            _id: currentUser._id,
+            username: currentUser.username,
+            fullName: currentUser.fullName || currentUser.username,
+            photoUrl: currentUser.photoUrl,
+          },
+          repliedAt: new Date().toISOString(),
+        };
+        
+        setComments(prev => [newComment, ...prev]);
+        setRepliesCount(prev => prev + 1);
+        setCommentText('');
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to add comment');
+    } finally {
+      setSubmittingComment(false);
+    }
   };
 
-  const renderProgressBar = () => {
+  const handleLikeStory = async () => {
+    if (liking || isOwnStory) return;
+    const currentStory = stories[currentStoryIndex];
+    if (!currentStory) return;
+
+    try {
+      setLiking(true);
+      const wasLiked = isLiked;
+      setIsLiked(!wasLiked);
+      setLikesCount(prev => wasLiked ? Math.max(0, prev - 1) : prev + 1);
+
+      const method = wasLiked ? 'DELETE' : 'POST';
+      const response = await fetch(`${BASE_URL}/api/v1/stories/${currentStory._id}/like`, {
+        method,
+        headers: getAuthHeaders(),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        if (result.data) {
+          setIsLiked(result.data.isLiked ?? !wasLiked);
+          setLikesCount(result.data.likesCount ?? likesCount);
+        }
+      }
+    } catch (error) {
+      console.error('Error updating like:', error);
+      setIsLiked(isLiked);
+      setLikesCount(likesCount);
+    } finally {
+      setLiking(false);
+    }
+  };
+
+  const addInlineReply = async () => {
+    const trimmedReply = inlineReplyText.trim();
+    const currentStory = stories[currentStoryIndex];
+    
+    if (!trimmedReply || !currentStory || !currentUser) return;
+
+    try {
+      setSendingInlineReply(true);
+      const response = await fetch(`${BASE_URL}/api/v1/stories/${currentStory._id}/reply`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ text: trimmedReply }),
+      });
+
+      if (response.ok) {
+        setRepliesCount(prev => prev + 1);
+        setInlineReplyText('');
+        inlineInputRef.current?.blur();
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to send reply');
+    } finally {
+      setSendingInlineReply(false);
+    }
+  };
+
+  const loadViewers = async () => {
+    const currentStory = stories[currentStoryIndex];
+    if (!currentStory || !isOwnStory) return;
+
+    try {
+      setLoadingViewers(true);
+      console.log('🔍 Loading viewers for story:', currentStory._id);
+      
+      const response = await fetch(`${BASE_URL}/api/v1/stories/stories/${currentStory._id}/viewers`, {
+        method: 'GET',
+        headers: getAuthHeaders(),
+      });
+
+      console.log('👥 Viewers API response status:', response.status);
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('👥 Viewers API full response:', result);
+        
+        if (result.success && result.data) {
+          const viewersData = result.data.viewers || [];
+          console.log('👥 Processed viewers data:', viewersData);
+          
+          // Log each viewer's structure
+          viewersData.forEach((viewer, index) => {
+            console.log(`👤 Viewer ${index}:`, {
+              id: viewer._id || viewer.user?._id,
+              user: viewer.user,
+              directFields: {
+                fullName: viewer.fullName,
+                username: viewer.username, 
+                photoUrl: viewer.photoUrl
+              },
+              userFields: {
+                fullName: viewer.user?.fullName,
+                username: viewer.user?.username,
+                photoUrl: viewer.user?.photoUrl
+              }
+            });
+          });
+          
+          setViewers(viewersData);
+          setViewsCount(result.data.pagination?.totalViewers || viewersData.length || 0);
+        } else {
+          console.error('❌ Viewers API returned success=false:', result);
+        }
+      } else {
+        console.error('❌ Viewers API failed with status:', response.status);
+        const errorText = await response.text();
+        console.error('❌ Viewers API error response:', errorText);
+      }
+    } catch (error) {
+      console.error('❌ Error loading viewers:', error);
+    } finally {
+      setLoadingViewers(false);
+    }
+  };
+
+  // =============================================
+  // MODALS
+  // =============================================
+
+  const openCommentsModal = () => {
+    setShowCommentModal(true);
+    setPaused(true);
+    loadComments();
+  };
+
+  const closeCommentsModal = () => {
+    setShowCommentModal(false);
+    setPaused(false);
+    startStoryProgress();
+  };
+
+  const openViewersModal = () => {
+    if (!isOwnStory) return;
+    setShowViewersModal(true);
+    setPaused(true);
+    loadViewers();
+  };
+
+  const closeViewersModal = () => {
+    setShowViewersModal(false);
+    setPaused(false);
+    startStoryProgress();
+  };
+
+  // =============================================
+  // RENDER FUNCTIONS
+  // =============================================
+
+  const renderComment = ({ item: comment }) => {
+    const user = comment.user || {};
+    const username = user.fullName || user.username || 'Unknown User';
+    const userInitials = getInitials(username);
+    const avatarColor = getAvatarColor(username);
+    const isOwnComment = currentUser && (user._id === currentUser._id);
+
+    // ULTRA COMPREHENSIVE DEBUG FOR EACH RENDER
+    console.log(`🖼️ RENDERING COMMENT AVATAR:`, {
+      commentId: comment._id,
+      userId: user._id,
+      username: username,
+      rawPhotoUrl: user.photoUrl,
+      photoUrlExists: !!user.photoUrl,
+      photoUrlType: typeof user.photoUrl,
+      photoUrlValue: JSON.stringify(user.photoUrl),
+      userObject: JSON.stringify(user),
+      willShowImage: !!user.photoUrl,
+      fallbackInitials: userInitials,
+      fallbackColor: avatarColor
+    });
+
     return (
-      <View style={styles.progressContainer}>
-        {stories.map((_, index) => (
-          <View key={index} style={styles.progressBarBackground}>
-            <Animated.View
-              style={[
-                styles.progressBarFill,
-                {
-                  width: index === currentStoryIndex 
-                    ? `${progress}%` 
-                    : index < currentStoryIndex 
-                    ? '100%' 
-                    : '0%'
-                }
-              ]}
-            />
+      <View style={styles.commentItem}>
+        <View style={styles.commentAvatar}>
+          <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+            {user.photoUrl ? (
+              <Image
+                source={{ 
+                  uri: user.photoUrl,
+                  cache: 'reload' // FORCE RELOAD EVERY TIME
+                }}
+                style={styles.avatarImage}
+                onError={(error) => {
+                  console.log('❌ COMMENT IMAGE FAILED:', {
+                    username,
+                    photoUrl: user.photoUrl,
+                    error: error.nativeEvent?.error,
+                    errorMessage: error.nativeEvent?.message
+                  });
+                }}
+                onLoad={() => {
+                  console.log('✅ COMMENT IMAGE SUCCESS:', {
+                    username,
+                    photoUrl: user.photoUrl
+                  });
+                }}
+                onLoadStart={() => {
+                  console.log('🔄 COMMENT IMAGE LOADING STARTED:', user.photoUrl);
+                }}
+                onLoadEnd={() => {
+                  console.log('🏁 COMMENT IMAGE LOADING ENDED:', user.photoUrl);
+                }}
+              />
+            ) : (
+              <Text style={styles.avatarText}>{userInitials}</Text>
+            )}
           </View>
-        ))}
+        </View>
+
+        <View style={styles.commentContent}>
+          <View style={styles.commentBubble}>
+            <View style={styles.commentHeader}>
+              <Text style={styles.commentUsername}>{username}</Text>
+              {user.isVerified && (
+                <Ionicons name="checkmark-circle" size={14} color="#1DA1F2" style={styles.verifiedIcon} />
+              )}
+            </View>
+            <Text style={styles.commentText}>{comment.text}</Text>
+          </View>
+          <Text style={styles.commentTime}>{getTimeAgo(comment.repliedAt)}</Text>
+        </View>
+
+        {isOwnComment && (
+          <View style={styles.commentActions}>
+            <Text style={styles.ownCommentIndicator}>•</Text>
+          </View>
+        )}
       </View>
     );
   };
+
+  const renderViewer = ({ item: viewer }) => {
+    const user = viewer.user || viewer || {}; // Handle both viewer.user and direct viewer object
+    const username = user.fullName || user.username || 'Unknown User';
+    const userInitials = getInitials(username);
+    const avatarColor = getAvatarColor(username);
+
+    // Debug logging for viewer data structure
+    console.log('🔍 Rendering viewer:', {
+      viewerId: user._id,
+      username: username,
+      photoUrl: user.photoUrl,
+      hasPhotoUrl: !!user.photoUrl,
+      viewerStructure: viewer
+    });
+
+    return (
+      <View style={styles.viewerItem}>
+        <View style={styles.viewerAvatar}>
+          <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
+            {user.photoUrl ? (
+              <Image 
+                source={{ 
+                  uri: user.photoUrl,
+                  cache: 'force-cache'
+                }} 
+                style={styles.avatarImage}
+                onError={(error) => {
+                  console.log('❌ Viewer image load error:', user.photoUrl, error.nativeEvent?.error);
+                }}
+                onLoad={() => {
+                  console.log('✅ Viewer image loaded successfully:', user.photoUrl);
+                }}
+                onLoadStart={() => {
+                  console.log('🔄 Viewer image load started:', user.photoUrl);
+                }}
+              />
+            ) : (
+              <Text style={styles.avatarText}>{userInitials}</Text>
+            )}
+          </View>
+        </View>
+
+        <View style={styles.viewerInfo}>
+          <View style={styles.viewerNameContainer}>
+            <Text style={styles.viewerName}>{username}</Text>
+            {user.isVerified && (
+              <Ionicons name="checkmark-circle" size={16} color="#1DA1F2" style={styles.verifiedIcon} />
+            )}
+          </View>
+          <Text style={styles.viewerTime}>{viewer.timeAgo || 'Recently'}</Text>
+        </View>
+      </View>
+    );
+  };
+
+  const renderProgressBar = () => (
+    <View style={styles.progressContainer}>
+      {stories.map((_, index) => (
+        <View key={index} style={styles.progressBarBackground}>
+          <Animated.View
+            style={[
+              styles.progressBarFill,
+              {
+                width: index === currentStoryIndex
+                  ? `${progress}%`
+                  : index < currentStoryIndex
+                    ? '100%'
+                    : '0%'
+              }
+            ]}
+          />
+        </View>
+      ))}
+    </View>
+  );
 
   const renderUserHeader = () => {
     const currentStory = stories[currentStoryIndex];
-    const validAvatarUrl = getValidAvatarUrl(userAvatar);
-
+    
     return (
       <View style={styles.userHeader}>
         <View style={styles.userInfo}>
-          {validAvatarUrl ? (
-            <Image 
-              source={{ uri: validAvatarUrl }} 
-              style={styles.userAvatar}
-              onError={(error) => {
-                console.log('Avatar load error for user:', userName, error.nativeEvent.error);
-              }}
-            />
-          ) : (
-            <View style={[
-              styles.userAvatar, 
-              styles.placeholderAvatar,
-              { backgroundColor: getAvatarColor(userName) }
-            ]}>
-              <Text style={styles.avatarText}>
-                {getInitials(userName)}
-              </Text>
-            </View>
-          )}
+          <View style={[styles.userAvatarContainer, { backgroundColor: getAvatarColor(userName) }]}>
+            {userAvatar ? (
+              <Image 
+                source={{ 
+                  uri: userAvatar,
+                  cache: 'force-cache'
+                }} 
+                style={styles.userAvatar}
+                onError={(error) => {
+                  console.log('❌ Story user avatar load error:', userAvatar, error.nativeEvent?.error);
+                }}
+                onLoad={() => {
+                  console.log('✅ Story user avatar loaded successfully:', userAvatar);
+                }}
+              />
+            ) : (
+              <Text style={styles.avatarText}>{getInitials(userName)}</Text>
+            )}
+          </View>
           <Text style={styles.userName}>{userName || 'Unknown User'}</Text>
-          <Text style={styles.storyTime}>
-            {getTimeAgo(currentStory?.createdAt)}
-          </Text>
+          <Text style={styles.storyTime}>{getTimeAgo(currentStory?.createdAt)}</Text>
         </View>
-        
-        <View style={styles.headerActions}>
-          {/* Delete button - only show for own stories */}
-          {isOwnStory && (
-            <TouchableOpacity 
-              onPress={confirmDeleteStory} 
-              style={styles.deleteButton}
-              disabled={deleting}
-            >
-              {deleting ? (
-                <ActivityIndicator size="small" color="white" />
-              ) : (
-                <Ionicons name="trash-outline" size={24} color="white" />
-              )}
-            </TouchableOpacity>
-          )}
-          
-          <TouchableOpacity onPress={handleClose} style={styles.closeButton}>
-            <Ionicons name="close" size={28} color="white" />
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeButton}>
+          <Ionicons name="close" size={28} color="white" />
+        </TouchableOpacity>
       </View>
     );
-  };
-
-  const getTimeAgo = (createdAt) => {
-    if (!createdAt) return '';
-    
-    const now = new Date();
-    const storyTime = new Date(createdAt);
-    const diffInMs = now - storyTime;
-    const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
-    const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
-    
-    if (diffInMinutes < 1) {
-      return 'now';
-    } else if (diffInHours < 1) {
-      return `${diffInMinutes}m`;
-    } else if (diffInHours < 24) {
-      return `${diffInHours}h`;
-    } else {
-      return `${Math.floor(diffInHours / 24)}d`;
-    }
   };
 
   const renderStoryContent = () => {
     const currentStory = stories[currentStoryIndex];
-    
-    if (!currentStory) {
-      return (
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Story not found</Text>
-        </View>
-      );
-    }
+    if (!currentStory) return null;
 
     const validMediaUrl = getValidMediaUrl(currentStory.mediaUrl);
-    
-    if (!validMediaUrl) {
+    if (!validMediaUrl || mediaError) {
       return (
         <View style={styles.errorContainer}>
           <Ionicons name="image-outline" size={80} color="#666" />
           <Text style={styles.errorText}>Media not available</Text>
-        </View>
-      );
-    }
-
-    if (mediaError) {
-      return (
-        <View style={styles.errorContainer}>
-          <Ionicons name="warning-outline" size={80} color="#666" />
-          <Text style={styles.errorText}>Failed to load media</Text>
-          <TouchableOpacity 
-            style={styles.retryButton}
-            onPress={() => {
-              setMediaError(false);
-              setLoading(true);
-            }}
-          >
-            <Text style={styles.retryText}>Tap to retry</Text>
-          </TouchableOpacity>
         </View>
       );
     }
@@ -466,42 +683,45 @@ const StoryViewer = () => {
           paused={paused}
           repeat={false}
           resizeMode="cover"
-          onLoad={() => {
-            setLoading(false);
-            setMediaError(false);
-          }}
+          onLoad={() => setLoading(false)}
           onLoadStart={() => setLoading(true)}
-          onError={(error) => handleMediaError(error, 'Video')}
-          onBuffer={({ isBuffering }) => setLoading(isBuffering)}
-        />
-      );
-    } else {
-      return (
-        <Image
-          source={{ uri: validMediaUrl }}
-          style={styles.media}
-          resizeMode="cover"
-          onLoadStart={() => setLoading(true)}
-          onLoad={() => {
-            setLoading(false);
-            setMediaError(false);
-          }}
-          onError={(error) => handleMediaError(error.nativeEvent.error, 'Image')}
+          onError={() => setMediaError(true)}
         />
       );
     }
+
+    return (
+      <Image
+        source={{ uri: validMediaUrl }}
+        style={styles.media}
+        resizeMode="cover"
+        onLoadStart={() => setLoading(true)}
+        onLoad={() => setLoading(false)}
+        onError={() => setMediaError(true)}
+      />
+    );
   };
+
+  const handlePress = (event) => {
+    if (showCommentModal || showViewersModal) return;
+    const { locationX } = event.nativeEvent;
+    if (locationX < width / 2) {
+      handlePreviousStory();
+    } else {
+      handleNextStory();
+    }
+  };
+
+  // =============================================
+  // MAIN RENDER
+  // =============================================
 
   if (!stories || stories.length === 0) {
     return (
       <View style={styles.container}>
         <View style={styles.errorContainer}>
-          <Ionicons name="albums-outline" size={80} color="#666" />
           <Text style={styles.errorText}>No stories available</Text>
         </View>
-        <TouchableOpacity onPress={handleClose} style={styles.closeButtonCenter}>
-          <Ionicons name="close" size={32} color="white" />
-        </TouchableOpacity>
       </View>
     );
   }
@@ -511,40 +731,253 @@ const StoryViewer = () => {
       <TouchableOpacity
         style={styles.overlay}
         onPress={handlePress}
-        onLongPress={handleLongPress}
-        onPressOut={handlePressOut}
+        onLongPress={() => setPaused(true)}
+        onPressOut={() => setPaused(false)}
         activeOpacity={1}
       >
         {renderStoryContent()}
         
-        {loading && !mediaError && (
+        {loading && (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator size="large" color="white" />
-            <Text style={styles.loadingText}>Loading...</Text>
           </View>
         )}
-        
+
         <View style={styles.topOverlay}>
           {renderProgressBar()}
           {renderUserHeader()}
         </View>
-        
-        {paused && !loading && !mediaError && (
-          <View style={styles.pausedIndicator}>
-            <Ionicons name="pause" size={50} color="white" />
-          </View>
+
+        {/* Views Indicator */}
+        {isOwnStory && (
+          <TouchableOpacity onPress={openViewersModal} style={styles.viewsIndicator}>
+            <Ionicons name="eye" size={20} color="white" />
+            <Text style={styles.viewsCount}>{viewsCount}</Text>
+          </TouchableOpacity>
         )}
 
-        {deleting && (
-          <View style={styles.deletingOverlay}>
-            <ActivityIndicator size="large" color="white" />
-            <Text style={styles.deletingText}>Deleting story...</Text>
+        {/* Bottom Actions */}
+        <View style={styles.bottomActions}>
+          <TouchableOpacity onPress={openCommentsModal} style={styles.actionButton}>
+            <Ionicons name="chatbubble-outline" size={26} color="white" />
+          </TouchableOpacity>
+
+          <View style={styles.replyInputContainer}>
+            <TextInput
+              ref={inlineInputRef}
+              style={styles.replyTextInput}
+              placeholder="Send message"
+              placeholderTextColor="rgba(255,255,255,0.6)"
+              value={inlineReplyText}
+              onChangeText={setInlineReplyText}
+              returnKeyType="send"
+              onSubmitEditing={addInlineReply}
+              onFocus={() => setPaused(true)}
+              onBlur={() => {
+                setPaused(false);
+                startStoryProgress();
+              }}
+            />
+            {inlineReplyText.trim() && (
+              <TouchableOpacity onPress={addInlineReply} style={styles.inlineSendButton}>
+                {sendingInlineReply ? (
+                  <ActivityIndicator size="small" color="white" />
+                ) : (
+                  <Ionicons name="send" size={18} color="white" />
+                )}
+              </TouchableOpacity>
+            )}
           </View>
-        )}
+
+          {!isOwnStory && (
+            <TouchableOpacity onPress={handleLikeStory} style={styles.actionButton}>
+              {liking ? (
+                <ActivityIndicator size="small" color="white" />
+              ) : (
+                <Ionicons
+                  name={isLiked ? "heart" : "heart-outline"}
+                  size={26}
+                  color={isLiked ? "#ff3040" : "white"}
+                />
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
       </TouchableOpacity>
+
+      {/* Comments Modal */}
+      <Modal
+        isVisible={showCommentModal}
+        onBackdropPress={closeCommentsModal}
+        onBackButtonPress={closeCommentsModal}
+        onSwipeComplete={closeCommentsModal}
+        swipeDirection={['down']}
+        style={styles.modal}
+        propagateSwipe={true}
+        avoidKeyboard={true}
+      >
+        <View style={styles.modalContainer}>
+          <KeyboardAvoidingView
+            style={styles.keyboardContainer}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          >
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={closeCommentsModal}>
+                <Ionicons name="close" size={24} color="white" />
+              </TouchableOpacity>
+              <Text style={styles.modalHeaderTitle}>Replies</Text>
+              <View style={{ width: 24 }} />
+            </View>
+
+            <FlatList
+              data={comments}
+              renderItem={renderComment}
+              keyExtractor={(item) => item._id}
+              style={styles.commentsContainer}
+              showsVerticalScrollIndicator={false}
+              refreshControl={
+                <RefreshControl
+                  refreshing={refreshingComments}
+                  onRefresh={loadComments}
+                  tintColor="#fff"
+                />
+              }
+              ListEmptyComponent={
+                loadingComments ? (
+                  <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color="#1DA1F2" />
+                  </View>
+                ) : (
+                  <View style={styles.emptyContainer}>
+                    <Ionicons name="chatbubble-outline" size={50} color="#666" />
+                    <Text style={styles.emptyText}>No replies yet</Text>
+                  </View>
+                )
+              }
+              ListHeaderComponent={
+                comments.length > 0 ? (
+                  <View style={{ padding: 10, backgroundColor: '#333', marginBottom: 10, borderRadius: 5 }}>
+                    <Text style={{ color: 'white', fontWeight: 'bold' }}>API DEBUG INFO:</Text>
+                    <Text style={{ color: 'yellow', fontSize: 12 }}>
+                      Total Comments: {comments.length}
+                    </Text>
+                    {comments.slice(0, 3).map((comment, index) => (
+                      <Text key={index} style={{ color: 'cyan', fontSize: 10 }}>
+                        {index + 1}: {comment.user?.username || 'NO_USERNAME'} - 
+                        photoUrl: {comment.user?.photoUrl ? 'EXISTS' : 'MISSING'} - 
+                        URL: {(comment.user?.photoUrl || 'N/A').substring(0, 50)}...
+                      </Text>
+                    ))}
+                  </View>
+                ) : null
+              }
+            />
+
+            <View style={styles.inputContainer}>
+              <View style={styles.currentUserAvatar}>
+                {currentUser && (
+                  <View style={[styles.avatar, { backgroundColor: getAvatarColor(currentUser.fullName || currentUser.username) }]}>
+                    {currentUser.photoUrl ? (
+                      <Image 
+                        source={{ 
+                          uri: currentUser.photoUrl,
+                          cache: 'force-cache'
+                        }} 
+                        style={styles.avatarImage}
+                        onError={(error) => {
+                          console.log('❌ Current user avatar load error:', currentUser.photoUrl, error.nativeEvent?.error);
+                        }}
+                        onLoad={() => {
+                          console.log('✅ Current user avatar loaded successfully:', currentUser.photoUrl);
+                        }}
+                      />
+                    ) : (
+                      <Text style={styles.avatarText}>
+                        {getInitials(currentUser.fullName || currentUser.username)}
+                      </Text>
+                    )}
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.inputWrapper}>
+                <TextInput
+                  ref={commentInputRef}
+                  style={styles.textInput}
+                  placeholder="Add a reply..."
+                  placeholderTextColor="#666"
+                  value={commentText}
+                  onChangeText={setCommentText}
+                  multiline
+                  maxLength={MAX_COMMENT_LENGTH}
+                />
+                <Text style={styles.characterCount}>
+                  {commentText.length}/{MAX_COMMENT_LENGTH}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.sendButton, (!commentText.trim() || submittingComment) && styles.sendButtonDisabled]}
+                onPress={addComment}
+                disabled={!commentText.trim() || submittingComment}
+              >
+                {submittingComment ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="send" size={20} color="white" />
+                )}
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Views Modal */}
+      <Modal
+        isVisible={showViewersModal}
+        onBackdropPress={closeViewersModal}
+        onBackButtonPress={closeViewersModal}
+        onSwipeComplete={closeViewersModal}
+        swipeDirection={['down']}
+        style={styles.modal}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={closeViewersModal}>
+              <Ionicons name="close" size={24} color="white" />
+            </TouchableOpacity>
+            <Text style={styles.modalHeaderTitle}>{viewsCount} Views</Text>
+            <View style={{ width: 24 }} />
+          </View>
+
+          <FlatList
+            data={viewers}
+            renderItem={renderViewer}
+            keyExtractor={(item) => item._id}
+            style={styles.viewersContainer}
+            showsVerticalScrollIndicator={false}
+            ListEmptyComponent={
+              loadingViewers ? (
+                <View style={styles.loadingContainer}>
+                  <ActivityIndicator size="large" color="#1DA1F2" />
+                </View>
+              ) : (
+                <View style={styles.emptyContainer}>
+                  <Ionicons name="eye-outline" size={50} color="#666" />
+                  <Text style={styles.emptyText}>No views yet</Text>
+                </View>
+              )
+            }
+          />
+        </View>
+      </Modal>
     </View>
   );
 };
+
+// =============================================
+// STYLES
+// =============================================
 
 const styles = StyleSheet.create({
   container: {
@@ -559,6 +992,24 @@ const styles = StyleSheet.create({
     width: width,
     height: height,
   },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorText: {
+    color: 'white',
+    fontSize: 18,
+    marginTop: 15,
+  },
+  
+  // Top Section
   topOverlay: {
     position: 'absolute',
     top: 0,
@@ -595,20 +1046,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flex: 1,
   },
-  userAvatar: {
+  userAvatarContainer: {
     width: 35,
     height: 35,
     borderRadius: 17.5,
     marginRight: 10,
-  },
-  placeholderAvatar: {
     justifyContent: 'center',
     alignItems: 'center',
   },
-  avatarText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
+  userAvatar: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 17.5,
   },
   userName: {
     color: 'white',
@@ -620,85 +1069,269 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     fontSize: 14,
   },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  deleteButton: {
-    padding: 5,
-    marginRight: 10,
-    backgroundColor: 'rgba(255, 0, 0, 0.2)',
-    borderRadius: 20,
-    width: 38,
-    height: 38,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   closeButton: {
     padding: 5,
   },
-  closeButtonCenter: {
+
+  // Views Indicator
+  viewsIndicator: {
     position: 'absolute',
-    top: 50,
-    right: 20,
-    padding: 10,
-  },
-  loadingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
+    left: 16,
+    bottom: 100,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
   },
-  loadingText: {
+  viewsCount: {
     color: 'white',
-    fontSize: 16,
-    marginTop: 10,
-    fontWeight: '500',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
   },
-  pausedIndicator: {
+
+  // Bottom Actions
+  bottomActions: {
     position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -25 }, { translateY: -25 }],
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 25,
-    padding: 10,
-  },
-  deletingOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    paddingBottom: 35,
+    backgroundColor: 'rgba(0,0,0,0.7)',
   },
-  deletingText: {
-    color: 'white',
-    fontSize: 16,
-    marginTop: 10,
-    fontWeight: '500',
+  actionButton: {
+    padding: 8,
+    minWidth: 50,
   },
-  errorContainer: {
+  replyInputContainer: {
     flex: 1,
+    marginHorizontal: 12,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.15)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  replyTextInput: {
+    flex: 1,
+    color: 'white',
+    fontSize: 15,
+    paddingRight: 8,
+  },
+  inlineSendButton: {
+    padding: 6,
+    borderRadius: 15,
+    backgroundColor: '#1DA1F2',
+    width: 30,
+    height: 30,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 20,
   },
-  errorText: {
+
+  // Modal Styles
+  modal: {
+    justifyContent: 'flex-end',
+    margin: 0,
+  },
+  modalContainer: {
+    backgroundColor: '#000',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '85%',
+    minHeight: '60%',
+  },
+  keyboardContainer: {
+    flex: 1,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 15,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+  },
+  modalHeaderTitle: {
     color: 'white',
     fontSize: 18,
-    textAlign: 'center',
+    fontWeight: '600',
+  },
+
+  // Comments/Viewers Container
+  commentsContainer: {
+    flex: 1,
+    paddingHorizontal: 15,
+  },
+  viewersContainer: {
+    flex: 1,
+    paddingHorizontal: 15,
+  },
+  loadingContainer: {
+    paddingVertical: 50,
+    alignItems: 'center',
+  },
+  emptyContainer: {
+    paddingVertical: 50,
+    alignItems: 'center',
+  },
+  emptyText: {
+    color: '#666',
+    fontSize: 18,
+    fontWeight: '600',
     marginTop: 15,
   },
-  retryButton: {
-    marginTop: 20,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 20,
+
+  // Comment Item
+  commentItem: {
+    flexDirection: 'row',
+    marginBottom: 15,
+    paddingVertical: 5,
   },
-  retryText: {
+  commentAvatar: {
+    marginRight: 10,
+  },
+  avatar: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 16,
+  },
+  avatarText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  commentContent: {
+    flex: 1,
+  },
+  commentBubble: {
+    backgroundColor: '#1a1a1a',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 15,
+    marginBottom: 4,
+  },
+  commentHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  commentUsername: {
+    color: 'white',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  verifiedIcon: {
+    marginLeft: 4,
+  },
+  commentText: {
+    color: 'white',
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  commentTime: {
+    color: '#666',
+    fontSize: 12,
+    marginLeft: 12,
+  },
+  commentActions: {
+    marginLeft: 10,
+    justifyContent: 'center',
+  },
+  ownCommentIndicator: {
+    color: '#1DA1F2',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+
+  // Viewer Item
+  viewerItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  viewerAvatar: {
+    marginRight: 12,
+  },
+  viewerInfo: {
+    flex: 1,
+  },
+  viewerNameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  viewerName: {
     color: 'white',
     fontSize: 16,
-    fontWeight: '500',
+    fontWeight: '600',
+  },
+  viewerTime: {
+    color: '#666',
+    fontSize: 14,
+  },
+
+  // Input Container
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    paddingBottom: 45,
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+  },
+  currentUserAvatar: {
+    marginRight: 10,
+    marginBottom: 5,
+  },
+  inputWrapper: {
+    flex: 1,
+    marginRight: 10,
+  },
+  textInput: {
+    backgroundColor: '#1a1a1a',
+    color: 'white',
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    fontSize: 16,
+    maxHeight: 100,
+  },
+  characterCount: {
+    color: '#666',
+    fontSize: 12,
+    textAlign: 'right',
+    marginTop: 5,
+    marginRight: 5,
+  },
+  sendButton: {
+    backgroundColor: '#1DA1F2',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  sendButtonDisabled: {
+    backgroundColor: '#333',
   },
 });
 

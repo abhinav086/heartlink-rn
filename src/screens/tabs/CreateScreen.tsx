@@ -36,7 +36,7 @@ const [compressionCancelled, setCompressionCancelled] = useState(false);
 const compressionStages = {
 preparing: 'Preparing video for compression...',
 analyzing: 'Analyzing video properties...',
-compressing: 'Compressing video...',
+compressing: 'Processing video...',
 finalizing: 'Finalizing compressed video...',
 completed: 'Compression completed!',
 error: 'Compression failed'
@@ -192,7 +192,7 @@ onRequestClose={handleCancel}
 <View style={compressionStyles.overlay}>
 <View style={compressionStyles.container}>
 <View style={compressionStyles.header}>
-<Text style={compressionStyles.title}>Compressing Video</Text>
+<Text style={compressionStyles.title}>Processing Video</Text>
 <TouchableOpacity
 onPress={handleCancel}
 style={compressionStyles.cancelButton}
@@ -221,34 +221,34 @@ compressionStyles.progressBar,
 {compressionStages[compressionStage]}
 </Text>
 
-{originalSize && (
+{/* {originalSize && (
 <View style={compressionStyles.sizeInfo}>
 <Text style={compressionStyles.sizeLabel}>Original Size:</Text>
 <Text style={compressionStyles.sizeValue}>{formatFileSize(originalSize)}</Text>
 </View>
-)}
+)} */}
 
-{compressedSize && (
+{/* {compressedSize && (
 <View style={compressionStyles.sizeInfo}>
 <Text style={compressionStyles.sizeLabel}>Compressed Size:</Text>
 <Text style={compressionStyles.sizeValue}>{formatFileSize(compressedSize)}</Text>
 </View>
-)}
+)} */}
 
-{compressionRatio !== null && (
+{/* {compressionRatio !== null && (
 <View style={compressionStyles.sizeInfo}>
 <Text style={compressionStyles.sizeLabel}>Space Saved:</Text>
 <Text style={[compressionStyles.sizeValue, { color: '#4CAF50' }]}>
 {Math.round(compressionRatio)}%
 </Text>
 </View>
-)}
+)} */}
 
 {compressionStage === 'completed' && (
 <View style={compressionStyles.completedIndicator}>
 <MaterialIcons name="check-circle" size={48} color="#4CAF50" />
 <Text style={compressionStyles.completedText}>
-Video compressed successfully!
+Video Processed successfully!
 </Text>
 </View>
 )}
@@ -1416,23 +1416,12 @@ onPress={openCropModal}
 {selectedMedia[0]?.compressedSize && (
 <View style={styles.fileSizeIndicator}>
 <Text style={styles.fileSizeText}>
-{formatFileSize(selectedMedia[0].compressedSize)}
-{selectedMedia[0].isCompressed && (
-<Text style={styles.compressedText}>
-{' '}📦 -{Math.round(selectedMedia[0].compressionRatio)}%
-</Text>
-)}
+
 </Text>
 </View>
 )}
 
-{/* Compression status indicator */}
-{selectedMedia[0]?.isCompressed && (
-<View style={styles.compressionIndicator}>
-<MaterialIcons name="compress" size={16} color="#4CAF50" />
-<Text style={styles.compressionText}>Compressed</Text>
-</View>
-)}
+
 </View>
 ) : (
 <View style={styles.emptyPreview}>

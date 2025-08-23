@@ -1,4 +1,4 @@
-// AllStories.js (FIXED VERSION - No Double Reload)
+// AllStories.js (OPTIMIZED VERSION - Fixed Double Rendering)
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { 
   View, 
@@ -17,7 +17,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import BASE_URL from '../../config/config';
 
-const AllStories = () => {
+const AllStories = ({ disableRefresh = false }) => {
   const navigation = useNavigation();
   const { user: currentUser, token } = useAuth();
   const { socket, isConnected } = useSocket();
@@ -25,12 +25,30 @@ const AllStories = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   
-  // ADDED: Track if component has loaded initially to prevent double calls
+  // FIXED: Better tracking to prevent double calls
   const hasInitiallyLoaded = useRef(false);
   const isLoadingRef = useRef(false);
+  const lastFetchTimestamp = useRef(0);
+  
+  // FIXED: Stable refs for auth data to prevent unnecessary re-runs
+  const currentUserRef = useRef(currentUser);
+  const tokenRef = useRef(token);
+  
+  // Update refs when auth data changes
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+    tokenRef.current = token;
+  }, [currentUser, token]);
 
-  // FIXED: Memoize fetchStoriesData to prevent recreation on every render
-  const fetchStoriesData = useCallback(async () => {
+  // FIXED: Remove dependencies that cause recreation - use refs instead
+  const fetchStoriesData = useCallback(async (forceRefresh = false) => {
+    // NEW: Debouncing - prevent calls within 1 second of each other
+    const now = Date.now();
+    if (!forceRefresh && (now - lastFetchTimestamp.current) < 1000) {
+      console.log('🚫 fetchStoriesData debounced - too soon since last call');
+      return;
+    }
+
     // Prevent multiple simultaneous calls
     if (isLoadingRef.current) {
       console.log('🚫 fetchStoriesData already in progress, skipping');
@@ -39,32 +57,44 @@ const AllStories = () => {
 
     try {
       isLoadingRef.current = true;
-      setLoading(!hasInitiallyLoaded.current);
-      setRefreshing(false); // Reset refreshing flag regardless of outcome
+      lastFetchTimestamp.current = now;
+      
+      // FIXED: Batch state updates and only update when necessary
+      const shouldShowLoading = !hasInitiallyLoaded.current;
+      const isRefreshAction = refreshing;
+      
+      // Single state update for loading
+      if (shouldShowLoading) {
+        setLoading(true);
+      }
 
-      if (!token) {
+      // Get current auth values from refs
+      const currentToken = tokenRef.current;
+      const currentUserData = currentUserRef.current;
+
+      if (!currentToken) {
         console.log('No token found');
         setFallbackStory();
         return;
       }
 
-      if (!currentUser) {
+      if (!currentUserData) {
         console.log('No current user found');
         setFallbackStory();
         return;
       }
 
       console.log('=== DEBUG: Current User Data ===');
-      console.log('Current User ID:', currentUser?._id);
-      console.log('Current User Name:', currentUser?.fullName || currentUser?.username);
-      console.log('Current User Profile Pic:', getSafeProfilePic(currentUser));
+      console.log('Current User ID:', currentUserData?._id);
+      console.log('Current User Name:', currentUserData?.fullName || currentUserData?.username);
+      console.log('Current User Profile Pic:', getSafeProfilePic(currentUserData));
       console.log('====================');
 
       // Fetch stories from backend
       const storiesResponse = await fetch(`${BASE_URL}/api/v1/stories/stories`, {
         method: 'GET',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${currentToken}`,
           'Content-Type': 'application/json',
         },
       });
@@ -76,14 +106,14 @@ const AllStories = () => {
       const storiesData = await storiesResponse.json();
       console.log('Stories API Response:', storiesData);
 
-      // FIXED: Fetch active live streams using the correct endpoint (same as other components)
+      // FIXED: Fetch active live streams using the correct endpoint
       let liveStreamsData = [];
       try {
         console.log('🔴 Fetching active live streams...');
         const liveStreamsResponse = await fetch(`${BASE_URL}/api/v1/live/active?limit=50`, {
           method: 'GET',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            'Authorization': `Bearer ${currentToken}`,
             'Content-Type': 'application/json',
           },
         });
@@ -115,12 +145,11 @@ const AllStories = () => {
         console.error('Error fetching live streams:', liveError);
       }
 
-      // REMOVED: The /my-active endpoint call since it's not consistent with other components
-      // Instead, we'll find current user's stream from the active streams list
+      // Find current user's stream from the active streams list
       let currentUserLiveStreamData = null;
-      if (liveStreamsData.length > 0 && currentUser?._id) {
+      if (liveStreamsData.length > 0 && currentUserData?._id) {
         currentUserLiveStreamData = liveStreamsData.find(stream => 
-          stream.streamer?._id === currentUser._id
+          stream.streamer?._id === currentUserData._id
         );
         if (currentUserLiveStreamData) {
           console.log('✅ Found current user live stream:', currentUserLiveStreamData.streamId);
@@ -167,7 +196,7 @@ const AllStories = () => {
       let currentUserLiveStream = null;
 
       const currentUserStoryData = fetchedStories.find(
-        userStories => userStories.user._id === currentUser?._id
+        userStories => userStories.user._id === currentUserData?._id
       );
 
       if (currentUserStoryData) {
@@ -180,13 +209,13 @@ const AllStories = () => {
       }
 
       // Check if current user has an active live stream from the map
-      if (userLiveStreamMap[currentUser._id]) {
+      if (userLiveStreamMap[currentUserData._id]) {
         currentUserIsLive = true;
-        currentUserLiveStream = userLiveStreamMap[currentUser._id];
+        currentUserLiveStream = userLiveStreamMap[currentUserData._id];
         console.log('Current user is LIVE:', currentUserLiveStream);
       }
 
-      const currentUserProfilePic = getSafeProfilePic(currentUser);
+      const currentUserProfilePic = getSafeProfilePic(currentUserData);
 
       // Calculate latest timestamp for "Your Story"
       const yourStoryLatestTimestamp = currentUserStories.length > 0
@@ -200,9 +229,9 @@ const AllStories = () => {
         img: currentUserProfilePic,
         add: true,
         isCurrentUser: true,
-        user: currentUser,
+        user: currentUserData,
         hasStory: currentUserHasStory,
-        hasViewed: true, // User always views their own story
+        hasViewed: true,
         stories: currentUserStories,
         storyCount: currentUserStories.length,
         isLive: currentUserIsLive,
@@ -217,7 +246,7 @@ const AllStories = () => {
 
       // Process other users' stories
       const otherUsersStories = fetchedStories.filter(
-        userStories => userStories.user._id !== currentUser?._id
+        userStories => userStories.user._id !== currentUserData?._id
       );
 
       // Also check for users who are live but don't have stories in the fetched list
@@ -225,8 +254,7 @@ const AllStories = () => {
 
       // Add live streamers who don't have stories
       for (const [streamerId, streamData] of Object.entries(userLiveStreamMap)) {
-        if (streamerId !== currentUser._id && !usersWithStories.has(streamerId)) {
-          // This user is live but has no stories - add them to the list
+        if (streamerId !== currentUserData._id && !usersWithStories.has(streamerId)) {
           const streamerData = streamData.streamer || {
             _id: streamerId,
             fullName: streamData.streamer?.fullName || streamData.username || 'Live User',
@@ -269,13 +297,12 @@ const AllStories = () => {
           // Fetch individual user's complete profile data
           let detailedUserData = null;
           
-          // Try to fetch detailed user profile
           try {
             console.log(`Fetching detailed profile for user ${userId}...`);
             const userProfileResponse = await fetch(`${BASE_URL}/api/v1/users/user/${userId}`, {
               method: 'GET',
               headers: {
-                'Authorization': `Bearer ${token}`,
+                'Authorization': `Bearer ${currentToken}`,
                 'Content-Type': 'application/json',
               },
             });
@@ -301,8 +328,6 @@ const AllStories = () => {
 
           // Use detailed data if available, otherwise fall back to original
           const finalUserData = detailedUserData || userStoryData.user;
-
-          // Extract username and profile pic using the same logic as UpdateProfileScreen
           const userName = getSafeUsername(finalUserData);
           const userProfilePic = getSafeProfilePic(finalUserData);
 
@@ -316,11 +341,9 @@ const AllStories = () => {
             hasStories: userStoriesList.length > 0
           });
 
-          // Determine if user has viewed all stories from this user
           const hasViewedAllStories = userStoriesList.length > 0 ?
             userStoriesList.every(story => story.hasViewed === true) : true;
 
-          // Calculate latest timestamp for this user's stories
           const latestStoryTimestamp = userStoriesList.length > 0
             ? new Date(Math.max(...userStoriesList.map(s => new Date(s.createdAt).getTime())))
             : null;
@@ -336,12 +359,9 @@ const AllStories = () => {
             stories: userStoriesList,
             hasViewed: hasViewedAllStories,
             storyCount: userStoriesList.length,
-            // Live stream properties
             isLive: isLive,
             liveStream: liveStream,
-            // Add latest story timestamp for sorting
             latestStoryTimestamp: latestStoryTimestamp,
-            // Add liveStreamStartTime for sorting if currently live
             liveStreamStartTime: isLive && liveStream?.startedAt
               ? new Date(liveStream.startedAt)
               : null,
@@ -362,7 +382,6 @@ const AllStories = () => {
           const hasViewedAllStories = userStoriesList.length > 0 ?
             userStoriesList.every(story => story.hasViewed === true) : true;
 
-          // Calculate latest timestamp for this user's stories
           const latestStoryTimestamp = userStoriesList.length > 0
             ? new Date(Math.max(...userStoriesList.map(s => new Date(s.createdAt).getTime())))
             : null;
@@ -378,12 +397,9 @@ const AllStories = () => {
             stories: userStoriesList,
             hasViewed: hasViewedAllStories,
             storyCount: userStoriesList.length,
-            // Live stream properties
             isLive: isLive,
             liveStream: liveStream,
-            // Add latest story timestamp for sorting
             latestStoryTimestamp: latestStoryTimestamp,
-            // Add liveStreamStartTime for sorting if currently live
             liveStreamStartTime: isLive && liveStream?.startedAt
               ? new Date(liveStream.startedAt)
               : null,
@@ -434,44 +450,61 @@ const AllStories = () => {
         console.log(`${index}: ${story.name} - isLive: ${story.isLive} - viewers: ${story.liveStream?.viewersCount || 0} - storyCount: ${story.storyCount} - latestTimestamp: ${story.latestStoryTimestamp?.toISOString() || 'N/A'}`);
       });
 
-      setStories(sortedStories);
+      // FIXED: Batch all state updates into a single update
       hasInitiallyLoaded.current = true;
+      
+      // Single batched state update
+      if (isRefreshAction) {
+        setRefreshing(false);
+      }
+      if (shouldShowLoading) {
+        setLoading(false);
+      }
+      setStories(sortedStories);
 
     } catch (error) {
       console.error('Error fetching stories:', error);
       setFallbackStory();
       hasInitiallyLoaded.current = true;
     } finally {
-      setLoading(false);
-      if (refreshing) setRefreshing(false);
+      // FIXED: Clean final state update
       isLoadingRef.current = false;
+      if (refreshing) {
+        setRefreshing(false);
+      }
+      if (loading) {
+        setLoading(false);
+      }
     }
-  }, [token, currentUser]); // FIXED: Only depend on token and currentUser
+  }, []); // FIXED: No dependencies - use refs for auth data
 
-  // FIXED: Separate useEffect for initial load
+  // FIXED: Stable initial load effect with minimal dependencies
   useEffect(() => {
-    if (!hasInitiallyLoaded.current && token && currentUser) {
+    // Only run if we have the required auth data and haven't loaded yet
+    if (!hasInitiallyLoaded.current && token && currentUser && !isLoadingRef.current) {
       console.log('🚀 Initial stories load');
       fetchStoriesData();
     }
-  }, [fetchStoriesData, token, currentUser]);
+  }, [token, currentUser]); // FIXED: Remove fetchStoriesData dependency
 
-  // FIXED: Separate useEffect for socket listeners to prevent double loading
+  // FIXED: Socket listeners with better debouncing
   useEffect(() => {
     if (socket && isConnected && hasInitiallyLoaded.current) {
       console.log('🔌 Setting up socket listeners');
 
       const handleStreamWentLive = (streamData) => {
         console.log('🔴 Live stream went live (socket):', streamData);
-        // FIXED: Only refresh if we're not already loading
-        if (!isLoadingRef.current) {
-          fetchStoriesData();
-        }
+        // FIXED: Debounced refresh to prevent rapid calls
+        setTimeout(() => {
+          if (!isLoadingRef.current) {
+            fetchStoriesData(true); // Force refresh for real-time updates
+          }
+        }, 500); // 500ms delay
       };
 
       const handleStreamEnded = (streamData) => {
         console.log('⚫ Live stream ended (socket):', streamData);
-        // Update stories to remove live indicator for the streamer
+        // FIXED: Use functional state update to prevent unnecessary re-renders
         setStories(prevStories =>
           prevStories.map(story =>
             story.user?._id === streamData.streamer?._id
@@ -483,7 +516,7 @@ const AllStories = () => {
 
       const handleViewerUpdate = (updateData) => {
         console.log('👥 Viewer count updated (socket):', updateData);
-        // Update viewer count for the specific live stream
+        // FIXED: Use functional state update
         setStories(prevStories =>
           prevStories.map(story =>
             story.liveStream?.streamId === updateData.streamId
@@ -514,7 +547,7 @@ const AllStories = () => {
         socket.off('stream:viewer_update', handleViewerUpdate);
       };
     }
-  }, [socket, isConnected, fetchStoriesData]); // FIXED: Only run when socket changes and after initial load
+  }, [socket, isConnected]); // FIXED: Keep minimal dependencies
 
   // Enhanced profile pic extraction using the same fields as UpdateProfileScreen
   const getSafeProfilePic = (userData) => {
@@ -533,7 +566,6 @@ const AllStories = () => {
       hasPhoto: !!userData?.photo
     });
 
-    // Check all possible fields for profile picture (same as UpdateProfileScreen)
     const profilePic = userData.photoUrl || 
                       userData.profilePic || 
                       userData.avatar || 
@@ -548,7 +580,6 @@ const AllStories = () => {
     if (profilePic && typeof profilePic === 'string' && profilePic.trim() !== '') {
       const trimmedPic = profilePic.trim();
 
-      // Handle different URL formats
       if (trimmedPic.startsWith('http://') || trimmedPic.startsWith('https://')) {
         console.log('getSafeProfilePic returning absolute URL:', trimmedPic);
         return trimmedPic;
@@ -557,11 +588,9 @@ const AllStories = () => {
         console.log('getSafeProfilePic returning relative URL converted:', fullUrl);
         return fullUrl;
       } else if (trimmedPic.startsWith('data:image')) {
-        // Handle base64 images
         console.log('getSafeProfilePic returning base64 image');
         return trimmedPic;
       } else {
-        // Try to construct full URL for relative paths without leading slash
         const fullUrl = `${BASE_URL}/${trimmedPic}`;
         console.log('getSafeProfilePic returning constructed URL:', fullUrl);
         return fullUrl;
@@ -588,7 +617,6 @@ const AllStories = () => {
       email: userData?.email
     });
 
-    // Check all possible fields for user name (same as UpdateProfileScreen)
     const username = userData.fullName || 
                     userData.username || 
                     userData.displayName || 
@@ -608,8 +636,9 @@ const AllStories = () => {
     return result;
   };
 
+  // FIXED: Use useCallback to prevent recreation and optimize deps
   const setFallbackStory = useCallback(() => {
-    const fallbackUser = currentUser || { 
+    const fallbackUser = currentUserRef.current || { 
       fullName: 'You', 
       username: 'You', 
       profilePic: null 
@@ -631,38 +660,32 @@ const AllStories = () => {
       latestStoryTimestamp: null,
       liveStreamStartTime: null,
     }]);
-  }, [currentUser]);
+  }, []); // No dependencies
 
-  // --- UPDATED handleStoryPress ---
   const handleStoryPress = (story) => {
     console.log('📱 Story pressed:', story.name, story.id);
 
     if (story.isCurrentUser) {
-      // Check if current user is live (WebRTC stream)
       if (story.isLive && story.liveStream) {
         console.log('🔴 Navigating to CreateLiveStream for own stream management');
         navigation.navigate('CreateLiveStream');
       } else if (story.hasStory) {
         console.log('📖 Navigating to view own stories');
-        // Navigate to view own stories
         navigation.navigate('StoryViewer', {
           stories: story.stories,
           currentIndex: 0,
           userName: 'Your Story',
           userAvatar: story.img,
-          userId: currentUser?._id,
+          userId: currentUserRef.current?._id,
           isOwnStory: true
         });
       } else {
         console.log('➕ Navigating to create story');
-        // Navigate to create story
         handleCreateStory();
       }
     } else {
-      // Check if other user is live (WebRTC stream)
       if (story.isLive && story.liveStream) {
         console.log('📺 Navigating to LiveStreamViewer for stream:', story.liveStream.streamId);
-        // FIXED: Ensure we have a valid streamId before navigating
         if (story.liveStream.streamId) {
           navigation.navigate('LiveStreamViewer', {
             streamId: story.liveStream.streamId,
@@ -673,7 +696,6 @@ const AllStories = () => {
         }
       } else if (story.hasStory) {
         console.log('📖 Navigating to view other user stories');
-        // Navigate to view other user's stories
         handleViewStory(story);
       } else {
         console.log('ℹ️ User has no stories and is not live');
@@ -687,14 +709,13 @@ const AllStories = () => {
 
   const handleViewStory = async (story) => {
     if (story.stories && story.stories.length > 0) {
-      // Mark stories as viewed by calling the view API for the first story
       try {
-        if (token) {
+        if (tokenRef.current) {
           const firstStoryId = story.stories[0]._id;
           await fetch(`${BASE_URL}/api/v1/stories/stories/${firstStoryId}/view`, {
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${token}`,
+              'Authorization': `Bearer ${tokenRef.current}`,
               'Content-Type': 'application/json',
               'Cache-Control': 'no-cache'
             },
@@ -715,13 +736,16 @@ const AllStories = () => {
     }
   };
 
-  // FIXED: Memoize onRefresh to prevent recreation
+  // FIXED: Optimized onRefresh with stable callback
   const onRefresh = useCallback(() => {
+    if (disableRefresh) {
+      console.log('🚫 Refresh disabled for this Stories component');
+      return;
+    }
     console.log('🔄 Manual refresh triggered');
     setRefreshing(true);
-    hasInitiallyLoaded.current = false; // Reset to allow refresh
-    fetchStoriesData();
-  }, [fetchStoriesData]);
+    fetchStoriesData(true); // Force refresh
+  }, [disableRefresh]); // FIXED: Remove fetchStoriesData dependency
 
   const getInitials = (name) => {
     if (!name || typeof name !== 'string' || name === 'Unknown User') return '?';
@@ -745,33 +769,30 @@ const AllStories = () => {
 
   // Enhanced renderStoryImage function
   const renderStoryImage = (story) => {
-    // Determine border color based on story status and live state
-    let borderColor = "#666666"; // Default gray
+    let borderColor = "#666666";
     let borderWidth = 2;
 
     if (story.isLive) {
-      // Live streams get red border regardless of user
       borderColor = "#ff0000";
       borderWidth = 3;
     } else if (story.isCurrentUser) {
       if (story.hasStory) {
-        borderColor = "#ed167e"; // Pink for own story
+        borderColor = "#ed167e";
         borderWidth = 3;
       } else {
-        borderColor = "#666666"; // Gray for no story
+        borderColor = "#666666";
         borderWidth = 2;
       }
     } else if (story.hasStory) {
       if (!story.hasViewed) {
-        borderColor = "#ed167e"; // Pink for unviewed
+        borderColor = "#ed167e";
         borderWidth = 3;
       } else {
-        borderColor = "#666666"; // Gray for viewed
+        borderColor = "#666666";
         borderWidth = 2;
       }
     }
 
-    // Check if we have a valid image URL
     const hasValidImage = story.img && typeof story.img === 'string' && story.img.trim() !== '';
     const imageUrl = hasValidImage ? story.img.trim() : '';
 
@@ -801,12 +822,10 @@ const AllStories = () => {
           onLoad={() => {
             console.log('✅ Image loaded successfully for:', story.name, story.id, imageUrl);
           }}
-          // Add cache handling
           cache="force-cache"
         />
       );
     } else {
-      // Fallback to colored circle with initials
       console.log(`Using fallback avatar for ${story.name} with color ${getAvatarColor(story.name)}`);
       return (
         <View style={[
@@ -826,9 +845,8 @@ const AllStories = () => {
     }
   };
 
-  // Always show add button for current user (unless live)
   const renderAddButton = (story) => {
-    if (!story.isCurrentUser || story.isLive) return null; // Don't show add when live
+    if (!story.isCurrentUser || story.isLive) return null;
 
     return (
       <TouchableOpacity style={styles.addButton} onPress={handleCreateStory}>
@@ -837,11 +855,9 @@ const AllStories = () => {
     );
   };
 
-  // Show live indicator and story count
   const renderIndicators = (story) => {
     return (
       <View style={styles.indicatorsContainer}>
-        {/* Live indicator for WebRTC streams */}
         {story.isLive && (
           <View style={styles.liveIndicator}>
             <View style={styles.liveIcon} />
@@ -852,7 +868,6 @@ const AllStories = () => {
           </View>
         )}
         
-        {/* Story count indicator */}
         {story.storyCount > 1 && !story.isLive && (
           <View style={styles.multipleStoriesIndicator}>
             <Text style={styles.storiesCount}>{story.storyCount}</Text>
@@ -879,7 +894,9 @@ const AllStories = () => {
         style={styles.scrollView}
         contentContainerStyle={styles.contentContainer}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          !disableRefresh ? (
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          ) : undefined
         }
       >
         {stories.map((story) => (
@@ -898,14 +915,13 @@ const AllStories = () => {
             <Text style={[
               styles.name,
               story.isCurrentUser && styles.yourStoryName,
-              story.isLive && styles.liveUserName // Special style for live users
+              story.isLive && styles.liveUserName
             ]} numberOfLines={1}>
               {story.name}
             </Text>
           </TouchableOpacity>
         ))}
 
-        {/* Show message when only "Your Story" is available */}
         {stories.length === 1 && stories[0].isCurrentUser && !stories[0].hasStory && !stories[0].isLive && (
           <View style={styles.noStoriesContainer}>
             <Text style={styles.noStoriesText}>
@@ -1005,7 +1021,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 2,
   },
-  // Live indicator styles (WebRTC)
   liveIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1058,7 +1073,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#ed167e',
   },
-  // Live user name style (WebRTC)
   liveUserName: {
     color: '#ff0000',
     fontWeight: '600',

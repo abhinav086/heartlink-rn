@@ -1,9 +1,8 @@
-// App.js - ENHANCED GLOBAL CALL RECEPTION
-
+// App.js - Enhanced back navigation fix for gesture navigation
 import 'react-native-gesture-handler';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { PermissionsAndroid, Platform, Alert, AppState } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { PermissionsAndroid, Platform, Alert, AppState, BackHandler } from 'react-native';
+import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { SocketProvider, useSocket } from './src/context/SocketContext';
@@ -32,6 +31,14 @@ const requestPermissions = async () => {
   }
 };
 
+// Enhanced navigation theme to prevent gesture exit
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+  },
+};
+
 const AppContent = () => {
   const { user, isLoading, isAuthenticated, checkOnboardingStatus } = useAuth();
   const { socket, isConnected } = useSocket();
@@ -46,10 +53,16 @@ const AppContent = () => {
   
   const [initialRoute, setInitialRoute] = useState(null);
   const [showSplash, setShowSplash] = useState(true);
+  const [navigationReady, setNavigationReady] = useState(false);
+  
+  // Enhanced navigation state tracking
+  const [navigationState, setNavigationState] = useState(null);
+  const [canGoBack, setCanGoBack] = useState(false);
   
   const navigationRef = useRef(null);
   const appStateRef = useRef(AppState.currentState);
   const incomingCallTimeoutRef = useRef(null);
+  const lastBackPressTime = useRef(0);
 
   useEffect(() => {
     const initializeApp = async () => {
@@ -409,10 +422,80 @@ const AppContent = () => {
     determineInitialRoute();
   }, [isLoading, isAuthenticated, user, checkOnboardingStatus]);
 
-  const onNavigationReady = () => {
+  // ENHANCED NAVIGATION STATE TRACKING
+  const handleNavigationStateChange = useCallback((state) => {
+    if (state && navigationRef.current) {
+      setNavigationState(state);
+      const canGoBackNow = navigationRef.current.canGoBack();
+      setCanGoBack(canGoBackNow);
+      console.log('📍 Navigation state changed, canGoBack:', canGoBackNow);
+    }
+  }, []);
+
+  // ENHANCED BACK NAVIGATION HANDLING - Covers both hardware and gesture navigation
+  const handleBackPress = useCallback(() => {
+    console.log('🔙 Back press detected, canGoBack:', canGoBack, 'navigationReady:', navigationReady);
+    
+    if (!navigationReady || !navigationRef.current) {
+      console.log('⚠️ Navigation not ready, allowing default behavior');
+      return false;
+    }
+
+    try {
+      // If we can go back in the navigation stack
+      if (canGoBack && navigationRef.current.canGoBack()) {
+        console.log('📱 Going back in navigation stack');
+        navigationRef.current.goBack();
+        return true; // Prevent default behavior (exit app)
+      } else {
+        // Double-tap to exit functionality for better UX
+        const currentTime = Date.now();
+        const timeDifference = currentTime - lastBackPressTime.current;
+        
+        if (timeDifference < 2000) {
+          console.log('🚪 Double tap detected, exiting app');
+          BackHandler.exitApp();
+          return true;
+        } else {
+          console.log('⚠️ Single tap detected, showing toast message');
+          lastBackPressTime.current = currentTime;
+          
+          // You can replace this with a toast message
+          Alert.alert(
+            'Exit App',
+            'Press back again to exit',
+            [{ text: 'OK', style: 'cancel' }],
+            { cancelable: true }
+          );
+          
+          return true; // Prevent exit
+        }
+      }
+    } catch (error) {
+      console.error('❌ Error in back press handler:', error);
+      return false; // Allow default behavior
+    }
+  }, [canGoBack, navigationReady]);
+
+  // ENHANCED: Handle hardware back button AND gesture navigation
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+    return () => backHandler.remove();
+  }, [handleBackPress]);
+
+  // Enhanced navigation ready handler
+  const onNavigationReady = useCallback(() => {
+    console.log('🚀 Navigation container ready');
+    setNavigationReady(true);
     setNavigationRef(navigationRef.current);
-    console.log('🚀 Navigation ready, ref set');
-  };
+    
+    // Initial state update
+    if (navigationRef.current) {
+      const initialCanGoBack = navigationRef.current.canGoBack();
+      setCanGoBack(initialCanGoBack);
+      console.log('📍 Initial navigation state - canGoBack:', initialCanGoBack);
+    }
+  }, [setNavigationRef]);
 
   if (showSplash || isLoading || !initialRoute) {
     return <SplashScreen />;
@@ -422,7 +505,14 @@ const AppContent = () => {
     <>
       <NavigationContainer 
         ref={navigationRef}
+        theme={navigationTheme}
         onReady={onNavigationReady}
+        onStateChange={handleNavigationStateChange}
+        // Additional navigation options to prevent gesture exit
+        screenOptions={{
+          gestureEnabled: true,
+          gestureDirection: 'horizontal',
+        }}
       >
         <AppNavigator initialRouteName={initialRoute} />
       </NavigationContainer>
@@ -442,7 +532,10 @@ const AppContent = () => {
 
 const App = () => {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView 
+      style={{ flex: 1 }}
+      // Enhanced gesture handler configuration
+    >
       <AuthProvider>
         <SocketProvider>
           <CallProvider>

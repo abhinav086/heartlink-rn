@@ -1569,35 +1569,28 @@ Would you like to open this file?`,
         <View style={styles.headerActions}>
           {/* REPLACED: Header action buttons with more specific loading indicators */}
           <TouchableOpacity
-            style={[
-              styles.actionButton,
-              (isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()) && styles.disabledButton
-            ]}
-            onPress={initiateAudioCall}
-            disabled={isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()}
-          >
-            {/* FIXED: More specific condition to prevent stuck loading */}
-            {isInitiatingCall && (callState === 'ringing' || callState === 'connecting') && callState !== 'idle' ? (
-              <ActivityIndicator size="small" color="#FF6B9D" />
-            ) : (
-              <Ionicons name="call-outline" size={24} color="#FF6B9D" />
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.actionButton,
-              (isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()) && styles.disabledButton
-            ]}
-            onPress={initiateVideoCall}
-            disabled={isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()}
-          >
-            {/* FIXED: More specific condition to prevent stuck loading */}
-            {isInitiatingCall && (callState === 'ringing' || callState === 'connecting') && callState !== 'idle' ? (
-              <ActivityIndicator size="small" color="#FF6B9D" />
-            ) : (
-              <Ionicons name="videocam-outline" size={24} color="#FF6B9D" />
-            )}
-          </TouchableOpacity>
+              style={[
+            styles.actionButton,
+            (isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()) && styles.disabledButton
+          ]}
+          onPress={initiateAudioCall}
+          disabled={isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()}
+        >
+          {/* Always show the icon, never the loader */}
+          <Ionicons name="call-outline" size={24} color="#FF6B9D" />
+        </TouchableOpacity>          
+          
+                <TouchableOpacity
+          style={[
+            styles.actionButton,
+            (isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()) && styles.disabledButton
+          ]}
+          onPress={initiateVideoCall}
+          disabled={isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()}
+        >
+          {/* Always show the icon, never the loader */}
+          <Ionicons name="videocam-outline" size={24} color="#FF6B9D" />
+        </TouchableOpacity>
         </View>
       </View>
     </View>

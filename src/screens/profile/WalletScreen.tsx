@@ -1,5 +1,3 @@
-// screens/WalletScreen.js
-
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
@@ -34,6 +32,10 @@ const WalletScreen = ({ navigation }) => {
   const [subscriptionLoading, setSubscriptionLoading] = useState(false);
   const [requestsLoading, setRequestsLoading] = useState(false); // Loading state for requests
   const [error, setError] = useState(null);
+
+  // New state flags to prevent repeated fetching
+  const [hasFetchedSubscriptions, setHasFetchedSubscriptions] = useState(false);
+  const [hasFetchedRequests, setHasFetchedRequests] = useState(false);
 
   // Withdrawal Modal State
   const [isWithdrawModalVisible, setIsWithdrawModalVisible] = useState(false);
@@ -146,19 +148,21 @@ const WalletScreen = ({ navigation }) => {
 
   useEffect(() => {
     // Fetch subscription history when tab is switched to 'subscriptions' for the first time
-    if (activeTab === 'subscriptions' && subscriptionHistory.length === 0 && !error) {
-      fetchSubscriptionHistory();
+    if (activeTab === 'subscriptions' && !hasFetchedSubscriptions && subscriptionHistory.length === 0 && !error) {
+      fetchSubscriptionHistory().then(() => setHasFetchedSubscriptions(true));
     }
     // Fetch withdrawal requests when tab is switched to 'requests' for the first time
-    if (activeTab === 'requests' && withdrawalRequests.length === 0 && !error) {
-        fetchWithdrawalRequests();
+    if (activeTab === 'requests' && !hasFetchedRequests && withdrawalRequests.length === 0 && !error) {
+        fetchWithdrawalRequests().then(() => setHasFetchedRequests(true));
     }
   }, [
       activeTab,
       subscriptionHistory.length,
-      withdrawalRequests.length, // Add withdrawalRequests.length
+      withdrawalRequests.length,
+      hasFetchedSubscriptions,
+      hasFetchedRequests,
       fetchSubscriptionHistory,
-      fetchWithdrawalRequests, // Add fetchWithdrawalRequests
+      fetchWithdrawalRequests,
       error
   ]);
 
@@ -169,9 +173,11 @@ const WalletScreen = ({ navigation }) => {
     // Refresh data for the active tab, and base wallet data
     const refreshPromises = [initializeData()];
     if (activeTab === 'subscriptions') {
+      setHasFetchedSubscriptions(false); // Allow refetch
       refreshPromises.push(fetchSubscriptionHistory());
     }
     if (activeTab === 'requests') { // Refresh requests on pull-to-refresh
+        setHasFetchedRequests(false); // Allow refetch
         refreshPromises.push(fetchWithdrawalRequests());
     }
 
@@ -213,7 +219,7 @@ const WalletScreen = ({ navigation }) => {
 
     setWithdrawalLoading(true);
     try {
-      const response = await fetch('https://backendforheartlink.in/api/v1/wallet/request-reward', {
+      const response = await fetch('  https://backendforheartlink.in/api/v1/wallet/request-reward  ', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -385,6 +391,13 @@ const WalletScreen = ({ navigation }) => {
     setActiveTab(tab);
     setSearchQuery('');
     setError(null);
+    
+    // Reset fetch flags when switching tabs to allow re-fetching
+    if (tab === 'subscriptions') {
+      setHasFetchedSubscriptions(false);
+    } else if (tab === 'requests') {
+      setHasFetchedRequests(false);
+    }
   };
 
   if (loading) {

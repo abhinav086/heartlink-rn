@@ -10,25 +10,26 @@ import {
 } from "react-native";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import Icon from 'react-native-vector-icons/Ionicons';
-//  import { useAuth } from '../../context/AuthContext'; // Adjust path as needed
-//  import BASE_URL from '../../config/config'; // Adjust path as needed
 
-const Header = () => {
+const Header = ({ hasUnreadNotifications = false, onNotificationPress }) => {
   const navigation = useNavigation();
-  // const { token, user } = useAuth(); // Uncomment when you have auth context
   const [menuVisible, setMenuVisible] = useState(false);
   
   // Temporary mock data - replace with real auth context
   const token = null; // Replace with: useAuth()?.token
   const user = null;  // Replace with: useAuth()?.user
 
-  const handleNavigate = (screen: string) => {
+  const handleNavigate = (screen) => {
     setMenuVisible(false);
     navigation.navigate(screen);
   };
 
   const handleNotificationPress = () => {
-    navigation.navigate('NotificationsScreen');
+    if (onNotificationPress) {
+      onNotificationPress();
+    } else {
+      navigation.navigate('NotificationsScreen');
+    }
   };
 
   const handleComingSoon = () => {
@@ -55,10 +56,10 @@ const Header = () => {
 
       {/* Right side icons container */}
       <View style={styles.rightIconsContainer}>
-        {/* Notification Icon */}
+        {/* Notification Icon with Red Dot */}
         <TouchableOpacity onPress={handleNotificationPress} style={styles.iconWrapper}>
           <Icon name="notifications" size={28} color="white" style={styles.icon} />
-          {/* You can add general notification badge here if needed */}
+          {hasUnreadNotifications && <View style={styles.badge} />}
         </TouchableOpacity>
 
         {/* 3-Dots Menu Icon */}
@@ -168,6 +169,16 @@ const styles = StyleSheet.create({
   },
   icon: {
     marginLeft: 5,
+  },
+  badge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    backgroundColor: 'red',
+    borderRadius: 10,
+    width: 10,
+    height: 10,
+    zIndex: 1,
   },
   modalOverlay: {
     flex: 1,

@@ -1,4 +1,3 @@
-// screens/tabs/CreateStoryScreen.js
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -15,6 +14,7 @@ import {
   PermissionsAndroid,
   Animated,
   Easing,
+  PanResponder,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -30,6 +30,9 @@ import {
   useCodeScanner,
 } from 'react-native-vision-camera';
 import { useFocusEffect } from '@react-navigation/native';
+import Video from 'react-native-video';
+import ViewShot from 'react-native-view-shot';
+import RNFS from 'react-native-fs';
 
 const { width, height } = Dimensions.get('window');
 
@@ -43,11 +46,12 @@ const COLORS = {
   darkText: '#333333',
   red: '#ff0000',
   black: '#000000',
+  yellow: '#FFD700',
 };
 
 const CreateStoryScreen = () => {
   const navigation = useNavigation();
-  const [selectedImage, setSelectedImage] = useState(null);
+  const [selectedMedia, setSelectedMedia] = useState(null);
   const [storyText, setStoryText] = useState('');
   const [uploading, setUploading] = useState(false);
   const [showSuccessOptions, setShowSuccessOptions] = useState(false);
@@ -55,15 +59,38 @@ const CreateStoryScreen = () => {
   const [flash, setFlash] = useState('off');
   const [isCameraActive, setIsCameraActive] = useState(true);
   const [zoom, setZoom] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [maxRecordingTime] = useState(30); // 30 seconds max
+  
+  // NEW: Text overlay states
+  const [showTextOverlay, setShowTextOverlay] = useState(false);
+  const [textPosition, setTextPosition] = useState({ x: 100, y: 100 });
+  const [textColor, setTextColor] = useState(COLORS.lightText);
+  const [fontSize, setFontSize] = useState(24);
+  
+  // NEW: Capture mode state (photo or video)
+  const [captureMode, setCaptureMode] = useState('photo'); // 'photo' or 'video'
+  
   const cameraRef = useRef(null);
   const device = useCameraDevice(cameraPosition);
   const { hasPermission, requestPermission } = useCameraPermission();
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const recordingTimer = useRef(null);
+  const recordingProgress = useRef(new Animated.Value(0)).current;
+  const shutterScale = useRef(new Animated.Value(1)).current;
+  const pan = useRef(new Animated.ValueXY()).current;
+  const viewShotRef = useRef();
 
   useFocusEffect(
     React.useCallback(() => {
       setIsCameraActive(true);
-      return () => setIsCameraActive(false);
+      return () => {
+        setIsCameraActive(false);
+        if (isRecording) {
+          stopRecording();
+        }
+      };
     }, [])
   );
 
@@ -72,7 +99,7 @@ const CreateStoryScreen = () => {
   }, []);
 
   useEffect(() => {
-    if (selectedImage) {
+    if (selectedMedia) {
       Animated.timing(fadeAnim, {
         toValue: 1,
         duration: 300,
@@ -82,15 +109,33 @@ const CreateStoryScreen = () => {
     } else {
       fadeAnim.setValue(0);
     }
-  }, [selectedImage, fadeAnim]);
+  }, [selectedMedia, fadeAnim]);
+
+  // NEW: PanResponder for dragging text
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onPanResponderMove: Animated.event(
+        [null, { dx: pan.x, dy: pan.y }],
+        { useNativeDriver: false }
+      ),
+      onPanResponderRelease: () => {
+        pan.flattenOffset();
+      },
+    })
+  ).current;
 
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
       try {
-        const permissionsToRequest = [PermissionsAndroid.PERMISSIONS.CAMERA];
+        const permissionsToRequest = [
+          PermissionsAndroid.PERMISSIONS.CAMERA,
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        ];
 
         if (Platform.Version >= 33) {
           permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES);
+          permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_MEDIA_VIDEO);
         } else {
           permissionsToRequest.push(PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE);
         }
@@ -103,7 +148,7 @@ const CreateStoryScreen = () => {
         if (!allPermissionsGranted) {
           Alert.alert(
             'Permissions Required',
-            'Please grant camera and storage permissions to create stories.',
+            'Please grant camera, microphone and storage permissions to create stories.',
             [{ text: 'OK', onPress: () => navigation.goBack() }]
           );
         }
@@ -115,11 +160,28 @@ const CreateStoryScreen = () => {
     }
   };
 
+  // NEW: Toggle between photo and video modes
+  const toggleCaptureMode = () => {
+    if (isRecording) return; // Don't allow mode change during recording
+    
+    setCaptureMode(prev => prev === 'photo' ? 'video' : 'photo');
+  };
+
   const toggleCamera = () => {
-    setCameraPosition(prev => (prev === 'back' ? 'front' : 'back'));
+    if (isRecording) return; // Don't allow camera switch during recording
+    
+    const newPosition = cameraPosition === 'back' ? 'front' : 'back';
+    setCameraPosition(newPosition);
+    
+    // Turn off flash when switching to front camera
+    if (newPosition === 'front') {
+      setFlash('off');
+    }
   };
 
   const toggleFlash = () => {
+    if (isRecording) return; // Don't allow flash change during recording
+    
     setFlash(prev => {
       if (prev === 'off') return 'on';
       if (prev === 'on') return 'auto';
@@ -128,16 +190,19 @@ const CreateStoryScreen = () => {
   };
 
   const takePhoto = async () => {
+    if (isRecording) return; // Don't take photo while recording
+    
     if (cameraRef.current && device) {
       try {
         const photo = await cameraRef.current.takePhoto({
           flash: flash,
           qualityPrioritization: 'quality',
         });
-        setSelectedImage({
+        setSelectedMedia({
           uri: `file://${photo.path}`,
           type: 'image/jpeg',
           fileName: `story_${Date.now()}.jpg`,
+          mediaType: 'photo',
         });
       } catch (error) {
         console.error('Error taking photo:', error);
@@ -146,13 +211,106 @@ const CreateStoryScreen = () => {
     }
   };
 
+  const startRecording = async () => {
+    if (!cameraRef.current || !device || isRecording) return;
+
+    try {
+      setIsRecording(true);
+      setRecordingDuration(0);
+      
+      // Animate shutter button scale
+      Animated.timing(shutterScale, {
+        toValue: 1.2,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+
+      // Start progress animation
+      Animated.timing(recordingProgress, {
+        toValue: 1,
+        duration: maxRecordingTime * 1000,
+        useNativeDriver: false,
+      }).start();
+
+      // Start timer
+      recordingTimer.current = setInterval(() => {
+        setRecordingDuration(prev => {
+          const newDuration = prev + 1;
+          if (newDuration >= maxRecordingTime) {
+            stopRecording();
+          }
+          return newDuration;
+        });
+      }, 1000);
+
+      await cameraRef.current.startRecording({
+        flash: flash,
+        onRecordingFinished: (video) => {
+          console.log('Recording finished:', video);
+          setSelectedMedia({
+            uri: `file://${video.path}`,
+            type: 'video/mp4',
+            fileName: `story_${Date.now()}.mp4`,
+            mediaType: 'video',
+          });
+        },
+        onRecordingError: (error) => {
+          console.error('Recording error:', error);
+          Alert.alert('Recording Error', 'Failed to record video. Please try again.');
+          resetRecording();
+        },
+      });
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      Alert.alert('Recording Error', 'Failed to start recording. Please try again.');
+      resetRecording();
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!isRecording) return;
+
+    try {
+      if (cameraRef.current) {
+        await cameraRef.current.stopRecording();
+      }
+    } catch (error) {
+      console.error('Error stopping recording:', error);
+    } finally {
+      resetRecording();
+    }
+  };
+
+  const resetRecording = () => {
+    setIsRecording(false);
+    setRecordingDuration(0);
+    
+    if (recordingTimer.current) {
+      clearInterval(recordingTimer.current);
+      recordingTimer.current = null;
+    }
+
+    // Reset animations
+    Animated.timing(shutterScale, {
+      toValue: 1,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+
+    recordingProgress.setValue(0);
+  };
+
   const openGallery = () => {
+    if (isRecording) return; // Don't open gallery during recording
+    
     const options = {
-      mediaType: 'photo',
+      mediaType: 'mixed', // Allow both photos and videos
       quality: 0.8,
       maxWidth: 1080,
       maxHeight: 1920,
       includeBase64: false,
+      videoQuality: 'medium',
+      durationLimit: maxRecordingTime,
     };
 
     launchImageLibrary(options, (response) => {
@@ -166,20 +324,53 @@ const CreateStoryScreen = () => {
       }
 
       if (response.assets && response.assets[0]) {
-        console.log('Gallery photo selected:', response.assets[0].uri);
-        setSelectedImage(response.assets[0]);
+        const asset = response.assets[0];
+        console.log('Gallery media selected:', asset.uri);
+        setSelectedMedia({
+          ...asset,
+          mediaType: asset.type.startsWith('image/') ? 'photo' : 'video',
+        });
       }
     });
   };
 
   const handleGoLive = () => {
+    if (isRecording) return; // Don't navigate during recording
+    
     console.log('Go Live pressed - navigating to CreateLiveStream screen');
     navigation.navigate('CreateLiveStream');
   };
 
+  // NEW: Handle shutter button press based on mode
+  const handleShutterPress = () => {
+    if (captureMode === 'photo') {
+      takePhoto();
+    } else {
+      // For video mode, start/stop recording
+      if (isRecording) {
+        stopRecording();
+      } else {
+        startRecording();
+      }
+    }
+  };
+
+  // NEW: Capture the view with text overlay and save as new image
+  const captureWithText = async () => {
+    try {
+      const uri = await viewShotRef.current.capture();
+      console.log('Captured URI:', uri);
+      return uri;
+    } catch (error) {
+      console.error('Error capturing view:', error);
+      Alert.alert('Error', 'Failed to process image with text');
+      return null;
+    }
+  };
+
   const uploadStory = async () => {
-    if (!selectedImage) {
-      Alert.alert('Error', 'Please select an image for your story');
+    if (!selectedMedia) {
+      Alert.alert('Error', 'Please select an image or video for your story');
       return;
     }
 
@@ -193,16 +384,30 @@ const CreateStoryScreen = () => {
         return;
       }
 
+      let finalMediaUri = selectedMedia.uri;
+      
+      // For photos with text overlay, capture the view
+      if (selectedMedia.mediaType === 'photo' && showTextOverlay && storyText) {
+        const capturedUri = await captureWithText();
+        if (capturedUri) {
+          finalMediaUri = capturedUri;
+        }
+      }
+
       const formData = new FormData();
       formData.append('media', {
-        uri: selectedImage.uri,
-        type: selectedImage.type || 'image/jpeg',
-        name: selectedImage.fileName || `story_${Date.now()}.jpg`,
+        uri: finalMediaUri,
+        type: selectedMedia.type || (selectedMedia.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
+        name: selectedMedia.fileName || `story_${Date.now()}.${selectedMedia.mediaType === 'video' ? 'mp4' : 'jpg'}`,
       });
 
-      if (storyText.trim()) {
+      // Only send text content for videos (since we can't embed text in videos)
+      if (selectedMedia.mediaType === 'video' && storyText.trim()) {
         formData.append('content', storyText.trim());
       }
+
+      // Add media type to help backend processing
+      formData.append('mediaType', selectedMedia.mediaType);
 
       const response = await fetch(`${BASE_URL}/api/v1/stories/story`, {
         method: 'POST',
@@ -237,8 +442,14 @@ const CreateStoryScreen = () => {
   };
 
   const resetStory = () => {
-    setSelectedImage(null);
+    setSelectedMedia(null);
     setStoryText('');
+    resetRecording();
+    setShowTextOverlay(false);
+    setTextPosition({ x: 100, y: 100 });
+    setTextColor(COLORS.lightText);
+    setFontSize(24);
+    pan.setValue({ x: 0, y: 0 });
   };
 
   const handleCreateAnother = () => {
@@ -249,6 +460,34 @@ const CreateStoryScreen = () => {
     setShowSuccessOptions(false);
     navigation.goBack();
   };
+
+  // NEW: Text overlay functions
+  const addTextToStory = () => {
+    setShowTextOverlay(true);
+    pan.setOffset({
+      x: textPosition.x,
+      y: textPosition.y,
+    });
+    pan.setValue({ x: 0, y: 0 });
+  };
+
+  const updateTextPosition = () => {
+    pan.addListener(value => {
+      setTextPosition({
+        x: value.x,
+        y: value.y,
+      });
+    });
+    return () => {
+      pan.removeAllListeners();
+    };
+  };
+
+  useEffect(() => {
+    if (showTextOverlay) {
+      updateTextPosition();
+    }
+  }, [showTextOverlay]);
 
   if (showSuccessOptions) {
     return (
@@ -278,56 +517,159 @@ const CreateStoryScreen = () => {
     );
   }
 
-  if (selectedImage) {
+  if (selectedMedia) {
     return (
       <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
         <StatusBar barStyle="light-content" backgroundColor={COLORS.black} />
-        <ImageBackground source={{ uri: selectedImage.uri }} style={styles.previewImageBackground}>
+        
+        {/* NEW: ViewShot wrapper for capturing with text overlay */}
+        <ViewShot
+          ref={viewShotRef}
+          options={{ 
+            format: 'jpg', 
+            quality: 0.9,
+            fileName: `story_with_text_${Date.now()}.jpg`
+          }}
+          style={styles.viewShotContainer}
+        >
+          {selectedMedia.mediaType === 'video' ? (
+            <Video
+              source={{ uri: selectedMedia.uri }}
+              style={styles.previewVideoBackground}
+              resizeMode="cover"
+              repeat
+              muted
+            />
+          ) : (
+            <ImageBackground source={{ uri: selectedMedia.uri }} style={styles.previewImageBackground}>
+            </ImageBackground>
+          )}
+          
+          {/* NEW: Text Overlay for images */}
+          {showTextOverlay && selectedMedia.mediaType === 'photo' && (
+            <Animated.View
+              style={[
+                styles.textOverlay,
+                {
+                  transform: [{ translateX: pan.x }, { translateY: pan.y }],
+                },
+              ]}
+              {...panResponder.panHandlers}
+            >
+              <Text
+                style={[
+                  styles.storyText,
+                  {
+                    color: textColor,
+                    fontSize: fontSize,
+                  },
+                ]}
+              >
+                {storyText || 'Your text here'}
+              </Text>
+            </Animated.View>
+          )}
+        </ViewShot>
+        
+        <View style={styles.previewOverlay}>
           <View style={styles.previewHeader}>
             <TouchableOpacity style={styles.headerIconContainer} onPress={resetStory}>
               <Icon name="arrow-back" size={28} color={COLORS.lightText} />
             </TouchableOpacity>
-            {/* <View style={styles.previewTools}>
-              <TouchableOpacity style={styles.headerIconContainer}>
-                <Icon name="text" size={28} color={COLORS.lightText} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.headerIconContainer}>
-                <Icon name="color-filter-outline" size={28} color={COLORS.lightText} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.headerIconContainer}>
-                <Icon name="musical-notes-outline" size={28} color={COLORS.lightText} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.headerIconContainer}>
-                <Icon name="happy-outline" size={28} color={COLORS.lightText} />
-              </TouchableOpacity>
-            </View> */}
+            {selectedMedia.mediaType === 'video' && (
+              <View style={styles.mediaTypeIndicator}>
+                <Icon name="videocam" size={20} color={COLORS.lightText} />
+                <Text style={styles.mediaTypeText}>Video</Text>
+              </View>
+            )}
           </View>
 
-          {/* <View style={styles.textInputContainer}>
+          {/* NEW: Text Input and Controls */}
+          <View style={styles.textInputContainer}>
             <TextInput
               style={styles.textInput}
-              placeholder="Add text..."
-              placeholderTextColor="rgba(255,255,255,0.7)"
+              placeholder="Add text to your story..."
+              placeholderTextColor={COLORS.mediumText}
               value={storyText}
               onChangeText={setStoryText}
               multiline
             />
-          </View> */}
+            <View style={styles.textControls}>
+              <TouchableOpacity
+                style={styles.colorButton}
+                onPress={() => setTextColor(COLORS.lightText)}
+              >
+                <View
+                  style={[
+                    styles.colorPreview,
+                    { backgroundColor: COLORS.lightText },
+                    textColor === COLORS.lightText && styles.selectedColor,
+                  ]}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.colorButton}
+                onPress={() => setTextColor(COLORS.red)}
+              >
+                <View
+                  style={[
+                    styles.colorPreview,
+                    { backgroundColor: COLORS.red },
+                    textColor === COLORS.red && styles.selectedColor,
+                  ]}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.colorButton}
+                onPress={() => setTextColor(COLORS.yellow)}
+              >
+                <View
+                  style={[
+                    styles.colorPreview,
+                    { backgroundColor: COLORS.yellow },
+                    textColor === COLORS.yellow && styles.selectedColor,
+                  ]}
+                />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.fontSizeButton}
+                onPress={() => setFontSize(prev => (prev > 16 ? prev - 4 : prev))}
+              >
+                <Text style={styles.fontSizeText}>A-</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.fontSizeButton}
+                onPress={() => setFontSize(prev => (prev < 32 ? prev + 4 : prev))}
+              >
+                <Text style={styles.fontSizeText}>A+</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
 
           <View style={styles.previewFooter}>
-            <TouchableOpacity
-              style={[styles.postButton, uploading && styles.disabledButton]}
-              onPress={uploadStory}
-              disabled={uploading}
-            >
-              {uploading ? (
-                <ActivityIndicator size="small" color={COLORS.lightText} />
-              ) : (
-                <Text style={styles.postButtonText}>Post Story</Text>
-              )}
-            </TouchableOpacity>
+            {!showTextOverlay ? (
+              <TouchableOpacity
+                style={styles.addTextButton}
+                onPress={addTextToStory}
+              >
+                <Icon name="text" size={24} color={COLORS.lightText} />
+                <Text style={styles.addTextButtonText}>Add Text</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.postButton, uploading && styles.disabledButton]}
+                onPress={uploadStory}
+                disabled={uploading}
+              >
+                {uploading ? (
+                  <ActivityIndicator size="small" color={COLORS.lightText} />
+                ) : (
+                  <Text style={styles.postButtonText}>Post Story</Text>
+                )}
+              </TouchableOpacity>
+            )}
           </View>
-        </ImageBackground>
+        </View>
       </Animated.View>
     );
   }
@@ -343,6 +685,8 @@ const CreateStoryScreen = () => {
           device={device}
           isActive={isCameraActive}
           photo
+          video
+          audio
           flash={flash}
           zoom={zoom}
         />
@@ -356,7 +700,31 @@ const CreateStoryScreen = () => {
         </View>
       )}
 
-      {/* Lowered Header */}
+      {/* Recording overlay */}
+      {isRecording && (
+        <View style={styles.recordingOverlay}>
+          <View style={styles.recordingIndicator}>
+            <View style={styles.recordingDot} />
+            <Text style={styles.recordingText}>Recording</Text>
+            <Text style={styles.recordingDuration}>{recordingDuration}s</Text>
+          </View>
+          <View style={styles.recordingProgressContainer}>
+            <Animated.View 
+              style={[
+                styles.recordingProgressBar,
+                {
+                  width: recordingProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['0%', '100%'],
+                  })
+                }
+              ]} 
+            />
+          </View>
+        </View>
+      )}
+
+      {/* Header */}
       <View style={styles.creatorHeader}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Icon name="close" size={30} color={COLORS.lightText} />
@@ -365,45 +733,124 @@ const CreateStoryScreen = () => {
         <View style={styles.headerSpacer} />
       </View>
 
+      {/* NEW: Capture Mode Toggle */}
+      {!isRecording && (
+        <View style={styles.captureModeContainer}>
+          <View style={styles.captureModeToggle}>
+            <TouchableOpacity
+              style={[
+                styles.captureModeButton,
+                captureMode === 'photo' && styles.activeModeButton
+              ]}
+              onPress={() => setCaptureMode('photo')}
+            >
+              <Icon 
+                name="camera" 
+                size={20} 
+                color={captureMode === 'photo' ? COLORS.black : COLORS.lightText} 
+              />
+              <Text style={[
+                styles.captureModeText,
+                captureMode === 'photo' && styles.activeModeText
+              ]}>
+                Photo
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.captureModeButton,
+                captureMode === 'video' && styles.activeModeButton
+              ]}
+              onPress={() => setCaptureMode('video')}
+            >
+              <Icon 
+                name="videocam" 
+                size={20} 
+                color={captureMode === 'video' ? COLORS.black : COLORS.lightText} 
+              />
+              <Text style={[
+                styles.captureModeText,
+                captureMode === 'video' && styles.activeModeText
+              ]}>
+                Video
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
       {/* Camera Controls */}
       <View style={styles.creatorControls}>
         <View style={styles.leftControls}>
-          <TouchableOpacity style={styles.controlButton} onPress={openGallery}>
-            <Icon name="images-outline" size={28} color={COLORS.lightText} />
-            <Text style={styles.controlButtonText}>Gallery</Text>
+          <TouchableOpacity 
+            style={[styles.controlButton, isRecording && styles.disabledControl]} 
+            onPress={openGallery}
+            disabled={isRecording}
+          >
+            <Icon name="images-outline" size={28} color={isRecording ? COLORS.mediumText : COLORS.lightText} />
+            <Text style={[styles.controlButtonText, isRecording && styles.disabledControlText]}>Gallery</Text>
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={styles.shutterButton} onPress={takePhoto}>
-          <View style={styles.shutterButtonInner} />
-        </TouchableOpacity>
+        <View style={styles.shutterButtonContainer}>
+          <TouchableOpacity
+            style={[
+              styles.shutterButton,
+              isRecording && styles.recordingShutterButton,
+              captureMode === 'video' && !isRecording && styles.videoModeShutterButton
+            ]}
+            onPress={handleShutterPress}
+          >
+            <View style={[
+              styles.shutterButtonInner, 
+              isRecording && styles.recordingShutterInner,
+              captureMode === 'video' && !isRecording && styles.videoModeShutterInner
+            ]} />
+          </TouchableOpacity>
+          <Text style={styles.shutterInstruction}>
+            {captureMode === 'photo' 
+              ? 'Tap to take photo'
+              : isRecording 
+                ? 'Tap to stop recording' 
+                : 'Tap to start recording'
+            }
+          </Text>
+        </View>
 
         <View style={styles.rightControls}>
-          <TouchableOpacity style={styles.controlButton} onPress={toggleCamera}>
-            <Icon name="camera-reverse-outline" size={28} color={COLORS.lightText} />
-            <Text style={styles.controlButtonText}>Flip</Text>
+          <TouchableOpacity 
+            style={[styles.controlButton, isRecording && styles.disabledControl]} 
+            onPress={toggleCamera}
+            disabled={isRecording}
+          >
+            <Icon name="camera-reverse-outline" size={28} color={isRecording ? COLORS.mediumText : COLORS.lightText} />
+            <Text style={[styles.controlButtonText, isRecording && styles.disabledControlText]}>Flip</Text>
           </TouchableOpacity>
         </View>
       </View>
 
       {/* Go Live Button */}
-      <View style={styles.liveButtonContainer}>
-        <TouchableOpacity style={styles.liveButton} onPress={handleGoLive}>
-          <Icon name="radio" size={24} color={COLORS.red} />
-          <Text style={styles.liveButtonText}>Go Live</Text>
-        </TouchableOpacity>
-      </View>
+      {!isRecording && (
+        <View style={styles.liveButtonContainer}>
+          <TouchableOpacity style={styles.liveButton} onPress={handleGoLive}>
+            <Icon name="radio" size={24} color={COLORS.red} />
+            <Text style={styles.liveButtonText}>Go Live</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
-      {/* Flash Toggle (moved to side controls) */}
-      <View style={styles.sideControls}>
-        <TouchableOpacity style={styles.sideControlButton} onPress={toggleFlash}>
-          <Icon 
-            name={flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-outline' : 'flash-off'} 
-            size={24} 
-            color={flash === 'off' ? COLORS.mediumText : COLORS.lightText} 
-          />
-        </TouchableOpacity>
-      </View>
+      {/* Flash Toggle - only show for back camera */}
+      {cameraPosition === 'back' && !isRecording && (
+        <View style={styles.sideControls}>
+          <TouchableOpacity style={styles.sideControlButton} onPress={toggleFlash}>
+            <Icon 
+              name={flash === 'on' ? 'flash' : flash === 'auto' ? 'flash-outline' : 'flash-off'} 
+              size={24} 
+              color={flash === 'off' ? COLORS.mediumText : COLORS.lightText} 
+            />
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 };
@@ -413,10 +860,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.black,
   },
+  // NEW: ViewShot container
+  viewShotContainer: {
+    flex: 1,
+    width: width,
+    height: height,
+  },
   // --- Creator Screen Styles ---
   creatorHeader: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 80 : 50, // Lowered from 50/20 to 80/50
+    top: Platform.OS === 'ios' ? 80 : 50,
     left: 0,
     right: 0,
     flexDirection: 'row',
@@ -431,7 +884,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   headerSpacer: {
-    width: 30, // Placeholder for removed flash icon
+    width: 30,
   },
   cameraPlaceholder: {
     flex: 1,
@@ -442,6 +895,41 @@ const styles = StyleSheet.create({
   cameraPlaceholderText: {
     color: COLORS.mediumText,
     fontSize: 16,
+  },
+  // NEW: Capture Mode Toggle Styles
+  captureModeContainer: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 140 : 120,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 5,
+  },
+  captureModeToggle: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 25,
+    padding: 4,
+    gap: 4,
+  },
+  captureModeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
+  },
+  activeModeButton: {
+    backgroundColor: COLORS.lightText,
+  },
+  captureModeText: {
+    color: COLORS.lightText,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  activeModeText: {
+    color: COLORS.black,
   },
   creatorControls: {
     position: 'absolute',
@@ -470,6 +958,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 4,
   },
+  disabledControl: {
+    opacity: 0.5,
+  },
+  disabledControlText: {
+    color: COLORS.mediumText,
+  },
+  shutterButtonContainer: {
+    alignItems: 'center',
+  },
   shutterButton: {
     width: 70,
     height: 70,
@@ -480,6 +977,12 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     borderColor: 'rgba(255,255,255,0.5)',
   },
+  recordingShutterButton: {
+    borderColor: COLORS.red,
+  },
+  videoModeShutterButton: {
+    borderColor: COLORS.red,
+  },
   shutterButtonInner: {
     width: 60,
     height: 60,
@@ -487,6 +990,71 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.lightText,
     borderWidth: 2,
     borderColor: COLORS.black,
+  },
+  recordingShutterInner: {
+    backgroundColor: COLORS.red,
+    borderRadius: 8,
+    width: 30,
+    height: 30,
+  },
+  videoModeShutterInner: {
+    backgroundColor: COLORS.red,
+    borderRadius: 30,
+  },
+  shutterInstruction: {
+    color: COLORS.lightText,
+    fontSize: 10,
+    marginTop: 8,
+    textAlign: 'center',
+    opacity: 0.8,
+  },
+  // Recording overlay styles
+  recordingOverlay: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 180 : 160,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 15,
+  },
+  recordingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 8,
+  },
+  recordingDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: COLORS.red,
+    opacity: 1,
+  },
+  recordingText: {
+    color: COLORS.lightText,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  recordingDuration: {
+    color: COLORS.lightText,
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  recordingProgressContainer: {
+    width: width - 40,
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 2,
+    marginTop: 12,
+    overflow: 'hidden',
+  },
+  recordingProgressBar: {
+    height: '100%',
+    backgroundColor: COLORS.red,
+    borderRadius: 2,
   },
   // Go Live Button
   liveButtonContainer: {
@@ -532,45 +1100,122 @@ const styles = StyleSheet.create({
     flex: 1,
     width: width,
     height: height,
+  },
+  previewVideoBackground: {
+    flex: 1,
+    width: width,
+    height: height,
+  },
+  previewOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     justifyContent: 'space-between',
   },
   previewHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
     paddingHorizontal: 15,
-    paddingTop: Platform.OS === 'ios' ? 80 : 50, // Lowered to match main header
-  },
-  previewTools: {
-    flexDirection: 'row',
-    gap: 15,
+    paddingTop: Platform.OS === 'ios' ? 80 : 50,
   },
   headerIconContainer: {
     backgroundColor: 'rgba(0,0,0,0.4)',
     padding: 8,
     borderRadius: 50,
   },
-  textInputContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  mediaTypeIndicator: {
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 15,
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
+    gap: 6,
+  },
+  mediaTypeText: {
+    color: COLORS.lightText,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  // NEW: Text Overlay Styles
+  textOverlay: {
+    position: 'absolute',
+    zIndex: 10,
+    top: 100,
+    left: 100,
+  },
+  storyText: {
+    fontWeight: 'bold',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: 1, height: 1 },
+    textShadowRadius: 2,
+  },
+  // NEW: Text Input and Controls
+  textInputContainer: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    borderRadius: 10,
+    marginHorizontal: 20,
   },
   textInput: {
     color: COLORS.lightText,
-    fontSize: 28,
-    fontWeight: 'bold',
-    textAlign: 'center',
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: {width: -1, height: 1},
-    textShadowRadius: 10,
+    fontSize: 16,
+    padding: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.mediumText,
+    marginBottom: 10,
   },
+  textControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+  },
+  colorButton: {
+    padding: 5,
+  },
+  colorPreview: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  selectedColor: {
+    borderColor: COLORS.lightText,
+  },
+  fontSizeButton: {
+    backgroundColor: COLORS.darkSecondary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  fontSizeText: {
+    color: COLORS.lightText,
+    fontWeight: 'bold',
+  },
+  // Preview Footer
   previewFooter: {
     paddingHorizontal: 20,
     paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+  },
+  addTextButton: {
+    backgroundColor: COLORS.darkSecondary,
+    paddingVertical: 16,
+    borderRadius: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  addTextButtonText: {
+    color: COLORS.lightText,
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   postButton: {
     backgroundColor: COLORS.primary,

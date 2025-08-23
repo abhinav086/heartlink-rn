@@ -766,7 +766,7 @@ const CreateLiveStream = ({ navigation }) => {
       {displayError ? <Text style={styles.errorText}>{displayError}</Text> : null}
 
       {/* Active Streams Section */}
-      <View style={styles.currentStreamsContainer}>
+      {/* <View style={styles.currentStreamsContainer}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Your Active Streams</Text>
           <TouchableOpacity onPress={() => fetchCurrentStreams("manual_refresh_button")}>
@@ -811,9 +811,9 @@ const CreateLiveStream = ({ navigation }) => {
             </TouchableOpacity>
           </>
         )}
-      </View>
+      </View> */}
 
-      {/* Stream Creation Form */}
+      
       <View style={hasActiveStreams ? styles.disabledForm : null}>
         <View style={styles.formGroup}>
           <Text style={styles.label}>Description (Optional)</Text>

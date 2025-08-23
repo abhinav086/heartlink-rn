@@ -20,9 +20,7 @@ const ExploreHeader = () => {
       <Text style={styles.title}>Explore</Text>
       
       <View style={styles.iconContainer}>
-        <TouchableOpacity onPress={handleSearchPress} style={styles.iconButton}>
-          <Image source={icons.search} style={styles.icon} />
-        </TouchableOpacity>
+       
         
         <TouchableOpacity onPress={handleNotificationPress} style={styles.iconButton}>
           <Image source={icons.bell || icons.notification} style={styles.icon} />

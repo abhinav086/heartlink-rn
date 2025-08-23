@@ -21,6 +21,7 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
   const [hasMorePosts, setHasMorePosts] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshCount, setRefreshCount] = useState(0); // Track refresh count
+  const [hasUnreadNotifications, setHasUnreadNotifications] = useState(false); // Added for notification badge
   const flatListRef = useRef(null);
 
   // Handle hardware back button press
@@ -35,6 +36,30 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
     );
 
     return () => backHandler.remove();
+  }, []);
+
+  // Check for unread notifications (example implementation)
+  useEffect(() => {
+    const checkUnreadNotifications = async () => {
+      try {
+        const token = await AsyncStorage.getItem('token');
+        if (token) {
+          // Example API call - replace with your actual endpoint
+          // const response = await fetch(`${BASE_URL}/api/v1/notifications/unread`, {
+          //   headers: { 'Authorization': `Bearer ${token}` }
+          // });
+          // const data = await response.json();
+          // setHasUnreadNotifications(data.hasUnread);
+          
+          // For testing - set to true to show badge
+          // setHasUnreadNotifications(true);
+        }
+      } catch (error) {
+        console.log('Error checking notifications:', error);
+      }
+    };
+
+    checkUnreadNotifications();
   }, []);
 
   // ADDED: Shuffle algorithms
@@ -246,15 +271,15 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
 
   const getPostImageUrl = (apiPost) => {
     if (!apiPost || typeof apiPost !== 'object') {
-      return 'https://via.placeholder.com/400   ';
+      return 'https://via.placeholder.com/400';
     }
     
     const images = Array.isArray(apiPost.images) ? apiPost.images : [];
     if (images.length > 0) {
-      return images[0]?.url || images[0]?.uri || images[0] || 'https://via.placeholder.com/400   ';
+      return images[0]?.url || images[0]?.uri || images[0] || 'https://via.placeholder.com/400';
     }
     
-    return apiPost?.image || apiPost?.imageUrl || 'https://via.placeholder.com/400   ';
+    return apiPost?.image || apiPost?.imageUrl || 'https://via.placeholder.com/400';
   };
 
   const getAuthorName = (author) => {
@@ -524,7 +549,7 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
         _id: apiPost._id || apiPost.id || `post-${Date.now()}`,
         userImg: userImage ? { uri: userImage } : { uri: 'https://via.placeholder.com/50/333333/ffffff?text=User' },
         username: authorName,
-        postImg: postImageUrl ? { uri: postImageUrl } : { uri: '   https://via.placeholder.com/400/333333/ffffff?text=No+Image' },
+        postImg: postImageUrl ? { uri: postImageUrl } : { uri: 'https://via.placeholder.com/400/333333/ffffff?text=No+Image' },
         caption: apiPost.content || apiPost.caption || '',
         userInitials: getInitials(authorName),
         avatarColor: getAvatarColor(authorName),
@@ -570,8 +595,8 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
   };
 
   const createFallbackPost = () => {
-    const fallbackImage = '   https://via.placeholder.com/50/333333/ffffff?text=User';
-    const fallbackPostImage = '   https://via.placeholder.com/400/333333/ffffff?text=No+Image';
+    const fallbackImage = 'https://via.placeholder.com/50/333333/ffffff?text=User';
+    const fallbackPostImage = 'https://via.placeholder.com/400/333333/ffffff?text=No+Image';
     const fallbackName = 'Unknown User';
     
     return {
@@ -619,7 +644,14 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
 
   const ListHeader = () => (
     <>
-      <Header navigation={navigation} />
+      <Header 
+        hasUnreadNotifications={hasUnreadNotifications}
+        onNotificationPress={() => {
+          // Handle notification press logic here
+          setHasUnreadNotifications(false); // Clear badge when user opens notifications
+          navigation.navigate('NotificationsScreen');
+        }}
+      />
       <SearchBar />
       <Stories />
     </>

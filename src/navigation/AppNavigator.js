@@ -1,6 +1,7 @@
-// AppNavigator.js (Updated for new Live Stream Components)
+// AppNavigator.js - Enhanced with gesture navigation protection
 import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { Platform } from 'react-native';
 import SplashScreen from '../screens/auth/SplashScreen';
 import LoginScreen from '../screens/auth/LoginScreen';
 import SignupScreen from '../screens/auth/SignupScreen';
@@ -18,9 +19,9 @@ import WalletScreen from '../screens/profile/WalletScreen';
 import AboutScreen from '../screens/profile/AboutScreen.tsx'
 import BlockedUsersScreen from '../screens/BlockedUsersScreen.js';
 
-// --- UPDATED: Import the new, separate Live Stream Components ---
-import CreateLiveStream from '../components/Home/CreateLiveStream.jsx'; // Adjust path as needed
-import LiveStreamViewer from '../components/Home/LiveStreamViewer.jsx';   // Adjust path as needed
+// Live Stream Components
+import CreateLiveStream from '../components/Home/CreateLiveStream.jsx';
+import LiveStreamViewer from '../components/Home/LiveStreamViewer.jsx';
 
 // Dating Components
 import TakeOnDatePage from '../components/Dating/TakeOnDatePage.tsx';
@@ -32,7 +33,7 @@ import PendingDateRequestsScreen from '../components/Dating/PendingDateRequestsS
 import DateRequestDetailScreen from '../components/Dating/DateRequestDetailScreen';
 import DateRequestStatusScreen from '../components/Dating/DateRequestStatusScreen';
 
-// Hey heyy messaging 
+// Messaging 
 import PrivateChatScreen from '../components/Dating/PrivateChatScreen';
 import TakeOnDate from '../components/Dating/privateTakeOnDate.tsx';
 
@@ -60,40 +61,102 @@ import PhotoViewerScreen from '../screens/tabs/PhotoViewerScreen';
 import ReelsViewerScreen from '../screens/tabs/ReelsViewerScreen';
 
 // Call-related screens
-// import CallPage from '../screens/CallPage';
 import CallScreen from '../screens/CallScreen';
 
 const Stack = createNativeStackNavigator();
 
-// --- Screen Options (mostly unchanged) ---
+// ENHANCED: Root screens that should prevent gesture exit to app
+const ROOT_SCREENS = [
+  'HomeScreen',
+  'Login', 
+  'Splash',
+  'Gender',
+  'Questions', 
+  'ProfileSetup',
+  'Memberships'
+];
+
+// ENHANCED: Critical screens that need gesture protection
+const PROTECTED_SCREENS = [
+  'CallScreen',
+  'CreateLiveStream',
+  'LiveStreamViewer',
+  'PaymentScreen',
+  'DateConfirmed',
+  'StoryViewer'
+];
+
+// ENHANCED: Get dynamic screen options based on screen name and platform
+const getScreenOptions = (screenName, baseOptions = {}) => {
+  const isRootScreen = ROOT_SCREENS.includes(screenName);
+  const isProtectedScreen = PROTECTED_SCREENS.includes(screenName);
+  const isAndroid = Platform.OS === 'android';
+  
+  return {
+    headerShown: false,
+    // Root screens and protected screens disable gestures to prevent app exit/interruption
+    gestureEnabled: !isRootScreen && !isProtectedScreen,
+    // Enhanced gesture configuration for Android
+    ...(isAndroid && {
+      gestureDirection: 'horizontal',
+      gestureResponseDistance: {
+        horizontal: isRootScreen || isProtectedScreen ? 0 : 50,
+        vertical: -1,
+      },
+      // Prevent accidental gesture navigation on critical screens
+      gestureVelocityImpact: isRootScreen || isProtectedScreen ? 0 : 0.3,
+    }),
+    // iOS specific configurations
+    ...(!isAndroid && {
+      gestureDirection: 'horizontal',
+      gestureResponseDistance: (isRootScreen || isProtectedScreen) ? { horizontal: 0 } : undefined,
+    }),
+    ...baseOptions,
+  };
+};
+
+// ENHANCED: Default screen options with better gesture handling
 const defaultScreenOptions = {
   headerShown: false,
   gestureEnabled: true,
   animation: 'slide_from_right',
+  animationDuration: 250,
+  // Enhanced gesture configuration
+  gestureDirection: 'horizontal',
+  gestureResponseDistance: {
+    horizontal: 50,
+    vertical: -1,
+  },
+  gestureVelocityImpact: 0.3,
 };
 
+// ENHANCED: Modal screen options with safe gesture handling
 const modalScreenOptions = {
   headerShown: false,
   presentation: 'modal',
   gestureEnabled: true,
   animation: 'slide_from_bottom',
+  gestureDirection: 'vertical',
+  gestureResponseDistance: {
+    horizontal: -1,
+    vertical: 100,
+  },
 };
 
+// ENHANCED: Full screen modal with gesture protection
 const fullScreenModalOptions = {
   headerShown: false,
   presentation: 'fullScreenModal',
-  gestureEnabled: false,
+  gestureEnabled: false, // Prevent accidental dismissal
   animation: 'slide_from_right',
   animationDuration: 200,
 };
 
-// --- UPDATED: WebRTC Live Stream specific options ---
-// Considered renaming to be more generic or specific to viewer/creator if needed,
-// but keeping the name for now as it applies to the full-screen experience.
+// ENHANCED: Live stream options with maximum protection
 const liveStreamOptions = {
   headerShown: false,
   presentation: 'fullScreenModal',
-  gestureEnabled: false,
+  gestureEnabled: false, // Critical: Prevent gesture interruption during streaming
   animation: 'slide_from_bottom',
   animationDuration: 300,
   statusBarStyle: 'light',
@@ -124,10 +187,10 @@ const liveStreamOptions = {
   },
 };
 
-// --- Call screen options (unchanged) ---
+// ENHANCED: Call screen options with maximum protection
 const callScreenOptions = {
   presentation: 'fullScreenModal',
-  gestureEnabled: false,
+  gestureEnabled: false, // Critical: Prevent accidental call termination
   animation: 'slide_from_right',
   animationDuration: 200,
   headerShown: false,
@@ -159,105 +222,116 @@ const callScreenOptions = {
   },
 };
 
+// ENHANCED: Chat screen options optimized for WebRTC integration
+const chatScreenOptions = {
+  headerShown: false,
+  animation: 'slide_from_right',
+  gestureEnabled: true,
+  freezeOnBlur: false, // Important for call functionality
+  animationDuration: 250,
+  gestureResponseDistance: {
+    horizontal: 50,
+    vertical: -1,
+  },
+  gestureVelocityImpact: 0.3,
+};
+
 const AppNavigator = ({ initialRouteName }) => {
   return (
     <Stack.Navigator 
       initialRouteName={initialRouteName}
       screenOptions={defaultScreenOptions}
     >
-      {/* ========== AUTH SCREENS ========== */}
+      {/* ========== AUTH SCREENS (Protected from gesture exit) ========== */}
       <Stack.Screen 
         name="Splash" 
         component={SplashScreen} 
-        options={{ 
-          headerShown: false,
-          gestureEnabled: false,
-        }} 
+        options={getScreenOptions('Splash', {
+          animationTypeForReplace: 'push',
+          animation: 'fade',
+        })} 
       />
+      
       <Stack.Screen
         name="Memberships"
         component={MembershipsScreen}
-        options={{ headerShown: false }}
+        options={getScreenOptions('Memberships')}
       />
+      
       <Stack.Screen 
         name="Login" 
         component={LoginScreen} 
-        options={{ 
-          headerShown: false,
-          gestureEnabled: false,
-        }} 
+        options={getScreenOptions('Login', {
+          animation: 'fade',
+        })} 
       />
+      
       <Stack.Screen 
         name="Signup" 
         component={SignupScreen} 
-        options={{ headerShown: false }} 
+        options={getScreenOptions('Signup')} 
       />
 
-      {/* ========== ONBOARDING SCREENS ========== */}
+      {/* ========== ONBOARDING SCREENS (Protected from gesture exit) ========== */}
       <Stack.Screen 
         name="Gender" 
         component={GenderScreen} 
-        options={{ 
-          headerShown: false,
-          gestureEnabled: false,
-        }} 
+        options={getScreenOptions('Gender')} 
       />
+      
       <Stack.Screen 
         name="Questions" 
         component={QuestionsScreen} 
-        options={{ 
-          headerShown: false,
-          gestureEnabled: false,
-        }} 
+        options={getScreenOptions('Questions')} 
       />
+      
       <Stack.Screen 
         name="ProfileSetup" 
         component={ProfileSetupScreen} 
-        options={{ 
-          headerShown: false,
-          gestureEnabled: false,
-        }} 
+        options={getScreenOptions('ProfileSetup')} 
       />
 
-      {/* ========== MAIN APP SCREENS ========== */}
+      {/* ========== MAIN APP SCREENS (Root level protection) ========== */}
       <Stack.Screen 
         name="HomeScreen" 
         component={TabNavigator} 
-        options={{ 
-          headerShown: false,
-          gestureEnabled: false,
-        }} 
+        options={getScreenOptions('HomeScreen', {
+          animation: 'fade',
+          animationDuration: 300,
+        })} 
       />
       
       {/* ========== STANDALONE SCREENS ========== */}
       <Stack.Screen 
         name="ExploreScreen" 
         component={ExploreScreen} 
-        options={{ headerShown: false }} 
+        options={getScreenOptions('ExploreScreen')} 
       />
+      
       <Stack.Screen 
         name="CreateScreen" 
         component={CreateScreen} 
-        options={{ headerShown: false }} 
+        options={getScreenOptions('CreateScreen')} 
       />
+      
       <Stack.Screen 
         name="CreateStory" 
         component={CreateStoryScreen} 
         options={modalScreenOptions}
       />
+      
       <Stack.Screen 
         name="EditPost" 
         component={EditPostScreen} 
-        options={{ 
-          headerShown: false,
-          animation: 'slide_from_right',
-        }} 
+        options={getScreenOptions('EditPost')} 
       />
+      
       <Stack.Screen 
         name="CommentScreen" 
         component={CommentScreen}
         options={modalScreenOptions}
       />
+      
       <Stack.Screen 
         name="LikeScreen" 
         component={LikeScreen}
@@ -268,74 +342,68 @@ const AppNavigator = ({ initialRouteName }) => {
       <Stack.Screen 
         name="NotificationsScreen" 
         component={NotificationsScreen} 
-        options={{ headerShown: false }}
+        options={getScreenOptions('NotificationsScreen')}
       />
+      
       <Stack.Screen
         name="Membership99"
         component={MembershipPage99}
-        options={{ headerShown: false }}
+        options={getScreenOptions('Membership99')}
       />
+      
       <Stack.Screen
         name="Membership499"
         component={MembershipPage499}
-        options={{ headerShown: false }}
+        options={getScreenOptions('Membership499')}
       />
           
       {/* ========== PROFILE SCREENS ========== */}
       <Stack.Screen 
         name="EditProfile" 
         component={EditProfileScreen} 
-        options={{ 
-          headerShown: false,
-          animation: 'slide_from_right',
-        }} 
+        options={getScreenOptions('EditProfile')} 
       />
+      
       <Stack.Screen 
         name="SettingsScreen" 
         component={SettingsScreen} 
-        options={{ headerShown: false }} 
+        options={getScreenOptions('SettingsScreen')} 
       />
+      
       <Stack.Screen 
         name="WalletScreen" 
         component={WalletScreen} 
-        options={{ 
-          headerShown: false,
-          animation: 'slide_from_right',
-        }} 
+        options={getScreenOptions('WalletScreen')} 
       />
+      
       <Stack.Screen 
         name="UserProfile" 
         component={UserProfileScreen} 
-        options={{ headerShown: false }} 
+        options={getScreenOptions('UserProfile')} 
       />
+      
       <Stack.Screen 
         name="FollowersList" 
         component={FollowersList} 
-        options={{ 
-          headerShown: false,
-          animation: 'slide_from_right',
-        }} 
+        options={getScreenOptions('FollowersList')} 
       />
+      
       <Stack.Screen 
         name="FollowingList" 
         component={FollowingList} 
-        options={{ 
-          headerShown: false,
-          animation: 'slide_from_right',
-        }} 
+        options={getScreenOptions('FollowingList')} 
       />
+      
       <Stack.Screen 
         name="BlockedUsersScreen" 
         component={BlockedUsersScreen} 
-        options={{ 
-          headerShown: false,
-          animation: 'slide_from_right',
-        }} 
+        options={getScreenOptions('BlockedUsersScreen')} 
       />
+      
       <Stack.Screen 
         name="AboutScreen" 
         component={AboutScreen} 
-        options={{ headerShown: false }}
+        options={getScreenOptions('AboutScreen')}
       />
       
       {/* ========== MEDIA VIEWER SCREENS ========== */}
@@ -343,208 +411,141 @@ const AppNavigator = ({ initialRouteName }) => {
         name="PhotoViewerScreen" 
         component={PhotoViewerScreen} 
         options={{ 
-          headerShown: false,
-          presentation: 'modal',
+          ...modalScreenOptions,
           animationTypeForReplace: 'push',
-          gestureEnabled: true,
         }}
       />
+      
       <Stack.Screen 
         name="ReelsViewerScreen" 
         component={ReelsViewerScreen}
         options={{ 
-          headerShown: false,
-          presentation: 'modal',
+          ...modalScreenOptions,
           animationTypeForReplace: 'push',
-          gestureEnabled: true,
         }}
       />
+      
       <Stack.Screen 
         name="StoryViewer" 
         component={StoryViewer} 
-        options={{ 
-          headerShown: false,
-          gestureEnabled: false,
+        options={getScreenOptions('StoryViewer', {
           animationTypeForReplace: 'push',
-        }}
+        })}
       />
       
       {/* ========== OTHER SCREENS ========== */}
       <Stack.Screen 
         name="OffersScreen" 
         component={OffersScreen} 
-        options={{ headerShown: false }} 
+        options={getScreenOptions('OffersScreen')} 
       />
 
-      {/* ========== ✅ WEBRTC LIVE STREAMING ========== */}
-      {/* 
-        PRIORITY: WebRTC Live Streaming Screens
-        Optimized for real-time streaming performance with special configurations
-        to prevent accidental navigation and maintain WebRTC connections.
-        Added separate screens for Creating and Viewing streams.
-      */}
-      {/* --- NEW: Screen for Creating a Live Stream --- */}
+      {/* ========== WEBRTC LIVE STREAMING (Maximum Protection) ========== */}
       <Stack.Screen 
         name="CreateLiveStream" 
         component={CreateLiveStream} 
-        options={liveStreamOptions} // Reuse the optimized options
+        options={liveStreamOptions}
       />
 
-      {/* --- UPDATED: Screen for Viewing a Live Stream --- */}
       <Stack.Screen 
         name="LiveStreamViewer" 
         component={LiveStreamViewer} 
-        options={liveStreamOptions} // Reuse the optimized options
+        options={liveStreamOptions}
       />
       
-      {/* ========== CHAT SCREENS ========== */}
+      {/* ========== CHAT SCREENS (Enhanced for WebRTC) ========== */}
       <Stack.Screen 
         name="UsersListScreen" 
         component={UsersListScreen} 
-        options={{ 
-          headerShown: false,
+        options={getScreenOptions('UsersListScreen', {
           animation: 'slide_from_bottom',
-        }} 
+        })} 
       />
       
-      {/* ✅ ENHANCED: Chat Detail Screen optimized for WebRTC calling */}
       <Stack.Screen 
         name="ChatDetail" 
         component={ChatDetailScreen} 
-        options={{ 
-          headerShown: false,
-          animation: 'slide_from_right',
-          gestureEnabled: true,
-          freezeOnBlur: false,
-          animationDuration: 250,
-          gestureResponseDistance: {
-            horizontal: 50,
-            vertical: -1,
-          },
-        }} 
+        options={chatScreenOptions} 
       />
 
       {/* ========== DATING SCREENS ========== */}
       <Stack.Screen 
         name="TakeOnDate" 
         component={TakeOnDatePage}
-        options={{
-          headerShown: false,
-          gestureEnabled: true,
-          animation: 'slide_from_right',
-        }}
+        options={getScreenOptions('TakeOnDate')}
       />
+      
       <Stack.Screen 
         name="BudgetSelector" 
         component={BudgetSelectorPage}
-        options={{
-          headerShown: false,
-          gestureEnabled: true,
-          animation: 'slide_from_right',
-        }}
+        options={getScreenOptions('BudgetSelector')}
       />
 
       <Stack.Screen 
         name="DateRequests" 
         component={DateRequestsScreen}
-        options={{
-          headerShown: false,
-          gestureEnabled: true,
-          animation: 'slide_from_right',
-        }}
+        options={getScreenOptions('DateRequests')}
       />
+      
       <Stack.Screen 
         name="PendingDateRequests" 
         component={PendingDateRequestsScreen}
-        options={{
-          headerShown: false,
-          gestureEnabled: true,
-          animation: 'slide_from_bottom',
-          presentation: 'modal',
-        }}
+        options={modalScreenOptions}
       />
+      
       <Stack.Screen 
         name="DateRequestDetail" 
         component={DateRequestDetailScreen}
-        options={{
-          headerShown: false,
-          gestureEnabled: true,
-          animation: 'slide_from_right',
-        }}
+        options={getScreenOptions('DateRequestDetail')}
       />
+      
       <Stack.Screen 
         name="DateRequestStatus" 
         component={DateRequestStatusScreen}
-        options={{
-          headerShown: false,
-          gestureEnabled: true,
-          animation: 'slide_from_right',
-        }}
+        options={getScreenOptions('DateRequestStatus')}
       />
 
-      {/* ========== PAYMENT & CONFIRMATION SCREENS ========== */}
+      {/* ========== PAYMENT & CONFIRMATION SCREENS (Protected) ========== */}
       <Stack.Screen 
         name="PaymentScreen" 
         component={PaymentScreen}
-        options={{
-          headerShown: false,
-          gestureEnabled: false,
-          animation: 'slide_from_right',
+        options={getScreenOptions('PaymentScreen', {
           presentation: 'card',
           statusBarStyle: 'light',
           statusBarBackgroundColor: '#0a0a0a',
           freezeOnBlur: true,
-        }}
+        })}
       />
       
       <Stack.Screen 
         name="DateConfirmed" 
         component={DateConfirmed}
-        options={{
-          headerShown: false,
-          gestureEnabled: false,
-          animation: 'slide_from_right',
+        options={getScreenOptions('DateConfirmed', {
           presentation: 'card',
           statusBarStyle: 'light',
           statusBarBackgroundColor: '#0a0a0a',
           freezeOnBlur: false,
-        }}
+        })}
       />
       
-        <Stack.Screen 
-          name="PrivateChat" 
-          component={PrivateChatScreen} 
-          options={{ 
-            headerShown: false,
-            animation: 'slide_from_right',
-          }} 
-        />
-         <Stack.Screen 
-          name="PrivateTakeOnDate" 
-          component={TakeOnDate} 
-          options={{ 
-            headerShown: false,
-            animation: 'slide_from_right',
-          }} 
-        />
+      <Stack.Screen 
+        name="PrivateChat" 
+        component={PrivateChatScreen} 
+        options={chatScreenOptions} 
+      />
+      
+      <Stack.Screen 
+        name="PrivateTakeOnDate" 
+        component={TakeOnDate} 
+        options={getScreenOptions('PrivateTakeOnDate')} 
+      />
 
-
-      {/* ========== ENHANCED CALL SCREENS ========== */}
+      {/* ========== CALL SCREENS (Maximum Protection) ========== */}
       <Stack.Screen
         name="CallScreen"
         component={CallScreen}
         options={callScreenOptions}
       />
-      
-      
-      {/* <Stack.Screen 
-        name="CallPage" 
-        component={CallPage}
-        options={{
-          ...callScreenOptions,
-          animationDuration: 250,
-        }}
-      /> */}
     </Stack.Navigator>
   );
 };
