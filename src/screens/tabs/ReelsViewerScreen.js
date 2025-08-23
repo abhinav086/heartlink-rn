@@ -13,19 +13,18 @@ import {
   Image,
   Animated,
   AppState,
+  Platform,
 } from 'react-native';
 import Video from 'react-native-video';
 import { useAuth } from '../../context/AuthContext';
 import BASE_URL from '../../config/config';
 import { useIsFocused } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
-
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 const ReelsViewerScreen = ({ navigation, route }) => {
   const { reels: initialReels = [], initialIndex = 0, username = 'User' } = route.params || {};
   const { token, user } = useAuth() || {};
-  
   const [reels, setReels] = useState(initialReels);
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
   const [loading, setLoading] = useState(false);
@@ -33,15 +32,21 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   const [videoBuffering, setVideoBuffering] = useState({});
   const [appState, setAppState] = useState(AppState.currentState);
   const [isAppActive, setIsAppActive] = useState(true);
-  
+  const [manualPaused, setManualPaused] = useState({}); // Added for manual play/pause
   const flatListRef = useRef(null);
   const isFocused = useIsFocused();
+  const [viewCounted, setViewCounted] = useState(new Set());
+  const [viewCountAnimations, setViewCountAnimations] = useState({});
+  const [viewRegistrationInProgress, setViewRegistrationInProgress] = useState(new Set());
+  const [preloadedVideos, setPreloadedVideos] = useState({});
 
   // Real-time view tracking
   const [viewTracking, setViewTracking] = useState({});
   const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   const viewStartTimes = useRef({});
   const viewTracked = useRef(new Set());
+  const viewTimers = useRef({}); // Added for delayed view registration
+  const viewStartTime = useRef({}); // Added for tracking start time
 
   // Like animation states
   const [likeAnimations, setLikeAnimations] = useState([]);
@@ -53,124 +58,204 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   const queueRef = useRef([]);
   const processingRef = useRef(false);
 
-  // Real-time view tracking function
-  const trackReelView = useCallback(async (reelId, watchDuration, watchPercentage) => {
-    if (!token || !reelId || viewTracked.current.has(reelId)) {
-      return;
-    }
-
+  // --- START: Functions from ReelsScreen for consistency ---
+  const calculateDummyViews = useCallback((createdAt) => {
+    if (!createdAt) return Math.floor(Math.random() * 31) + 20;
     try {
-      console.log('=== TRACKING REAL VIEW ===');
-      console.log('Reel ID:', reelId);
-      console.log('Watch Duration:', watchDuration);
-      console.log('Watch Percentage:', watchPercentage);
+      const now = new Date();
+      const createdDate = new Date(createdAt);
+      const diffInHours = Math.floor((now - createdDate) / (1000 * 60 * 60));
+      const diffInDays = Math.floor(diffInHours / 24);
+      let baseViews;
+      let randomRange;
+      if (diffInHours < 24) {
+        baseViews = 20;
+        randomRange = 30;
+      } else if (diffInDays <= 7) {
+        baseViews = 50;
+        randomRange = 50;
+      } else if (diffInDays <= 30) {
+        baseViews = 100;
+        randomRange = 30;
+      } else {
+        baseViews = 120;
+        randomRange = 30;
+      }
+      const randomViews = Math.floor(Math.random() * randomRange);
+      const finalViews = baseViews + randomViews;
+      return Math.min(Math.max(finalViews, 20), 150);
+    } catch (error) {
+      console.error('Error calculating views:', error);
+      return Math.floor(Math.random() * 31) + 20;
+    }
+  }, []);
 
-      // Mark as tracked to prevent duplicates
-      viewTracked.current.add(reelId);
+  // --- END: Functions from ReelsScreen ---
 
-      const response = await fetch(`${BASE_URL}/api/v1/posts/reels/${reelId}/view`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          sessionId,
-          watchDuration,
-          watchPercentage,
+  // Enhanced view registration with analytics and session tracking (from ReelsScreen)
+  const registerReelView = useCallback(
+    async (reelId, analyticsData = {}) => {
+      // Prevent duplicate registrations
+      if (viewRegistrationInProgress.has(reelId) || viewCounted.has(reelId)) {
+        console.log(`View already registered/in progress for reel ${reelId}`);
+        return;
+      }
+      try {
+        setViewRegistrationInProgress(prev => new Set(prev).add(reelId));
+        // Enhanced payload with analytics
+        const payload = {
+          sessionId: sessionId,
+          watchDuration: analyticsData.watchDuration || 0,
+          watchPercentage: analyticsData.watchPercentage || 0,
           deviceInfo: {
-            platform: 'mobile',
-            screenWidth: SCREEN_WIDTH,
-            screenHeight: SCREEN_HEIGHT,
-          }
-        })
-      });
+            userAgent: 'React Native',
+            platform: Platform.OS,
+            version: Platform.Version
+          },
+          ...analyticsData
+        };
 
-      if (response.ok) {
-        const result = await response.json();
-        console.log('✅ View tracked successfully:', result);
-        
-        // Update local view count if the view was counted
-        if (result.data?.viewResult?.counted) {
-          setReels(prevReels => 
-            prevReels.map(reel => 
-              reel._id === reelId 
-                ? { 
-                    ...reel, 
-                    views: result.data.viewResult.viewCount || (reel.views + 1),
-                    realTimeViews: result.data.analytics?.totalViews || (reel.realTimeViews + 1)
+        const response = await fetch(`${BASE_URL}/api/v1/posts/reels/${reelId}/view`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+        if (response.ok && data.success) {
+          const { viewResult, analytics } = data.data;
+          // Update reel with enhanced view data
+          setReels(prevReels =>
+            prevReels.map(reel =>
+              reel._id === reelId
+                ? {
+                    ...reel,
+                    viewCount: viewResult.viewCount,
+                    // Add analytics data for rich display
+                    viewAnalytics: {
+                      totalViews: analytics.totalViews,
+                      uniqueViewers: analytics.uniqueViewers,
+                      engagement: analytics.engagement,
+                      lastUpdated: Date.now()
+                    },
+                    // Track view quality
+                    viewQuality: data.data.metadata?.quality || 'unknown'
                   }
                 : reel
             )
           );
+          // Mark as viewed only if actually counted
+          if (viewResult.counted) {
+            setViewCounted(prev => new Set(prev).add(reelId));
+            console.log(`✅ View registered for reel ${reelId}: ${viewResult.viewCount} views (${viewResult.source})`);
+            // Optional: Show view count animation
+            if (viewResult.uniqueView) {
+              showViewCountAnimation(reelId, viewResult.viewCount);
+            }
+          } else {
+            console.log(`ℹ️ View not counted for reel ${reelId}: ${viewResult.reason}`);
+          }
         }
-      } else {
-        console.warn('Failed to track view:', await response.text());
+      } catch (error) {
+        console.error('Error registering enhanced view:', error);
+      } finally {
+        setViewRegistrationInProgress(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(reelId);
+          return newSet;
+        });
       }
-    } catch (error) {
-      console.error('Error tracking view:', error);
-    }
-  }, [token, sessionId]);
+    },
+    [viewCounted, token, sessionId, viewRegistrationInProgress, BASE_URL]
+  );
 
-  // Start view tracking when reel becomes active
-  const startViewTracking = useCallback((reelId) => {
-    const startTime = Date.now();
-    viewStartTimes.current[reelId] = startTime;
-    
-    console.log(`📺 Started tracking view for reel: ${reelId}`);
+  // Show view count animation (optional visual feedback) (from ReelsScreen)
+  const showViewCountAnimation = useCallback((reelId, newCount) => {
+    // Create a brief animation to show view count increase
+    setViewCountAnimations(prev => ({
+      ...prev,
+      [reelId]: {
+        count: newCount,
+        timestamp: Date.now()
+      }
+    }));
+    // Remove animation after 2 seconds
+    setTimeout(() => {
+      setViewCountAnimations(prev => {
+        const newAnimations = { ...prev };
+        delete newAnimations[reelId];
+        return newAnimations;
+      });
+    }, 2000);
   }, []);
 
-  // End view tracking and submit data
-  const endViewTracking = useCallback((reelId, videoDuration = 0) => {
-    const startTime = viewStartTimes.current[reelId];
-    if (!startTime) return;
+  // Enhanced view tracking with watch time analytics (from ReelsScreen)
+  const startViewTracking = useCallback((reelId) => {
+    viewStartTime.current[reelId] = Date.now();
+    // Register view after 3 seconds with initial analytics
+    viewTimers.current[reelId] = setTimeout(() => {
+      const watchDuration = Date.now() - viewStartTime.current[reelId];
+      registerReelView(reelId, {
+        watchDuration,
+        watchPercentage: Math.min(30, (watchDuration / 10000) * 100),
+        isComplete: false,
+        trigger: 'auto_3s'
+      });
+    }, 3000);
+  }, [registerReelView]);
 
-    const watchDuration = (Date.now() - startTime) / 1000; // Convert to seconds
-    const watchPercentage = videoDuration > 0 ? Math.min((watchDuration / videoDuration) * 100, 100) : 0;
-
-    console.log(`📺 Ending view tracking for reel: ${reelId}`);
-    console.log(`Watch duration: ${watchDuration}s, Percentage: ${watchPercentage}%`);
-
-    // Only track if watched for at least 1 second
-    if (watchDuration >= 1) {
-      trackReelView(reelId, watchDuration, watchPercentage);
+  // Enhanced view tracking completion with full analytics (from ReelsScreen)
+  const stopViewTracking = useCallback((reelId) => {
+    if (viewTimers.current[reelId]) {
+      clearTimeout(viewTimers.current[reelId]);
+      delete viewTimers.current[reelId];
     }
+    if (viewStartTime.current[reelId]) {
+      const watchDuration = Date.now() - viewStartTime.current[reelId];
+      delete viewStartTime.current[reelId];
+      // Send comprehensive analytics if watched for meaningful duration
+      if (watchDuration > 1000) {
+        const watchPercentage = Math.min(100, (watchDuration / 15000) * 100);
+        registerReelView(reelId, {
+          watchDuration,
+          watchPercentage,
+          isComplete: watchPercentage >= 90,
+          trigger: 'view_end',
+          quality: watchPercentage >= 80 ? 'high' : watchPercentage >= 50 ? 'medium' : 'low'
+        });
+      }
+    }
+  }, [registerReelView]);
 
-    // Clean up
-    delete viewStartTimes.current[reelId];
-  }, [trackReelView]);
-
-  // Format views count (e.g., 1.2K, 1M)
+  // Format views count (e.g., 1.2K, 1M) (from ReelsScreen)
   const formatViewCount = useCallback((count) => {
-    if (!count || count < 1) return '0';
     if (count < 1000) return count.toString();
     if (count < 1000000) return `${(count / 1000).toFixed(1)}K`;
     return `${(count / 1000000).toFixed(1)}M`;
   }, []);
 
-  // Get real view count from reel data
+  // Get real view count from reel data (from ReelsScreen)
   const getRealViewCount = useCallback((reel) => {
     // Priority order: realTimeViews -> views -> 0
-    return reel.realTimeViews || reel.views || 0;
+    return reel.viewCount || reel.realTimeViews || reel.views || 0;
   }, []);
 
-  // Process like queue in background
+  // Process like queue in background (from ReelsScreen)
   const processLikeQueue = useCallback(async () => {
     if (processingRef.current || queueRef.current.length === 0 || !token) {
       return;
     }
-
     processingRef.current = true;
     setIsProcessingQueue(true);
-
     while (queueRef.current.length > 0) {
       const likeAction = queueRef.current.shift();
-      
       try {
         console.log('=== PROCESSING LIKE QUEUE (VIEWER) ===');
         console.log('Reel ID:', likeAction.reelId);
         console.log('Action:', likeAction.action);
-
         const response = await fetch(`${BASE_URL}/api/v1/posts/${likeAction.reelId}/like`, {
           method: 'PATCH',
           headers: {
@@ -178,22 +263,19 @@ const ReelsViewerScreen = ({ navigation, route }) => {
             'Content-Type': 'application/json',
           },
         });
-
         if (!response.ok) {
           const errorData = await response.json();
           console.error('Like queue processing error:', errorData.message);
           continue;
         }
-
         const updatedData = await response.json();
         console.log('Like queue success:', updatedData);
-        
         if (updatedData.success && updatedData.data) {
-          setReels(prevReels => 
-            prevReels.map(reel => 
-              reel._id === likeAction.reelId 
-                ? { 
-                    ...reel, 
+          setReels(prevReels =>
+            prevReels.map(reel =>
+              reel._id === likeAction.reelId
+                ? {
+                    ...reel,
                     likes: updatedData.data.reel?.likes || reel.likes || [],
                     realTimeLikes: updatedData.data.realTimeLikes || reel.realTimeLikes
                   }
@@ -201,70 +283,59 @@ const ReelsViewerScreen = ({ navigation, route }) => {
             )
           );
         }
-
       } catch (error) {
         console.error('Error processing like queue:', error);
         continue;
       }
-
       await new Promise(resolve => setTimeout(resolve, 100));
     }
-
     processingRef.current = false;
     setIsProcessingQueue(false);
-  }, [token]);
+  }, [token, BASE_URL]);
 
-  // Add like action to queue
+  // Add like action to queue (from ReelsScreen)
   const addToLikeQueue = useCallback((reelId, action) => {
     const likeAction = {
       reelId,
       action,
       timestamp: Date.now()
     };
-
     queueRef.current = queueRef.current.filter(item => item.reelId !== reelId);
     queueRef.current.push(likeAction);
-    
     setLikeQueue(prev => {
       const filtered = prev.filter(item => item.reelId !== reelId);
       return [...filtered, likeAction];
     });
-
     processLikeQueue();
   }, [processLikeQueue]);
 
-  // Profile press handler
+  // Profile press handler (from ReelsScreen)
   const handleProfilePress = useCallback((authorData) => {
     try {
       console.log('Profile press triggered for:', authorData?.fullName || authorData?.username);
-
       const userId = authorData?._id || authorData?.id;
       const authorName = authorData?.fullName || authorData?.username;
-
       if (!navigation) {
         console.error('Navigation prop not passed to ReelsViewerScreen component');
         Alert.alert('Error', 'Navigation not available');
         return;
       }
-
       if (!userId || userId === 'unknown') {
         console.error('User ID not available in author data');
         Alert.alert('Error', 'Unable to view profile');
         return;
       }
-
       const isOwnProfile = user && (userId === user._id || userId === user.id);
-      
       if (isOwnProfile) {
         console.log('Navigating to own profile');
-        navigation.navigate('UserProfile', { 
+        navigation.navigate('UserProfile', {
           userId: userId,
           fromReelsViewer: true,
           isOwnProfile: true
         });
       } else {
         console.log('Navigating to UserProfile with userId:', userId);
-        navigation.navigate('UserProfile', { 
+        navigation.navigate('UserProfile', {
           userId: userId,
           fromReelsViewer: true,
           authorName: authorName
@@ -276,23 +347,25 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [navigation, user]);
 
-  // App state handler
+  // App state handler (from ReelsScreen)
   useEffect(() => {
     const handleAppStateChange = (nextAppState) => {
-      setIsAppActive(nextAppState === 'active');
-      setAppState(nextAppState);
-      
-      // End view tracking when app goes inactive
-      if (nextAppState !== 'active') {
-        const currentReel = reels[currentIndex];
-        if (currentReel) {
-          endViewTracking(currentReel._id, currentReel.video?.duration);
-        }
+      if (appState.match(/inactive|background/) && nextAppState === 'active') {
+        setIsAppActive(true);
+      } else if (nextAppState.match(/inactive|background/)) {
+        setIsAppActive(false);
       }
+      setAppState(nextAppState);
     };
     const subscription = AppState.addEventListener('change', handleAppStateChange);
-    return () => subscription.remove();
-  }, [currentIndex, reels, endViewTracking]);
+    return () => {
+      if (subscription?.remove) {
+        subscription.remove();
+      } else {
+        AppState.removeEventListener('change', handleAppStateChange);
+      }
+    };
+  }, [appState]);
 
   // Scroll to initial index on mount
   useEffect(() => {
@@ -303,13 +376,35 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [initialIndex, reels.length]);
 
+  // Preload next video (from ReelsScreen)
+  useEffect(() => {
+    const nextIndex = currentIndex + 1;
+    if (reels[nextIndex]?.video?.url && !preloadedVideos[nextIndex]) {
+      setPreloadedVideos((prev) => ({
+        ...prev,
+        [nextIndex]: reels[nextIndex].video.url,
+      }));
+    }
+  }, [currentIndex, reels, preloadedVideos]);
+
+  // Effect to register view when the current reel changes (from ReelsScreen)
+  useEffect(() => {
+    const currentReel = reels[currentIndex];
+    if (currentReel && currentReel._id) {
+      startViewTracking(currentReel._id);
+      return () => {
+        stopViewTracking(currentReel._id);
+      };
+    }
+  }, [currentIndex, reels, startViewTracking, stopViewTracking]);
+
   // Process initial reels with real view data
   useEffect(() => {
     if (user && initialReels.length > 0) {
       const userId = user._id || user.id;
       const reelsWithLikes = initialReels.map(reel => ({
         ...reel,
-        isLiked: reel.likes?.some(like => 
+        isLiked: reel.likes?.some(like =>
           (typeof like === 'object' ? like.user || like._id : like) === userId
         ) || false
       }));
@@ -327,7 +422,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     // End view tracking for current reel before leaving
     const currentReel = reels[currentIndex];
     if (currentReel) {
-      endViewTracking(currentReel._id, currentReel.video?.duration);
+      stopViewTracking(currentReel._id); // Changed to stopViewTracking
     }
     navigation.goBack();
   };
@@ -336,22 +431,19 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     if (viewableItems.length > 0) {
       const newIndex = viewableItems[0].index;
       const oldIndex = currentIndex;
-      
       // End tracking for previous reel
       if (oldIndex !== newIndex && reels[oldIndex]) {
-        endViewTracking(reels[oldIndex]._id, reels[oldIndex].video?.duration);
+        stopViewTracking(reels[oldIndex]._id); // Changed to stopViewTracking
       }
-      
       // Start tracking for new reel
       if (reels[newIndex]) {
         startViewTracking(reels[newIndex]._id);
       }
-      
       setCurrentIndex(newIndex);
     }
-  }, [currentIndex, reels, endViewTracking, startViewTracking]);
+  }, [currentIndex, reels, stopViewTracking, startViewTracking]); // Updated dependencies
 
-  // Start tracking when first reel becomes visible
+  // Start tracking when first reel becomes visible (from ReelsScreen logic)
   useEffect(() => {
     if (reels.length > 0 && currentIndex >= 0 && reels[currentIndex] && isAppActive && isFocused) {
       startViewTracking(reels[currentIndex]._id);
@@ -378,37 +470,32 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     ]).start(() => setLikeAnimations(prev => prev.filter(anim => anim.id !== id)));
   }, []);
 
-  // Instant like functionality with queue processing
+  // Instant like functionality with queue processing (from ReelsScreen)
   const handleLikePress = useCallback(async (reelId) => {
     if (!reelId || !token || !user) {
       Alert.alert('Error', 'Unable to like reel');
       return;
     }
-
     try {
       console.log('=== INSTANT LIKE REEL (VIEWER) ===');
       console.log('Reel ID:', reelId);
       console.log('User ID:', user._id || user.id);
-
       const currentReel = reels.find(reel => reel._id === reelId);
       if (!currentReel) {
         console.error('Reel not found');
         return;
       }
-
       const wasLiked = currentReel.isLiked;
       const userId = user._id || user.id;
-      
       // INSTANT UI UPDATE
-      setReels(prevReels => 
+      setReels(prevReels =>
         prevReels.map(reel => {
           if (reel._id === reelId) {
-            const newLikes = wasLiked 
+            const newLikes = wasLiked
               ? reel.likes?.filter(like => (typeof like === 'object' ? like.user || like._id : like) !== userId) || []
               : [...(reel.likes || []), { user: userId, _id: Date.now().toString() }];
-            
-            return { 
-              ...reel, 
+            return {
+              ...reel,
               isLiked: !wasLiked,
               likes: newLikes
             };
@@ -416,28 +503,23 @@ const ReelsViewerScreen = ({ navigation, route }) => {
           return reel;
         })
       );
-
       if (!wasLiked) {
         createLikeAnimation();
       }
-
       const action = wasLiked ? 'unlike' : 'like';
       addToLikeQueue(reelId, action);
-      
       console.log(`✅ Reel ${action} updated instantly, queued for processing`);
-
     } catch (error) {
       console.error('Error in instant like:', error);
     }
   }, [token, user, reels, createLikeAnimation, addToLikeQueue]);
 
-  // Navigate to comments screen
+  // Navigate to comments screen (from ReelsScreen)
   const openComments = useCallback((reel) => {
     if (!navigation) {
       console.error('Navigation prop not available');
       return;
     }
-
     navigation.navigate('CommentScreen', {
       reelId: reel._id,
       reelData: reel,
@@ -446,11 +528,11 @@ const ReelsViewerScreen = ({ navigation, route }) => {
         setReels(prevReels =>
           prevReels.map(r =>
             r._id === reel._id
-              ? { 
-                  ...r, 
+              ? {
+                  ...r,
                   commentCount: newCommentCount,
                   comments: realTimeComments || r.comments || [],
-                  realTimeComments: realTimeComments 
+                  realTimeComments: realTimeComments
                 }
               : r
           )
@@ -479,12 +561,22 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   const getInitials = useCallback((name) => {
     if (!name) return '?';
     const names = name.trim().split(/\s+/);
+    if (names.length === 0) return '?';
     if (names.length === 1) return names[0][0].toUpperCase();
     return (names[0][0] + (names[names.length - 1][0] || '')).toUpperCase();
   }, []);
 
   const toggleMute = useCallback(() => setIsMuted(prev => !prev), []);
+
   const handleBuffer = useCallback((index, isBuffering) => setVideoBuffering(prev => ({ ...prev, [index]: isBuffering })), []);
+
+  // Added from ReelsScreen: Toggle pause for a specific reel
+  const togglePauseForReel = useCallback((reelId) => {
+    setManualPaused((prev) => ({
+      ...prev,
+      [reelId]: !prev[reelId],
+    }));
+  }, []);
 
   const LikeAnimations = () => (
     <View style={styles.likeAnimationContainer}>
@@ -498,19 +590,18 @@ const ReelsViewerScreen = ({ navigation, route }) => {
 
   const renderReelItem = useCallback(({ item, index }) => {
     if (!item) return <View style={styles.reelContainer} />;
-
-    const isActive = index === currentIndex;
-    const isPaused = !isActive || !isAppActive || !isFocused;
-    
+    // Updated logic for isPaused (from ReelsScreen)
+    const isActive = index === currentIndex && isAppActive;
+    const isPaused = manualPaused[item._id] || !isActive || !isFocused;
     const isVideo = !!item.video?.url;
     const author = item.author || {};
     const authorName = author.fullName || author.username || username;
     const isLiked = item.isLiked;
     const likeCount = item.likes?.length || 0;
     const commentCount = item.commentCount || item.comments?.length || 0;
-    
-    // Get real view count from the reel data
+    // Get real view count from the reel data (from ReelsScreen)
     const viewCount = getRealViewCount(item);
+    const viewAnimation = viewCountAnimations[item._id]; // Added from ReelsScreen
     const mediaSource = item.video?.thumbnail?.url || item.video?.url || item.images?.[0]?.url;
 
     return (
@@ -522,7 +613,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
                 source={{ uri: item.video.url }}
                 style={styles.media}
                 resizeMode="cover"
-                paused={isPaused}
+                paused={isPaused} // Updated to use isPaused
                 repeat={true}
                 muted={isMuted}
                 playInBackground={false}
@@ -547,12 +638,10 @@ const ReelsViewerScreen = ({ navigation, route }) => {
             </View>
           )}
         </View>
-
-        {isActive && <LikeAnimations />}
-
+        {index === currentIndex && <LikeAnimations />} {/* Show animations for current item */}
         <View style={styles.bottomLeftInfo}>
-          <TouchableOpacity 
-            onPress={() => handleProfilePress(author)} 
+          <TouchableOpacity
+            onPress={() => handleProfilePress(author)}
             activeOpacity={0.8}
           >
             <Text style={styles.authorName}>{authorName}</Text>
@@ -560,64 +649,78 @@ const ReelsViewerScreen = ({ navigation, route }) => {
           <Text style={styles.timeAgo}>{formatTimeAgo(item.createdAt)}</Text>
           {item.content ? <Text style={styles.caption} numberOfLines={2}>{item.content}</Text> : null}
         </View>
-
         <View style={styles.bottomRightActions}>
           {/* Like Button */}
-          <TouchableOpacity 
-            style={styles.actionButton} 
-            onPress={() => handleLikePress(item._id)} 
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => handleLikePress(item._id)}
             activeOpacity={0.7}
           >
-            <Icon 
-              name={isLiked ? "heart" : "heart-outline"} 
-              size={28} 
-              color={isLiked ? "#ed167e" : "#fff"} 
+            <Icon
+              name={isLiked ? "heart" : "heart-outline"}
+              size={28}
+              color={isLiked ? "#ed167e" : "#fff"}
               style={styles.actionIcon}
             />
             <Text style={styles.actionCount}>{likeCount}</Text>
           </TouchableOpacity>
-
           {/* Comment Button */}
-          <TouchableOpacity 
-            style={styles.actionButton} 
-            onPress={() => openComments(item)} 
+          <TouchableOpacity
+            style={styles.actionButton}
+            onPress={() => openComments(item)}
             activeOpacity={0.7}
           >
-            <Icon 
-              name="chatbubble-outline" 
-              size={26} 
-              color="#fff" 
+            <Icon
+              name="chatbubble-outline"
+              size={26}
+              color="#fff"
               style={styles.actionIcon}
             />
             <Text style={styles.actionCount}>{commentCount}</Text>
           </TouchableOpacity>
-
           {/* Real Views Button - Now shows actual tracked views */}
-          <TouchableOpacity 
-            style={styles.actionButton} 
+          <TouchableOpacity
+            style={styles.actionButton}
             activeOpacity={0.7}
           >
-            <Icon 
-              name="eye-outline" 
-              size={26} 
-              color="#fff" 
+            <Icon
+              name="eye-outline"
+              size={26}
+              color="#fff"
               style={styles.actionIcon}
             />
             <Text style={[styles.actionCount, styles.viewCount]}>
               {formatViewCount(viewCount)}
             </Text>
+            {/* Added view count animation from ReelsScreen */}
+            {viewAnimation && (
+              <Animated.View
+                style={[
+                  styles.viewCountAnimation,
+                  {
+                    opacity: viewAnimation.timestamp ? 1 : 0,
+                    transform: [
+                      {
+                        translateY: viewAnimation.timestamp ? 0 : -20,
+                      },
+                    ],
+                  },
+                ]}
+              >
+                <Text style={styles.viewCountText}>+1</Text>
+              </Animated.View>
+            )}
           </TouchableOpacity>
-
           {/* Author Avatar */}
-          <TouchableOpacity 
+          <TouchableOpacity
             style={styles.authorAvatar}
-            onPress={() => handleProfilePress(author)} 
+            onPress={() => handleProfilePress(author)}
             activeOpacity={0.8}
           >
             {author.photoUrl ? (
-              <Image 
-                source={{ uri: author.photoUrl.url || author.photoUrl }} 
-                style={styles.authorAvatarImage} 
+              <Image
+                source={{ uri: author.photoUrl.url || author.photoUrl }}
+                style={styles.authorAvatarImage}
               />
             ) : (
               <View style={styles.authorAvatarPlaceholder}>
@@ -628,25 +731,43 @@ const ReelsViewerScreen = ({ navigation, route }) => {
             )}
           </TouchableOpacity>
         </View>
+        {/* Play/Pause button for current reel - Always visible (from ReelsScreen) */}
+        {index === currentIndex && (
+          <TouchableOpacity
+            style={styles.playPauseButton}
+            onPress={() => togglePauseForReel(item._id)}
+            activeOpacity={0.7}
+          >
+            <Icon
+              name={isPaused ? 'play' : 'pause'}
+              size={22}
+              color="#fff"
+            />
+          </TouchableOpacity>
+        )}
       </View>
     );
   }, [
-    currentIndex, 
-    isAppActive, 
-    isMuted, 
-    videoBuffering, 
-    handleLikePress, 
-    user, 
-    likeAnimations, 
-    isFocused, 
-    username, 
+    currentIndex,
+    isAppActive, // Added dependency
+    isMuted,
+    videoBuffering,
+    handleLikePress,
+    user,
+    likeAnimations,
+    isFocused, // Added dependency
+    username,
     handleProfilePress,
     openComments,
     formatViewCount,
-    getRealViewCount
+    getRealViewCount,
+    manualPaused, // Added dependency
+    togglePauseForReel, // Added dependency
+    viewCountAnimations, // Added dependency
   ]);
 
   const keyExtractor = useCallback((item, index) => item?._id || `reel-${index}`, []);
+
   const getItemLayout = useCallback((_, index) => ({ length: SCREEN_HEIGHT, offset: SCREEN_HEIGHT * index, index }), []);
 
   if (loading && !reels.length) {
@@ -674,7 +795,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
-      
       <FlatList
         ref={flatListRef}
         data={reels}
@@ -689,22 +809,19 @@ const ReelsViewerScreen = ({ navigation, route }) => {
         viewabilityConfig={viewabilityConfig}
         getItemLayout={getItemLayout}
         initialScrollIndex={initialIndex}
-        onScrollToIndexFailed={() => {}}
+        onScrollToIndexFailed={() => { }}
         initialNumToRender={1}
         maxToRenderPerBatch={1}
         windowSize={3}
       />
-
       {/* Back Button */}
       <TouchableOpacity onPress={handleBack} style={styles.backButton} activeOpacity={0.7}>
         <Icon name="arrow-back" size={24} color="#fff" />
       </TouchableOpacity>
-
       {/* Mute Button */}
       <TouchableOpacity style={styles.muteIndicator} onPress={toggleMute} activeOpacity={0.7}>
         <Icon name={isMuted ? 'volume-mute' : 'volume-high'} size={22} color="#fff" />
       </TouchableOpacity>
-
       {/* Real-time Status Indicators */}
       {isProcessingQueue && (
         <View style={styles.queueIndicator}>
@@ -816,6 +933,19 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  playPauseButton: { // Added from ReelsScreen
+    position: 'absolute',
+    top: 110, // Positioned below mute button (60 + 40 + 10 spacing)
+    right: 16,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100,
+    elevation: 10, // For Android
+  },
   queueIndicator: {
     position: 'absolute',
     top: 110,
@@ -866,6 +996,7 @@ const styles = StyleSheet.create({
   actionButton: {
     alignItems: 'center',
     marginBottom: 20,
+    position: 'relative', // Added for view count animation positioning
   },
   actionIcon: {
     marginBottom: 4,
@@ -884,6 +1015,16 @@ const styles = StyleSheet.create({
   viewCount: {
     color: '#00ff88', // Green color to indicate real views
     fontWeight: '700',
+  },
+  viewCountAnimation: { // Added from ReelsScreen
+    position: 'absolute',
+    top: -20,
+    alignItems: 'center',
+  },
+  viewCountText: { // Added from ReelsScreen
+    color: '#4CAF50',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   authorAvatar: {
     width: 40,

@@ -715,41 +715,39 @@ const ReelsScreen = ({ navigation }) => {
 
       return (
         <View style={styles.reelContainer}>
-          <TouchableWithoutFeedback onPress={() => togglePauseForReel(item._id)}>
-            <View style={styles.mediaContainer}>
-              {isVideo ? (
-                <View style={styles.videoWrapper}>
-                  <Video
-                    source={{ uri: item.video.url }}
-                    style={styles.media}
-                    resizeMode="cover"
-                    paused={isPaused}
-                    repeat={true}
-                    muted={isMuted}
-                    playInBackground={false}
-                    playWhenInactive={false}
-                    ignoreSilentSwitch="ignore"
-                    poster={mediaSource}
-                    posterResizeMode="cover"
-                    onBuffer={({ isBuffering }) => handleBuffer(index, isBuffering)}
-                    onError={(error) => console.log('Video error:', error)}
-                  />
-                  {videoBuffering[index] && (
-                    <View style={styles.bufferingOverlay}>
-                      <ActivityIndicator size="large" color="#ed167e" />
-                    </View>
-                  )}
-                </View>
-              ) : mediaSource ? (
-                <Image source={{ uri: mediaSource }} style={styles.media} resizeMode="cover" />
-              ) : (
-                <View style={styles.placeholderContainer}>
-                  <Text style={styles.placeholderText}>🎥</Text>
-                  <Text style={styles.placeholderSubtext}>Reel</Text>
-                </View>
-              )}
-            </View>
-          </TouchableWithoutFeedback>
+          <View style={styles.mediaContainer}>
+            {isVideo ? (
+              <View style={styles.videoWrapper}>
+                <Video
+                  source={{ uri: item.video.url }}
+                  style={styles.media}
+                  resizeMode="cover"
+                  paused={isPaused}
+                  repeat={true}
+                  muted={isMuted}
+                  playInBackground={false}
+                  playWhenInactive={false}
+                  ignoreSilentSwitch="ignore"
+                  poster={mediaSource}
+                  posterResizeMode="cover"
+                  onBuffer={({ isBuffering }) => handleBuffer(index, isBuffering)}
+                  onError={(error) => console.log('Video error:', error)}
+                />
+                {videoBuffering[index] && (
+                  <View style={styles.bufferingOverlay}>
+                    <ActivityIndicator size="large" color="#ed167e" />
+                  </View>
+                )}
+              </View>
+            ) : mediaSource ? (
+              <Image source={{ uri: mediaSource }} style={styles.media} resizeMode="cover" />
+            ) : (
+              <View style={styles.placeholderContainer}>
+                <Text style={styles.placeholderText}>🎥</Text>
+                <Text style={styles.placeholderSubtext}>Reel</Text>
+              </View>
+            )}
+          </View>
           {index === currentIndex && <LikeAnimations />}
           <View style={styles.bottomLeftInfo}>
             <TouchableOpacity onPress={() => handleProfilePress(item.author)} activeOpacity={0.8}>
@@ -828,6 +826,20 @@ const ReelsScreen = ({ navigation }) => {
               )}
             </TouchableOpacity>
           </View>
+          {/* Play/Pause button for current reel - Always visible */}
+          {index === currentIndex && (
+            <TouchableOpacity
+              style={styles.playPauseButton}
+              onPress={() => togglePauseForReel(item._id)}
+              activeOpacity={0.7}
+            >
+              <Icon 
+                name={isPaused ? 'play' : 'pause'} 
+                size={22} 
+                color="#fff" 
+              />
+            </TouchableOpacity>
+          )}
         </View>
       );
     },
@@ -1046,6 +1058,20 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 100,
+  },
+  playPauseButton: {
+    position: 'absolute',
+    top: 110, // Positioned below mute button (60 + 40 + 10 spacing)
+    right: 16,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100,
+    elevation: 10, // For Android
   },
   queueIndicator: {
     position: 'absolute',
@@ -1156,4 +1182,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default ReelsScreen; 
+export default ReelsScreen;

@@ -854,23 +854,7 @@ const StoryViewer = () => {
                   </View>
                 )
               }
-              ListHeaderComponent={
-                comments.length > 0 ? (
-                  <View style={{ padding: 10, backgroundColor: '#333', marginBottom: 10, borderRadius: 5 }}>
-                    <Text style={{ color: 'white', fontWeight: 'bold' }}>API DEBUG INFO:</Text>
-                    <Text style={{ color: 'yellow', fontSize: 12 }}>
-                      Total Comments: {comments.length}
-                    </Text>
-                    {comments.slice(0, 3).map((comment, index) => (
-                      <Text key={index} style={{ color: 'cyan', fontSize: 10 }}>
-                        {index + 1}: {comment.user?.username || 'NO_USERNAME'} - 
-                        photoUrl: {comment.user?.photoUrl ? 'EXISTS' : 'MISSING'} - 
-                        URL: {(comment.user?.photoUrl || 'N/A').substring(0, 50)}...
-                      </Text>
-                    ))}
-                  </View>
-                ) : null
-              }
+            
             />
 
             <View style={styles.inputContainer}>
