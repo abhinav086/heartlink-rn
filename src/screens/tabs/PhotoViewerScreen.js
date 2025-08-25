@@ -14,14 +14,100 @@ import {
   Animated,
   Easing,
   ScrollView,
+  Modal, // Keep standard Modal
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard, // Added Keyboard import
 } from 'react-native';
 import Video from 'react-native-video';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { useAuth } from '../../context/AuthContext';
 import BASE_URL from '../../config/config';
-
 const { width, height } = Dimensions.get('window');
 const imageWidth = width - 20; // Account for container padding
+
+// --- NEW: Define EditCaptionModal as a separate component ---
+const EditCaptionModal = ({ isVisible, initialCaption, onSave, onClose, isUpdating, editingItem }) => {
+  // Local state for the TextInput within the Modal
+  const [textInputValue, setTextInputValue] = useState(initialCaption || '');
+  const textInputRef = useRef(null);
+
+  // Ensure TextInput value updates if initialCaption changes (e.g., different post)
+  useEffect(() => {
+     if (isVisible) {
+        setTextInputValue(initialCaption || '');
+     }
+  }, [isVisible, initialCaption]);
+
+  const handleSave = () => {
+    // Call the parent's save function with the current text input value
+    onSave(textInputValue);
+  };
+
+  return (
+    <Modal
+      visible={isVisible}
+      animationType="slide"
+      onRequestClose={onClose}
+      onShow={() => {
+        setTimeout(() => {
+          if (textInputRef.current) {
+            textInputRef.current.focus();
+          }
+        }, 100);
+      }}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.editModalFullscreen}
+        keyboardVerticalOffset={0}
+      >
+        <View style={styles.editModalContentFixed}>
+          <View style={styles.editModalHeaderFixed}>
+            <TouchableOpacity onPress={onClose} style={styles.editModalBackButton}>
+              <Ionicons name="arrow-back" size={24} color="white" />
+            </TouchableOpacity>
+            <Text style={styles.editModalTitleFixed}>Edit Caption</Text>
+            <TouchableOpacity
+              onPress={handleSave}
+              style={styles.editModalSaveHeaderButton}
+              disabled={isUpdating || textInputValue.trim() === (initialCaption || '')} // Use local value and initial caption
+            >
+              {isUpdating ? ( // Use prop for updating state
+                <ActivityIndicator size="small" color="#ed167e" />
+              ) : (
+                <Text style={styles.editModalSaveHeaderText}>Save</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          <View style={styles.editModalBodyFixed}>
+            <TextInput
+              ref={textInputRef}
+              style={styles.captionInputFixed}
+              value={textInputValue} // Use local state
+              onChangeText={setTextInputValue} // Update local state
+              placeholder="Write a caption..."
+              placeholderTextColor="#aaaaaa"
+              multiline
+              textAlignVertical="top"
+              autoFocus={false}
+              blurOnSubmit={false}
+              returnKeyType="default"
+              scrollEnabled={true}
+              autoCorrect={true}
+              autoCapitalize="sentences"
+              keyboardType="default"
+              enablesReturnKeyAutomatically={false}
+            />
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+};
+// --- END: New EditCaptionModal Component ---
 
 const PhotoViewerScreen = ({ navigation, route }) => {
   const { posts, initialIndex = 0, username } = route.params;
@@ -29,6 +115,12 @@ const PhotoViewerScreen = ({ navigation, route }) => {
   const [currentPosts, setCurrentPosts] = useState(posts || []);
   const [loading, setLoading] = useState(false);
   const flatListRef = useRef(null);
+  // --- Modified State for Edit Caption Functionality ---
+  const [editingItem, setEditingItem] = useState(null);
+  // const [editCaption, setEditCaption] = useState(''); // <-- REMOVED this line
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [updatingCaption, setUpdatingCaption] = useState(false);
+  const [menuVisible, setMenuVisible] = useState({});
 
   useEffect(() => {
     // Scroll to initial post
@@ -41,6 +133,99 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       }, 100);
     }
   }, [initialIndex]);
+
+  // --- New: Menu Visibility Functions ---
+  const showMenu = (itemId) => {
+    setMenuVisible(prev => ({ ...prev, [itemId]: true }));
+  };
+  const hideMenu = (itemId) => {
+    setMenuVisible(prev => ({ ...prev, [itemId]: false }));
+  };
+
+  // --- NEW: Updated closeEditModal function ---
+  const closeEditModal = () => {
+    // Dismiss keyboard first
+    Keyboard.dismiss();
+    // Small delay to ensure keyboard dismissal completes
+    setTimeout(() => {
+      setIsEditModalVisible(false);
+      setEditingItem(null);
+      // setEditCaption(''); // <-- REMOVED this line
+      setUpdatingCaption(false);
+    }, 50); // Reduced delay
+  };
+
+
+  // --- New: Update Caption API Function ---
+  const updatePostCaption = async (postId, newCaption) => {
+    try {
+      const response = await fetch(`${BASE_URL}/api/v1/posts/${postId}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: newCaption }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || `Failed to update post caption (Status: ${response.status})`);
+      }
+      const data = await response.json();
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to update post caption');
+      }
+      return data;
+    } catch (error) {
+      console.error('Error updating post caption:', error);
+      throw error;
+    }
+  };
+
+  // --- New: Handle Edit Post ---
+  const handleEditPost = (item) => {
+    // Check if user owns the post
+    if (item.author?._id !== user?._id && item.user?._id !== user?._id) {
+      Alert.alert('Permission Denied', 'You can only edit your own posts.');
+      return;
+    }
+    // Hide the menu first
+    hideMenu(item._id);
+    // Set the item to edit and initialize caption
+    setEditingItem(item);
+    // const currentCaption = item.content || item.caption || ''; // <-- REMOVED this line
+    // setEditCaption(currentCaption); // <-- REMOVED this line
+    // Show modal
+    setIsEditModalVisible(true);
+  };
+
+  // --- Modified: Execute Caption Update (accepts caption as argument) ---
+  const executeCaptionUpdate = async (newCaptionText) => { // <-- Accept argument
+    if (!editingItem) return;
+    setUpdatingCaption(true);
+    try {
+      // Use the caption passed from the modal
+      const trimmedCaption = newCaptionText.trim(); // <-- Use argument
+      await updatePostCaption(editingItem._id, trimmedCaption);
+      // Update local state to reflect the new caption
+      setCurrentPosts(prev => prev.map(p =>
+        p._id === editingItem._id
+          ? { ...p, content: trimmedCaption, caption: trimmedCaption }
+          : p
+      ));
+      // Close modal and show success
+      closeEditModal();
+      setTimeout(() => {
+        Alert.alert('Success', 'Caption updated successfully');
+      }, 200);
+    } catch (error) {
+      console.error('Error updating post caption:', error);
+      Alert.alert('Error', error.message || 'Failed to update caption');
+    } finally {
+      setUpdatingCaption(false);
+    }
+  };
+
 
   // Safe property access following Post.js pattern
   const safeGet = (obj, property, fallback = '') => {
@@ -64,9 +249,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
           },
         }
       );
-
       const data = await response.json();
-
       if (response.ok) {
         // Update the post in local state
         setCurrentPosts(prevPosts =>
@@ -75,12 +258,19 @@ const PhotoViewerScreen = ({ navigation, route }) => {
               ? {
                   ...post,
                   isLikedByUser: !currentlyLiked,
-                  likeCount: data.data.likeCount,
+                  likeCount: data.data?.likeCount || (currentlyLiked ? (post.likeCount || 1) - 1 : (post.likeCount || 0) + 1),
                 }
               : post
           )
         );
-        return { success: true, data: data.data };
+        return {
+          success: true,
+          data: {
+            likeCount: data.data?.likeCount || (currentlyLiked ? -1 : 1),
+            isLiked: !currentlyLiked,
+            ...data.data
+          }
+        };
       } else {
         Alert.alert('Error', data.message || 'Failed to update like');
         return { success: false };
@@ -119,7 +309,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     const now = new Date();
     const postDate = new Date(dateString);
     const diffInSeconds = Math.floor((now - postDate) / 1000);
-
     if (diffInSeconds < 60) return 'now';
     if (diffInSeconds < 3600) return `${Math.floor(diffInSeconds / 60)}m`;
     if (diffInSeconds < 86400) return `${Math.floor(diffInSeconds / 3600)}h`;
@@ -132,15 +321,12 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     if (!url || typeof url !== 'string') {
       return null;
     }
-    
     // Remove any double protocols
     let cleanUrl = url.replace(/^https?:\/\/https?:\/\//, 'https://');
-    
     // Ensure single protocol
     if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
       cleanUrl = 'https://' + cleanUrl;
     }
-    
     console.log('🧹 URL sanitized:', { original: url, cleaned: cleanUrl });
     return cleanUrl;
   };
@@ -150,23 +336,22 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     const isVideo = item.type === 'reel';
     const authorName = item.author?.fullName || username;
     const authorPhoto = item.author?.photoUrl;
-
+    const isMenuVisible = menuVisible[item._id] || false;
+    // Check if current user owns this post
+    const isOwnPost = item.author?._id === user?._id || item.user?._id === user?._id;
     // Animation states for each post
     const [isLiked, setIsLiked] = useState(item.isLikedByUser || false);
     const [likesCount, setLikesCount] = useState(item.likeCount || 0);
     const [commentsCount, setCommentsCount] = useState(item.commentsCount || item.comments || 0);
     const [likeOperationInProgress, setLikeOperationInProgress] = useState(false);
-    
     // NEW: State for image carousel
     const [currentImageIndex, setCurrentImageIndex] = useState(0);
     const scrollViewRef = useRef(null);
-    
     // Animation refs - same as Post.js
     const heartScaleAnim = useRef(new Animated.Value(1)).current;
     const centerHeartAnim = useRef(new Animated.Value(0)).current;
     const centerHeartOpacity = useRef(new Animated.Value(0)).current;
     const heartFillAnim = useRef(new Animated.Value(isLiked ? 1 : 0)).current;
-
     // Enhanced image processing with URL sanitization and carousel support
     const processImages = () => {
       console.log('🔍 Processing images for post:', item._id);
@@ -175,20 +360,17 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         'item.video': item.video,
         'isVideo': isVideo
       });
-
       // Handle video content
       if (isVideo && item.video?.url) {
         console.log('📹 Video post detected:', item.video.url);
         const videoUri = sanitizeImageUrl(item.video.url);
         return [{ uri: videoUri, id: 0, isVideo: true }];
       }
-
       // Handle image content
       if (item.images && Array.isArray(item.images) && item.images.length > 0) {
         console.log('📷 Image post detected:', item.images.length, 'images');
         const processedImages = item.images.map((img, index) => {
           let imageUri = null;
-          
           // Handle different image object formats
           if (typeof img === 'string') {
             imageUri = sanitizeImageUrl(img);
@@ -199,49 +381,40 @@ const PhotoViewerScreen = ({ navigation, route }) => {
             imageUri = sanitizeImageUrl(rawUri);
             console.log(`📷 Image ${index + 1}: object format -`, imageUri);
           }
-          
           if (!imageUri) {
             console.log(`📷 Image ${index + 1}: invalid format, using placeholder`);
             return { uri: 'https://via.placeholder.com/400/333333/ffffff?text=No+Image', id: index };
           }
-          
           return {
             uri: imageUri,
             id: index,
             isVideo: false
           };
         }).filter(img => img.uri); // Remove any images without valid URIs
-        
         console.log('📷 Processed images:', processedImages);
         return processedImages;
       }
-      
       // No valid media found - return placeholder
       console.log('📷 No valid media found, using placeholder');
       return [{ uri: 'https://via.placeholder.com/400/333333/ffffff?text=No+Image', id: 0, isVideo: false }];
     };
-
     const postImages = processImages();
     const isMultiImage = postImages.length > 1;
-    
     console.log('📷 Final processed images:', {
       count: postImages.length,
       isMultiImage,
       firstImageUri: postImages[0]?.uri,
       allImages: postImages
     });
-
     // Handle image scroll for carousel
     const handleImageScroll = (event) => {
       const contentOffset = event.nativeEvent.contentOffset;
       const currentIndex = Math.round(contentOffset.x / imageWidth);
-      
       if (currentIndex !== currentImageIndex && currentIndex >= 0 && currentIndex < postImages.length) {
         setCurrentImageIndex(currentIndex);
         console.log('📷 Image carousel scrolled to index:', currentIndex);
       }
     };
-
     // Heart button animation with fill effect - from Post.js
     const animateHeartButton = (isLiking) => {
       Animated.parallel([
@@ -269,13 +442,11 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         }),
       ]).start();
     };
-
-    // Enhanced center heart animation with bounce effect - from Post.js
+    // Enhanced center heart animation with bounce effect - FIXED
     const animateCenterHeart = () => {
       // Reset animations
       centerHeartAnim.setValue(0);
       centerHeartOpacity.setValue(0);
-
       Animated.parallel([
         // Opacity animation
         Animated.sequence([
@@ -292,7 +463,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
             useNativeDriver: true,
           }),
         ]),
-        // Scale animation with bounce
+        // Scale animation with bounce - FIXED
         Animated.sequence([
           Animated.timing(centerHeartAnim, {
             toValue: 1.3,
@@ -300,10 +471,10 @@ const PhotoViewerScreen = ({ navigation, route }) => {
             easing: Easing.out(Easing.back(2)),
             useNativeDriver: true,
           }),
-          Animated.spring(centerHeartAnim, {
+          Animated.timing(centerHeartAnim, {
             toValue: 1,
-            tension: 100,
-            friction: 8,
+            duration: 150,
+            easing: Easing.out(Easing.quad),
             useNativeDriver: true,
           }),
           Animated.timing(centerHeartAnim, {
@@ -316,7 +487,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         ]),
       ]).start();
     };
-
     // Enhanced like handler with proper error handling - from Post.js
     const handleLikePress = async () => {
       // Prevent multiple simultaneous like operations
@@ -324,48 +494,37 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         console.log('Like operation already in progress, ignoring');
         return;
       }
-
       try {
         setLikeOperationInProgress(true);
-        
         const newLikedState = !isLiked;
         const originalLikedState = isLiked;
         const originalLikesCount = likesCount;
         const newLikesCount = newLikedState ? likesCount + 1 : Math.max(0, likesCount - 1);
-        
         console.log('=== LIKE OPERATION START ===');
         console.log('Post ID:', item._id);
         console.log('Current state:', { isLiked, likesCount });
         console.log('New state:', { isLiked: newLikedState, likesCount: newLikesCount });
-        
         // Optimistic update - update UI immediately
         setIsLiked(newLikedState);
         setLikesCount(newLikesCount);
-        
         // Trigger animations
         animateHeartButton(newLikedState);
         if (newLikedState) {
           animateCenterHeart();
         }
-        
         // Call API
         const result = await handleLike(item._id, originalLikedState);
-        
         if (result.success) {
           // Success - update with server response
           const serverLikeCount = result.data?.likeCount || result.data?.realTimeLikes || newLikesCount;
           const serverIsLiked = result.data?.isLiked !== undefined ? result.data.isLiked : newLikedState;
-          
           console.log('Server response:', { serverIsLiked, serverLikeCount });
-          
           setIsLiked(serverIsLiked);
           setLikesCount(Math.max(0, serverLikeCount));
-          
           // Ensure animations match final state
           if (serverIsLiked !== newLikedState) {
             animateHeartButton(serverIsLiked);
           }
-          
           console.log('✅ Like operation completed successfully');
         } else {
           // API call failed - revert optimistic update
@@ -374,32 +533,26 @@ const PhotoViewerScreen = ({ navigation, route }) => {
           setLikesCount(originalLikesCount);
           animateHeartButton(originalLikedState);
         }
-        
       } catch (error) {
         console.error('❌ Like operation error:', error);
-        
         // Revert to original state on error
         setIsLiked(item.isLikedByUser || false);
         setLikesCount(item.likeCount || 0);
         animateHeartButton(item.isLikedByUser || false);
-        
         Alert.alert('Error', 'Failed to update like. Please try again.');
       } finally {
         setLikeOperationInProgress(false);
       }
     };
-
     // Comment button press handler - from Post.js
     const handleCommentPress = () => {
       console.log('=== COMMENT BUTTON PRESSED ===');
       console.log('Using Post ID:', item._id);
-
       if (!navigation) {
         console.error('❌ Navigation prop not available');
         Alert.alert('Error', 'Navigation not available');
         return;
       }
-
       try {
         console.log('✅ Navigating to CommentScreen with postId:', item._id);
         navigation.navigate('CommentScreen', {
@@ -419,14 +572,12 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         Alert.alert('Error', 'Unable to open comments at this time');
       }
     };
-
     // Handle likes press to navigate to LikeScreen - from Post.js
     const handleLikesPress = () => {
       console.log('=== LIKES NAVIGATION DEBUG ===');
       console.log('Likes count:', likesCount);
       console.log('Using Post ID:', item._id);
       console.log('Navigation available:', !!navigation);
-
       if (likesCount > 0 && navigation) {
         try {
           console.log('✅ Navigating to LikeScreen with postId:', item._id);
@@ -445,13 +596,11 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         Alert.alert('Error', 'Navigation not available');
       }
     };
-
     // Double tap to like functionality
     let lastTap = null;
     const handleDoubleTap = () => {
       const now = Date.now();
       const DOUBLE_PRESS_DELAY = 300;
-      
       if (lastTap && (now - lastTap) < DOUBLE_PRESS_DELAY) {
         // Only like if not already liked and not in progress
         if (!isLiked && !likeOperationInProgress) {
@@ -466,25 +615,22 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         lastTap = now;
       }
     };
-
     const handleProfilePress = () => {
       try {
         console.log('Profile press triggered for:', authorName);
         if (navigation && item.author?._id) {
-          navigation.navigate('UserProfile', { 
+          navigation.navigate('UserProfile', {
             userId: item.author._id,
-            fromFeed: true 
+            fromFeed: true
           });
         }
       } catch (error) {
         console.error('Error handling profile press:', error);
       }
     };
-
     // Render pagination dots for multi-image posts
     const renderPaginationDots = () => {
       if (!isMultiImage) return null;
-      
       return (
         <View style={styles.paginationContainer}>
           {postImages.map((_, index) => (
@@ -499,7 +645,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         </View>
       );
     };
-
     // Render image carousel or single image
     const renderImageContent = () => {
       // Safety check - ensure we have valid images
@@ -515,7 +660,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
           </View>
         );
       }
-
       if (isMultiImage) {
         // Multi-image carousel
         return (
@@ -535,11 +679,10 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                   console.log(`⚠️ Skipping image ${index + 1} - no valid URI`);
                   return null;
                 }
-                
                 return (
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     key={image.id || index}
-                    onPress={handleDoubleTap} 
+                    onPress={handleDoubleTap}
                     activeOpacity={1}
                     style={styles.carouselImageContainer}
                   >
@@ -556,8 +699,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                         }}
                       />
                     ) : (
-                      <Image 
-                        source={{ uri: image.uri }} 
+                      <Image
+                        source={{ uri: image.uri }}
                         style={styles.postImage}
                         onError={(error) => {
                           console.log(`❌ Post image ${index + 1} error:`, error?.nativeEvent?.error);
@@ -572,9 +715,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                 );
               })}
             </ScrollView>
-            
             {/* Center heart animation overlay - positioned over current image */}
-            <Animated.View 
+            <Animated.View
               style={[
                 styles.centerHeartContainer,
                 {
@@ -585,18 +727,16 @@ const PhotoViewerScreen = ({ navigation, route }) => {
               pointerEvents="none"
             >
               <View style={styles.centerHeartWrapper}>
-                <Ionicons 
-                  name="heart" 
-                  size={100} 
-                  color="#E93A7A" 
+                <Ionicons
+                  name="heart"
+                  size={100}
+                  color="#E93A7A"
                   style={styles.centerHeart}
                 />
               </View>
             </Animated.View>
-            
             {/* Pagination dots */}
             {renderPaginationDots()}
-            
             {/* Image counter for multi-image posts */}
             <View style={styles.imageCounterContainer}>
               <Text style={styles.imageCounterText}>
@@ -609,8 +749,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         // Single image or video
         return (
           <View style={styles.imageContainer}>
-            <TouchableOpacity 
-              onPress={handleDoubleTap} 
+            <TouchableOpacity
+              onPress={handleDoubleTap}
               activeOpacity={1}
               style={styles.postImageContainer}
             >
@@ -627,8 +767,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                   }}
                 />
               ) : (
-                <Image 
-                  source={{ uri: postImages[0].uri }} 
+                <Image
+                  source={{ uri: postImages[0].uri }}
                   style={styles.postImage}
                   onError={(error) => {
                     console.log('❌ Single post image error:', error?.nativeEvent?.error);
@@ -639,9 +779,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                   }}
                 />
               )}
-              
               {/* Center heart animation overlay */}
-              <Animated.View 
+              <Animated.View
                 style={[
                   styles.centerHeartContainer,
                   {
@@ -652,10 +791,10 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                 pointerEvents="none"
               >
                 <View style={styles.centerHeartWrapper}>
-                  <Ionicons 
-                    name="heart" 
-                    size={100} 
-                    color="#E93A7A" 
+                  <Ionicons
+                    name="heart"
+                    size={100}
+                    color="#E93A7A"
                     style={styles.centerHeart}
                   />
                 </View>
@@ -665,21 +804,20 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         );
       }
     };
-
     return (
       <View style={styles.container}>
         <View style={styles.userInfo}>
           <TouchableOpacity onPress={handleProfilePress} activeOpacity={0.8}>
             <View style={styles.dpContainer}>
-              <View 
+              <View
                 style={[
-                  styles.avatar, 
+                  styles.avatar,
                   { backgroundColor: getAvatarColor(authorName) }
                 ]}
               >
                 {authorPhoto ? (
-                  <Image 
-                    source={{ uri: authorPhoto }} 
+                  <Image
+                    source={{ uri: authorPhoto }}
                     style={styles.profileImage}
                     onError={(error) => {
                       console.log('Profile image error:', error?.nativeEvent?.error);
@@ -693,22 +831,48 @@ const PhotoViewerScreen = ({ navigation, route }) => {
               </View>
             </View>
           </TouchableOpacity>
-          
-          <TouchableOpacity onPress={handleProfilePress} activeOpacity={0.8}>
+          <TouchableOpacity onPress={handleProfilePress} activeOpacity={0.8} style={styles.usernameContainer}>
             <Text style={styles.username}>{authorName}</Text>
           </TouchableOpacity>
+          {/* --- NEW: Three Dot Menu (Only for own posts) --- */}
+          {isOwnPost && (
+            <View style={styles.menuContainer}>
+              {isMenuVisible && (
+                <View style={styles.menuOverlay}>
+                  <TouchableOpacity
+                    style={styles.menuButton}
+                    onPress={() => handleEditPost(item)}
+                  >
+                    <MaterialIcons name="edit" size={20} color="white" />
+                    <Text style={styles.menuButtonText}>Edit Caption</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.closeMenuButton}
+                    onPress={() => hideMenu(item._id)}
+                  >
+                    <Ionicons name="close" size={20} color="white" />
+                    <Text style={styles.menuButtonText}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              <TouchableOpacity
+                style={styles.threeDotButton}
+                onPress={() => showMenu(item._id)}
+              >
+                <MaterialIcons name="more-vert" size={24} color="white" />
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
-
         {/* Enhanced image content with carousel support */}
         {renderImageContent()}
-
         {/* Action buttons below post*/}
         <View style={styles.postFooterContainer}>
           <View style={styles.leftContent}>
             <Text style={styles.caption}>
               <Text style={{ fontWeight: "bold" }}>{authorName}</Text>
-              {item.content && item.content.trim().length > 0 && (
-                <Text> {item.content}</Text>
+              {(item.content || item.caption) && (item.content || item.caption).trim().length > 0 && (
+                <Text> {item.content || item.caption}</Text>
               )}
             </Text>
             {/* Clickable likes count */}
@@ -783,10 +947,22 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     );
   }
 
+  // --- Modified: Prepare props for EditCaptionModal ---
+  const initialCaptionForModal = editingItem ? (editingItem.content || editingItem.caption || '') : '';
+  // --- REMOVED: The inline EditCaptionModal definition ---
+
   return (
     <SafeAreaView style={styles.screenContainer}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
-      
+      {/* Pass props to the separate Modal component */}
+      <EditCaptionModal
+        isVisible={isEditModalVisible}
+        initialCaption={initialCaptionForModal}
+        onSave={executeCaptionUpdate} // Pass the function to handle saving
+        onClose={closeEditModal}
+        isUpdating={updatingCaption} // Pass updating state if needed inside modal
+        editingItem={editingItem} // Pass item for potential ID checks
+      />
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBack} style={styles.backButton}>
@@ -795,7 +971,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         <Text style={styles.headerTitle}>Posts</Text>
         <View style={styles.headerSpacer} />
       </View>
-
       {/* Posts List */}
       <FlatList
         ref={flatListRef}
@@ -874,10 +1049,56 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 10,
   },
+  usernameContainer: {
+    flex: 1,
+  },
   username: {
     color: "white",
     fontSize: 14,
     fontWeight: '600',
+  },
+  // --- NEW: Menu Styles ---
+  menuContainer: {
+    position: 'relative',
+  },
+  threeDotButton: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuOverlay: {
+    position: 'absolute',
+    top: 40,
+    right: 0,
+    backgroundColor: '#1e1e1e',
+    borderRadius: 8,
+    padding: 4,
+    zIndex: 20,
+    borderWidth: 1,
+    borderColor: '#333',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    minWidth: 140,
+  },
+  menuButton: {
+    padding: 12,
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  menuButtonText: {
+    color: 'white',
+    fontSize: 14,
+    marginLeft: 8,
+  },
+  closeMenuButton: {
+    padding: 12,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+    flexDirection: 'row',
   },
   imageContainer: {
     position: "relative",
@@ -1029,6 +1250,69 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 16,
     textAlign: 'center',
+  },
+  // --- COMPLETELY FIXED: Edit Caption Modal Styles ---
+  editModalFullscreen: {
+    flex: 1,
+    backgroundColor: 'black',
+  },
+  // editModalOverlay: { /* Removed redundant overlay style */ },
+  editModalContentFixed: {
+    flex: 1, // Takes full height within KeyboardAvoidingView
+    backgroundColor: '#000',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '90%',
+    minHeight: '50%',
+  },
+  editModalHeaderFixed: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingTop: Platform.OS === 'ios' ? 50 : 12, // Account for status bar
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+    backgroundColor: '#1e1e1e',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  editModalBackButton: {
+    padding: 8,
+  },
+  editModalTitleFixed: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: 'white',
+    flex: 1,
+    textAlign: 'center',
+    marginHorizontal: 16,
+  },
+  editModalSaveHeaderButton: {
+    padding: 8,
+    minWidth: 50,
+  },
+  editModalSaveHeaderText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ed167e',
+  },
+  editModalBodyFixed: {
+    flex: 1,
+    padding: 16,
+  },
+  captionInputFixed: {
+    backgroundColor: '#1e1e1e',
+    color: 'white',
+    fontSize: 16,
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    minHeight: 150,
+    maxHeight: 400,
+    textAlignVertical: 'top',
   },
 });
 

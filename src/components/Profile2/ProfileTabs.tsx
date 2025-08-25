@@ -25,6 +25,7 @@ import BASE_URL from '../../config/config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+
 const { width, height } = Dimensions.get('window');
 const ITEM_SIZE = (width - 4) / 3;
 const DARK_PINK = '#ed167e';
@@ -32,6 +33,7 @@ const DARK_BG = '#121212';
 const DARK_CARD = '#1e1e1e';
 const DARK_TEXT = '#ffffff';
 const DARK_TEXT_SECONDARY = '#aaaaaa';
+
 // --- Type Definitions ---
 interface User {
   _id: string;
@@ -39,15 +41,18 @@ interface User {
   photoUrl?: string;
   bio?: string;
 }
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
   logout?: () => void;
 }
+
 interface ImageData {
   url: string;
   _id?: string;
 }
+
 interface VideoData {
   url: string;
   thumbnail?: {
@@ -55,6 +60,7 @@ interface VideoData {
   };
   _id?: string;
 }
+
 interface PostItem {
   _id: string;
   type: 'post' | 'reel';
@@ -66,6 +72,7 @@ interface PostItem {
   user: User;
   views?: number; // Add views field
 }
+
 interface ApiResponse {
   success: boolean;
   message?: string;
@@ -73,6 +80,7 @@ interface ApiResponse {
     posts: PostItem[];
   };
 }
+
 type RootStackParamList = {
   ReelsViewerScreen: {
     reels: PostItem[];
@@ -85,17 +93,21 @@ type RootStackParamList = {
     username: string;
   };
 };
+
 type ProfileTabsNavigationProp = NavigationProp<RootStackParamList>;
+
 interface ProfileTabsProps {
   userId?: string;
   isOwnProfile?: boolean;
   username?: string;
 }
+
 interface AlertAction {
   text: string;
   onPress: () => void;
   style?: 'default' | 'destructive' | 'cancel';
 }
+
 interface AlertModalState {
   visible: boolean;
   title: string;
@@ -103,6 +115,7 @@ interface AlertModalState {
   actions: AlertAction[];
   destructiveAction: boolean;
 }
+
 // --- Utility Functions ---
 const formatViewCount = (count: number): string => {
   if (!count || count === 0) return '0';
@@ -116,6 +129,7 @@ const formatViewCount = (count: number): string => {
     return (count / 1000000000).toFixed(1).replace(/\.0$/, '') + 'B';
   }
 };
+
 // --- Component Implementation ---
 const ProfileTabs: React.FC<ProfileTabsProps> = ({
   userId,
@@ -154,6 +168,8 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
   const authContext = useAuth() as AuthContextType | null;
   const { token, user, logout } = authContext || {};
   const zoomAnim = useRef(new Animated.Value(0)).current;
+  const textInputRef = useRef<TextInput>(null);
+
   useEffect(() => {
     if ((userId || user?._id) && token) {
       fetchData();
@@ -168,6 +184,18 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       return () => clearTimeout(timer);
     }
   }, [activeTab, userId, token, user?._id]);
+
+  // Focus text input when modal opens
+  useEffect(() => {
+    if (isEditModalVisible && textInputRef.current) {
+      // Small delay to ensure modal is fully rendered
+      const timer = setTimeout(() => {
+        textInputRef.current?.focus();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isEditModalVisible]);
+
   // Zoom animation handler
   const handleZoom = (item: PostItem, position: {x: number, y: number, width: number, height: number}) => {
     if (!isOwnProfile) return;
@@ -179,6 +207,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       useNativeDriver: true,
     }).start();
   };
+
   const closeZoom = () => {
     Animated.timing(zoomAnim, {
       toValue: 0,
@@ -186,6 +215,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       useNativeDriver: true,
     }).start(() => setZoomedItem(null));
   };
+
   const handleDeleteZoomedItem = () => {
     if (zoomedItem) {
       handleDeletePost(zoomedItem);
@@ -209,16 +239,20 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       return null;
     }
   };
+
   // --- Helper Functions to get Media URLs ---
   const getThumbnailUrl = (item: PostItem): string | null => {
     return item?.video?.thumbnail?.url || item?.images?.[0]?.url || null;
   };
+
   const getVideoUrl = (item: PostItem): string | null => {
     return item?.video?.url || null;
   };
+
   const getPostImageUrl = (item: PostItem): string | null => {
     return item?.images?.[0]?.url || item?.image?.url || null;
   };
+
   // --- Filter Posts by Type ---
   const filterPostsByType = (posts: PostItem[], type: 'post' | 'reel'): PostItem[] => {
     return posts.filter(post => {
@@ -229,6 +263,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       }
     });
   };
+
   // --- Alert Modal Functions ---
   const showAlert = (title: string, message: string, actions: AlertAction[], destructive = false) => {
     setAlertModal({
@@ -239,6 +274,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       destructiveAction: destructive
     });
   };
+
   const hideAlert = () => {
     setAlertModal({
       visible: false,
@@ -248,14 +284,15 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       destructiveAction: false
     });
   };
+
   // --- Menu Visibility Functions ---
   const showMenu = (itemId: string) => {
     setMenuVisible({ [itemId]: true });
   };
+
   const hideMenu = (itemId: string) => {
     setMenuVisible({ [itemId]: false });
   };
-
 
   // --- Enhanced Update Caption Function (NEW) ---
   const updatePostCaption = async (postId: string, newCaption: string): Promise<void> => {
@@ -304,6 +341,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       throw new Error(errorData.message || `Failed to delete post (Status: ${response.status})`);
     }
   };
+
   const handleDeletePost = (item: PostItem): void => {
     if (!isOwnProfile) {
       showAlert('Permission Denied', 'You can only delete your own posts.', [
@@ -317,7 +355,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       `What would you like to do with this ${itemType}?`,
       [
         { text: 'Cancel', onPress: hideAlert, style: 'cancel' },
-          { text: `Delete ${itemType}`, onPress: () => { hideAlert(); confirmSingleDelete(item, itemType); }, style: 'destructive' },
+        { text: `Delete ${itemType}`, onPress: () => { hideAlert(); confirmSingleDelete(item, itemType); }, style: 'destructive' },
       ]
     );
   };
@@ -382,7 +420,6 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
     }
   };
 
-
   const executeSingleDelete = async (item: PostItem, itemType: string): Promise<void> => {
     setDeletingItems(prev => new Set(prev).add(item._id));
     try {
@@ -410,6 +447,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       });
     }
   };
+
   // --- Bulk Delete Functions ---
   const enterSelectionMode = (initialItemId?: string): void => {
     setSelectionMode(true);
@@ -417,10 +455,12 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       setSelectedItems(new Set([initialItemId]));
     }
   };
+
   const exitSelectionMode = (): void => {
     setSelectionMode(false);
     setSelectedItems(new Set());
   };
+
   const toggleItemSelection = (itemId: string): void => {
     setSelectedItems(prev => {
       const newSet = new Set(prev);
@@ -432,13 +472,16 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       return newSet;
     });
   };
+
   const selectAllItems = (): void => {
     const currentData = activeTab === 'posts' ? combinedPosts : reels;
     setSelectedItems(new Set(currentData.map(item => item._id)));
   };
+
   const deselectAllItems = (): void => {
     setSelectedItems(new Set());
   };
+
   const handleBulkDelete = (): void => {
     if (selectedItems.size === 0) {
       showAlert('No Selection', 'Please select items to delete', [
@@ -462,6 +505,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       true
     );
   };
+
   const executeBulkDelete = async (): Promise<void> => {
     const itemsToDelete = Array.from(selectedItems);
     const totalItems = itemsToDelete.length;
@@ -503,6 +547,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       });
     }
   };
+
   // --- Undo Functionality ---
   const undoDelete = (item: PostItem): void => {
     showAlert(
@@ -511,12 +556,14 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       [{ text: 'OK', onPress: hideAlert, style: 'cancel' }]
     );
   };
+
   // --- Utility Functions ---
   const removeItemFromState = (itemId: string): void => {
     setPosts(prev => prev.filter(p => p._id !== itemId));
     setReels(prev => prev.filter(r => r._id !== itemId));
     setCombinedPosts(prev => prev.filter(p => p._id !== itemId));
   };
+
   // --- Data Fetching Logic ---
   const fetchData = async (): Promise<void> => {
     setLoading(true);
@@ -538,6 +585,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       setLoading(false);
     }
   };
+
   const fetchPosts = async (): Promise<void> => {
     const targetUserId = userId || user?._id;
     let authToken = token || await getTokenFromStorage();
@@ -574,6 +622,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
         throw error;
     }
   };
+
   const fetchReels = async (): Promise<void> => {
     const targetUserId = userId || user?._id;
     let authToken = token || await getTokenFromStorage();
@@ -603,11 +652,13 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
         throw error;
     }
   };
+
   const onRefresh = async (): Promise<void> => {
     setRefreshing(true);
     await fetchData().catch(e => console.error('Error on refresh:', e));
     setRefreshing(false);
   };
+
   const handlePostPress = (index: number): void => {
     if (selectionMode) return;
     try {
@@ -642,12 +693,14 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       ]);
     }
   };
+
   // --- Child Components for Rendering ---
   interface VideoPreviewProps { item: PostItem; index: number; }
   const VideoPreview: React.FC<VideoPreviewProps> = ({ item, index }) => {
     const [thumbnailError, setThumbnailError] = useState<boolean>(false);
     const [isLoadingThumbnail, setIsLoadingThumbnail] = useState<boolean>(true);
     const thumbnailUrl = getThumbnailUrl(item);
+
     if (!thumbnailUrl) {
       return (
         <View style={[styles.postImage, styles.placeholderContainer]}>
@@ -656,6 +709,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
         </View>
       );
     }
+
     return (
       <View style={styles.videoContainer}>
         <Image
@@ -691,6 +745,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       </View>
     );
   };
+
   interface RenderPostProps { item: PostItem; index: number; }
   const renderPost = ({ item, index }: RenderPostProps) => {
     if (!item) {
@@ -700,6 +755,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
     const isSelected = selectedItems.has(item._id);
     const isVideo = item.type === 'reel' || !!(item.video && item.video.url);
     const isMenuVisible = menuVisible[item._id] || false;
+
     return (
       <TouchableOpacity
         style={[
@@ -766,13 +822,13 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
               <Text style={styles.menuButtonText}>Zoom</Text>
             </TouchableOpacity>
             {/* --- NEW: Edit Menu Option --- */}
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={styles.menuButton}
               onPress={() => handleEditPost(item)} // Call the edit handler
             >
               <MaterialIcons name="edit" size={20} color="#fff" />
               <Text style={styles.menuButtonText}>Edit</Text>
-            </TouchableOpacity>
+            </TouchableOpacity> */}
             {/* --- END NEW --- */}
             <TouchableOpacity
               style={styles.menuButton}
@@ -805,12 +861,14 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       </TouchableOpacity>
     );
   };
+
   // --- Selection Mode Header ---
   const renderSelectionHeader = () => {
     if (!selectionMode) return null;
     const selectedCount = selectedItems.size;
     const currentData = activeTab === 'posts' ? combinedPosts : reels;
     const totalCount = currentData.length;
+
     return (
       <View style={styles.selectionHeader}>
         <TouchableOpacity onPress={exitSelectionMode} style={styles.selectionHeaderButton}>
@@ -846,11 +904,13 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       </View>
     );
   };
+
   // --- Zoom Preview Component ---
   const renderZoomPreview = () => {
     if (!zoomedItem) return null;
     const imageUrl = getPostImageUrl(zoomedItem) || getThumbnailUrl(zoomedItem);
     if (!imageUrl) return null;
+
     const inputRange = [0, 1];
     // Animation transforms
     const scale = zoomAnim.interpolate({
@@ -875,6 +935,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       inputRange: [0, 0.5, 1],
       outputRange: [0, 0.8, 1]
     });
+
     return (
       <Animated.View style={[styles.zoomOverlay, { opacity }]}>
         <TouchableOpacity
@@ -900,64 +961,58 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
     );
   };
 
-  // --- NEW: Edit Caption Modal Component ---
+  // --- COMPLETELY FIXED: Edit Caption Modal Component ---
   const EditCaptionModal = () => (
     <Modal
       visible={isEditModalVisible}
-      transparent
-      animationType="slide"
+      animationType="none" // Remove any animation that might interfere
       onRequestClose={closeEditModal} // Handle back button on Android
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
-        style={styles.editModalContainer}
+        style={styles.editModalFullscreen}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-          <View style={styles.editModalContent}>
-            <View style={styles.editModalHeader}>
-              <Text style={styles.editModalTitle}>Edit Caption</Text>
-              <TouchableOpacity onPress={closeEditModal} style={styles.editModalCloseButton}>
-                <Ionicons name="close" size={24} color={DARK_TEXT_SECONDARY} />
+        <View style={styles.editModalOverlay}>
+          <View style={styles.editModalContentFixed}>
+            <View style={styles.editModalHeaderFixed}>
+              <TouchableOpacity onPress={closeEditModal} style={styles.editModalBackButton}>
+                <Ionicons name="arrow-back" size={24} color={DARK_TEXT} />
+              </TouchableOpacity>
+              <Text style={styles.editModalTitleFixed}>Edit Caption</Text>
+              <TouchableOpacity
+                onPress={executeCaptionUpdate}
+                style={styles.editModalSaveHeaderButton}
+                disabled={updatingCaption || editCaption.trim() === (editingItem?.caption || '')}
+              >
+                {updatingCaption ? (
+                  <ActivityIndicator size="small" color={DARK_PINK} />
+                ) : (
+                  <Text style={styles.editModalSaveHeaderText}>Save</Text>
+                )}
               </TouchableOpacity>
             </View>
-            <View style={styles.editModalBody}>
+            
+            <View style={styles.editModalBodyFixed}>
               <TextInput
-                style={styles.captionInput}
+                ref={textInputRef}
+                style={styles.captionInputFixed}
                 value={editCaption}
                 onChangeText={setEditCaption}
                 placeholder="Write a caption..."
                 placeholderTextColor={DARK_TEXT_SECONDARY}
                 multiline
-                textAlignVertical="top" // Android specific
-                autoFocus
+                textAlignVertical="top"
+                autoFocus={true}
+                blurOnSubmit={false}
+                returnKeyType="default"
+                scrollEnabled={true}
               />
             </View>
-            <View style={styles.editModalActions}>
-              <TouchableOpacity
-                style={[styles.editModalButton, styles.editModalCancelButton]}
-                onPress={closeEditModal}
-                disabled={updatingCaption}
-              >
-                <Text style={styles.editModalButtonText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.editModalButton, styles.editModalSaveButton]}
-                onPress={executeCaptionUpdate}
-                disabled={updatingCaption || editCaption.trim() === (editingItem?.caption || '')} // Disable if unchanged or loading
-              >
-                {updatingCaption ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.editModalButtonText}>Save</Text>
-                )}
-              </TouchableOpacity>
-            </View>
           </View>
-        </TouchableWithoutFeedback>
+        </View>
       </KeyboardAvoidingView>
     </Modal>
   );
-
 
   // --- Alert Modal Component ---
   const CustomAlertModal = () => (
@@ -1000,6 +1055,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       </View>
     </Modal>
   );
+
   // --- Main Content Rendering ---
   const renderContent = () => {
     if (error?.includes('Authentication')) {
@@ -1014,6 +1070,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
         </View>
       );
     }
+
     if (loading && !refreshing) {
       return (
         <View style={styles.loadingContainer}>
@@ -1022,6 +1079,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
         </View>
       );
     }
+
     if (error) {
       return (
         <View style={styles.errorContainer}>
@@ -1032,7 +1090,9 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
         </View>
       );
     }
+
     const data = activeTab === 'posts' ? combinedPosts : reels;
+
     if (data.length === 0) {
       const tabType = activeTab === 'posts' ? 'Posts' : 'Reels';
       return (
@@ -1049,6 +1109,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
         </View>
       );
     }
+
     return (
       <FlatList
         data={data}
@@ -1061,6 +1122,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
       />
     );
   };
+
   // --- JSX Return ---
   return (
     <View style={styles.container}>
@@ -1104,6 +1166,7 @@ const ProfileTabs: React.FC<ProfileTabsProps> = ({
     </View>
   );
 };
+
 // --- Enhanced Stylesheet ---
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: DARK_BG },
@@ -1408,76 +1471,63 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // --- NEW: Edit Caption Modal Styles ---
-  editModalContainer: {
+  // --- COMPLETELY FIXED: Edit Caption Modal Styles ---
+  editModalFullscreen: {
     flex: 1,
-    justifyContent: 'flex-end', // Modal appears from the bottom
-    backgroundColor: 'rgba(0, 0, 0, 0.5)', // Semi-transparent background
+    backgroundColor: DARK_BG,
   },
-  editModalContent: {
-    backgroundColor: DARK_CARD,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 16,
-    maxHeight: '70%', // Limit height
+  editModalOverlay: {
+    flex: 1,
   },
-  editModalHeader: {
+  editModalContentFixed: {
+    flex: 1,
+    backgroundColor: DARK_BG,
+  },
+  editModalHeaderFixed: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#333',
-    paddingBottom: 10,
+    backgroundColor: DARK_CARD,
   },
-  editModalTitle: {
+  editModalBackButton: {
+    padding: 8,
+  },
+  editModalTitleFixed: {
     fontSize: 18,
     fontWeight: '600',
     color: DARK_TEXT,
-  },
-  editModalCloseButton: {
-    padding: 4,
-  },
-  editModalBody: {
     flex: 1,
-    marginBottom: 16,
+    textAlign: 'center',
+    marginHorizontal: 16,
   },
-  captionInput: {
+  editModalSaveHeaderButton: {
+    padding: 8,
+  },
+  editModalSaveHeaderText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: DARK_PINK,
+  },
+  editModalBodyFixed: {
+    flex: 1,
+    padding: 16,
+  },
+  captionInputFixed: {
     backgroundColor: DARK_BG,
     color: DARK_TEXT,
     fontSize: 16,
-    padding: 12,
+    padding: 16,
     borderRadius: 8,
-    minHeight: 100, // Minimum height for text input
-    maxHeight: 200, // Maximum height before scrolling
-    textAlignVertical: 'top', // iOS specific
-  },
-  editModalActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 10, // Space between buttons
-  },
-  editModalButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-    minWidth: 80,
-    alignItems: 'center',
-    justifyContent: 'center', // Center content vertically
-  },
-  editModalCancelButton: {
-    backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: DARK_TEXT_SECONDARY,
+    borderColor: '#333',
+    minHeight: 200,
+    textAlignVertical: 'top',
+    flex: 1,
   },
-  editModalSaveButton: {
-    backgroundColor: DARK_PINK,
-  },
-  editModalButtonText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: DARK_TEXT,
-  },
-
 });
+
 export default ProfileTabs;

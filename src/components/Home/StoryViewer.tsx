@@ -406,7 +406,7 @@ const StoryViewer = () => {
               user: viewer.user,
               directFields: {
                 fullName: viewer.fullName,
-                username: viewer.username, 
+                username: viewer.username,
                 photoUrl: viewer.photoUrl
               },
               userFields: {
@@ -748,19 +748,20 @@ const StoryViewer = () => {
           {renderUserHeader()}
         </View>
 
-        {/* Views Indicator */}
-        {isOwnStory && (
-          <TouchableOpacity onPress={openViewersModal} style={styles.viewsIndicator}>
-            <Ionicons name="eye" size={20} color="white" />
-            <Text style={styles.viewsCount}>{viewsCount}</Text>
-          </TouchableOpacity>
-        )}
-
-        {/* Bottom Actions */}
+        {/* Bottom Actions - Views indicator beside comment icon */}
         <View style={styles.bottomActions}>
-          <TouchableOpacity onPress={openCommentsModal} style={styles.actionButton}>
-            <Ionicons name="chatbubble-outline" size={26} color="white" />
-          </TouchableOpacity>
+          <View style={styles.leftActionsContainer}>
+            {isOwnStory && (
+              <TouchableOpacity onPress={openViewersModal} style={styles.viewsButton}>
+                <Ionicons name="eye" size={24} color="white" />
+                <Text style={styles.viewsCountText}>{viewsCount}</Text>
+              </TouchableOpacity>
+            )}
+            
+            <TouchableOpacity onPress={openCommentsModal} style={styles.actionButton}>
+              <Ionicons name="chatbubble-outline" size={26} color="white" />
+            </TouchableOpacity>
+          </View>
 
           <View style={styles.replyInputContainer}>
             <TextInput
@@ -1057,26 +1058,7 @@ const styles = StyleSheet.create({
     padding: 5,
   },
 
-  // Views Indicator
-  viewsIndicator: {
-    position: 'absolute',
-    left: 16,
-    bottom: 100,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  viewsCount: {
-    color: 'white',
-    fontSize: 14,
-    fontWeight: '600',
-    marginLeft: 6,
-  },
-
-  // Bottom Actions
+  // Bottom Actions - Updated to group views and comment together
   bottomActions: {
     position: 'absolute',
     bottom: 0,
@@ -1088,6 +1070,22 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingBottom: 35,
     backgroundColor: 'rgba(0,0,0,0.7)',
+  },
+  leftActionsContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  viewsButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 15,
+    padding: 8,
+  },
+  viewsCountText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
   },
   actionButton: {
     padding: 8,
