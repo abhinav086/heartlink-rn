@@ -1,4 +1,4 @@
-// Post.js - Fixed version with properly initialized comments count
+// Post.js - Enhanced version with proper double tap to like functionality
 import React, { useState, useRef, useEffect } from "react";
 import {
   View,
@@ -13,7 +13,8 @@ import {
   Dimensions,
   PanResponder,
   TextInput,
-  ActivityIndicator
+  ActivityIndicator,
+  TouchableWithoutFeedback
 } from "react-native";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Modal from 'react-native-modal';
@@ -75,6 +76,10 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
   const centerHeartOpacity = useRef(new Animated.Value(0)).current;
   const heartFillAnim = useRef(new Animated.Value(isLiked ? 1 : 0)).current;
 
+  // ✅ NEW: Enhanced double tap detection refs
+  const lastTapRef = useRef(null);
+  const tapTimeoutRef = useRef(null);
+
   const safeGet = (obj, property, fallback = '') => {
     try {
       return obj && obj[property] !== undefined ? obj[property] : fallback;
@@ -116,6 +121,15 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
       fetchCommentsCount(postId);
     }
   }, [data?._id, data?.id]);
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (tapTimeoutRef.current) {
+        clearTimeout(tapTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // ✅ FIX 4: New function to fetch comments count from API
   const fetchCommentsCount = async (postId) => {
@@ -275,18 +289,65 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     });
   };
 
+  // ✅ NEW: Enhanced double tap handler specifically for liking
+  const handleImageDoubleTap = () => {
+    console.log('💖 Double tap detected on image - attempting to like');
+    
+    // Always trigger like on double tap, regardless of current state
+    if (!likeOperationInProgress) {
+      // If already liked, we could either do nothing or unlike
+      // For Instagram-like behavior, double tap should always like (not toggle)
+      if (!isLiked) {
+        console.log('💖 Post not liked - liking now');
+        handleLikePress();
+      } else {
+        console.log('💖 Post already liked - showing heart animation anyway');
+        // Show the heart animation even if already liked
+        animateCenterHeart();
+      }
+    } else {
+      console.log('💖 Like operation in progress - ignoring double tap');
+    }
+  };
+
+  // ✅ NEW: Improved double tap detection for images
+  const handleImagePress = () => {
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 300;
+
+    if (tapTimeoutRef.current) {
+      clearTimeout(tapTimeoutRef.current);
+    }
+
+    if (lastTapRef.current && (now - lastTapRef.current) < DOUBLE_TAP_DELAY) {
+      // Double tap detected
+      console.log('🔥 Double tap detected!');
+      lastTapRef.current = null; // Reset to prevent triple tap issues
+      handleImageDoubleTap();
+    } else {
+      // Single tap - wait to see if another tap comes
+      lastTapRef.current = now;
+      tapTimeoutRef.current = setTimeout(() => {
+        // Single tap confirmed (no second tap within delay)
+        console.log('👆 Single tap confirmed');
+        lastTapRef.current = null;
+        // You could add single tap behavior here if needed
+      }, DOUBLE_TAP_DELAY);
+    }
+  };
+
   const createZoomPanResponder = () => {
     let initialDistance = 0;
     let initialScale = 1;
     let lastScale = 1;
     let lastTranslateX = 0;
     let lastTranslateY = 0;
-    let lastTapTime = 0;
-    let tapCount = 0;
     let pinchFocalX = 0;
     let pinchFocalY = 0;
     let initialTranslateX = 0;
     let initialTranslateY = 0;
+    let tapCount = 0;
+    let lastTapTime = 0;
 
     const getDistance = (touches) => {
       if (touches.length < 2) return 0;
@@ -413,6 +474,7 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
             ]).start();
           }
 
+          // Handle zoom double tap (different from like double tap)
           if (tapCount === 2 && gestureState.dx < 10 && gestureState.dy < 10) {
             tapCount = 0;
             if (isZoomed) {
@@ -433,13 +495,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
               lastTranslateX = clampedZoom.x;
               lastTranslateY = clampedZoom.y;
             }
-          } else if (tapCount === 1 && !isZoomed && gestureState.dx < 10 && gestureState.dy < 10) {
-            setTimeout(() => {
-              if (tapCount === 1) {
-                handleDoubleTap();
-                tapCount = 0;
-              }
-            }, 300);
           }
           setIsZoomed(currentScale > 1);
         }
@@ -801,24 +856,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     }
   };
 
-  let lastTap = null;
-  const handleDoubleTap = () => {
-    const now = Date.now();
-    const DOUBLE_PRESS_DELAY = 300;
-    if (lastTap && (now - lastTap) < DOUBLE_PRESS_DELAY) {
-      if (!isLiked && !likeOperationInProgress) {
-        console.log('💖 Double tap detected - liking post');
-        handleLikePress();
-      } else if (isLiked) {
-        console.log('💖 Double tap detected but post already liked');
-      } else {
-        console.log('💖 Double tap detected but like operation in progress');
-      }
-    } else {
-      lastTap = now;
-    }
-  };
-
   const handleProfilePress = () => {
     try {
       console.log('Profile press triggered for:', username);
@@ -866,32 +903,33 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
       return null;
     }
     return (
-      <Animated.View
-        key={image.id || index}
-        style={[
-          styles.carouselImageContainer,
-          {
-            transform: [
-              { scale: zoomScale },
-              { translateX: zoomTranslateX },
-              { translateY: zoomTranslateY },
-            ],
-          },
-        ]}
-        {...zoomPanResponder.panHandlers}
-      >
-        <Image
-          source={{ uri: image.uri }}
-          style={styles.postImage}
-          onError={(error) => {
-            console.log(`❌ Post image ${index + 1} error:`, error?.nativeEvent?.error);
-            console.log(`❌ Failed image URI:`, image.uri);
-          }}
-          onLoad={() => {
-            console.log(`✅ Post image ${index + 1} loaded successfully:`, image.uri);
-          }}
-        />
-      </Animated.View>
+      <TouchableWithoutFeedback key={image.id || index} onPress={handleImagePress}>
+        <Animated.View
+          style={[
+            styles.carouselImageContainer,
+            {
+              transform: [
+                { scale: zoomScale },
+                { translateX: zoomTranslateX },
+                { translateY: zoomTranslateY },
+              ],
+            },
+          ]}
+          {...zoomPanResponder.panHandlers}
+        >
+          <Image
+            source={{ uri: image.uri }}
+            style={styles.postImage}
+            onError={(error) => {
+              console.log(`❌ Post image ${index + 1} error:`, error?.nativeEvent?.error);
+              console.log(`❌ Failed image URI:`, image.uri);
+            }}
+            onLoad={() => {
+              console.log(`✅ Post image ${index + 1} loaded successfully:`, image.uri);
+            }}
+          />
+        </Animated.View>
+      </TouchableWithoutFeedback>
     );
   };
 
@@ -947,42 +985,44 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     } else {
       return (
         <View style={styles.imageContainer}>
-          <Animated.View
-            style={[
-              styles.postImageContainer,
-              {
-                transform: [
-                  { scale: zoomScale },
-                  { translateX: zoomTranslateX },
-                  { translateY: zoomTranslateY },
-                ],
-              },
-            ]}
-            {...zoomPanResponder.panHandlers}
-          >
-            <Image
-              source={{ uri: postImages[0].uri }}
-              style={styles.postImage}
-              onError={(error) => {
-                console.log('❌ Single post image error:', error?.nativeEvent?.error);
-                console.log('❌ Failed image URI:', postImages[0].uri);
-              }}
-              onLoad={() => {
-                console.log('✅ Single post image loaded successfully:', postImages[0].uri);
-              }}
-            />
+          <TouchableWithoutFeedback onPress={handleImagePress}>
             <Animated.View
               style={[
-                styles.centerHeartContainer,
-                { opacity: centerHeartOpacity, transform: [{ scale: centerHeartAnim }] }
+                styles.postImageContainer,
+                {
+                  transform: [
+                    { scale: zoomScale },
+                    { translateX: zoomTranslateX },
+                    { translateY: zoomTranslateY },
+                  ],
+                },
               ]}
-              pointerEvents="none"
+              {...zoomPanResponder.panHandlers}
             >
-              <View style={styles.centerHeartWrapper}>
-                <Ionicons name="heart" size={100} color="#E93A7A" style={styles.centerHeart} />
-              </View>
+              <Image
+                source={{ uri: postImages[0].uri }}
+                style={styles.postImage}
+                onError={(error) => {
+                  console.log('❌ Single post image error:', error?.nativeEvent?.error);
+                  console.log('❌ Failed image URI:', postImages[0].uri);
+                }}
+                onLoad={() => {
+                  console.log('✅ Single post image loaded successfully:', postImages[0].uri);
+                }}
+              />
+              <Animated.View
+                style={[
+                  styles.centerHeartContainer,
+                  { opacity: centerHeartOpacity, transform: [{ scale: centerHeartAnim }] }
+                ]}
+                pointerEvents="none"
+              >
+                <View style={styles.centerHeartWrapper}>
+                  <Ionicons name="heart" size={100} color="#E93A7A" style={styles.centerHeart} />
+                </View>
+              </Animated.View>
             </Animated.View>
-          </Animated.View>
+          </TouchableWithoutFeedback>
         </View>
       );
     }
@@ -1165,7 +1205,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
   );
 };
 
-// [Styles remain the same as in original file]
 const styles = StyleSheet.create({
   container: {
     backgroundColor: "black",
