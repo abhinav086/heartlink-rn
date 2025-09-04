@@ -72,11 +72,11 @@ const SettingsScreen = () => {
   };
 
   const handlePrivacySettings = () => {
-    Alert.alert('Coming Soon', 'Privacy Settings feature will be available soon!');
+    navigation.navigate('PrivacySettings');
   };
 
   const handleNotifications = () => {
-    Alert.alert('Coming Soon', 'Notifications feature will be available soon!');
+   navigation.navigate('NotificationsScreen');
   };
 
   const handleAbout = () => {

@@ -19,6 +19,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Keyboard, // Added Keyboard import
+  PanResponder, // Import PanResponder for zoom
 } from 'react-native';
 import Video from 'react-native-video';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -27,25 +28,23 @@ import { useAuth } from '../../context/AuthContext';
 import BASE_URL from '../../config/config';
 const { width, height } = Dimensions.get('window');
 const imageWidth = width - 20; // Account for container padding
+const imageHeight = 500; // Define image height for zoom calculations
 
 // --- NEW: Define EditCaptionModal as a separate component ---
 const EditCaptionModal = ({ isVisible, initialCaption, onSave, onClose, isUpdating, editingItem }) => {
   // Local state for the TextInput within the Modal
   const [textInputValue, setTextInputValue] = useState(initialCaption || '');
   const textInputRef = useRef(null);
-
   // Ensure TextInput value updates if initialCaption changes (e.g., different post)
   useEffect(() => {
      if (isVisible) {
         setTextInputValue(initialCaption || '');
      }
   }, [isVisible, initialCaption]);
-
   const handleSave = () => {
     // Call the parent's save function with the current text input value
     onSave(textInputValue);
   };
-
   return (
     <Modal
       visible={isVisible}
@@ -121,7 +120,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [updatingCaption, setUpdatingCaption] = useState(false);
   const [menuVisible, setMenuVisible] = useState({});
-
   useEffect(() => {
     // Scroll to initial post
     if (initialIndex > 0 && flatListRef.current) {
@@ -133,7 +131,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       }, 100);
     }
   }, [initialIndex]);
-
   // --- New: Menu Visibility Functions ---
   const showMenu = (itemId) => {
     setMenuVisible(prev => ({ ...prev, [itemId]: true }));
@@ -141,7 +138,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
   const hideMenu = (itemId) => {
     setMenuVisible(prev => ({ ...prev, [itemId]: false }));
   };
-
   // --- NEW: Updated closeEditModal function ---
   const closeEditModal = () => {
     // Dismiss keyboard first
@@ -154,8 +150,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       setUpdatingCaption(false);
     }, 50); // Reduced delay
   };
-
-
   // --- New: Update Caption API Function ---
   const updatePostCaption = async (postId, newCaption) => {
     try {
@@ -181,7 +175,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       throw error;
     }
   };
-
   // --- New: Handle Edit Post ---
   const handleEditPost = (item) => {
     // Check if user owns the post
@@ -198,7 +191,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     // Show modal
     setIsEditModalVisible(true);
   };
-
   // --- Modified: Execute Caption Update (accepts caption as argument) ---
   const executeCaptionUpdate = async (newCaptionText) => { // <-- Accept argument
     if (!editingItem) return;
@@ -225,8 +217,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       setUpdatingCaption(false);
     }
   };
-
-
   // Safe property access following Post.js pattern
   const safeGet = (obj, property, fallback = '') => {
     try {
@@ -236,7 +226,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       return fallback;
     }
   };
-
   const handleLike = async (postId, currentlyLiked) => {
     try {
       const response = await fetch(
@@ -281,11 +270,9 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       return { success: false };
     }
   };
-
   const handleBack = () => {
     navigation.goBack();
   };
-
   const getInitials = (fullName) => {
     if (!fullName) return '?';
     const names = fullName.trim().split(' ');
@@ -294,7 +281,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     }
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
-
   const getAvatarColor = (name) => {
     const colors = [
       '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
@@ -304,7 +290,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     const charCodeSum = name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
     return colors[charCodeSum % colors.length];
   };
-
   const formatTimeAgo = (dateString) => {
     const now = new Date();
     const postDate = new Date(dateString);
@@ -315,7 +300,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d`;
     return `${Math.floor(diffInSeconds / 604800)}w`;
   };
-
   // URL sanitization function from Post.js
   const sanitizeImageUrl = (url) => {
     if (!url || typeof url !== 'string') {
@@ -329,6 +313,202 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     }
     console.log('🧹 URL sanitized:', { original: url, cleaned: cleanUrl });
     return cleanUrl;
+  };
+
+  // --- NEW: Helper function to create a PanResponder for zooming ---
+  const createZoomPanResponder = (zoomScale, zoomTranslateX, zoomTranslateY, setIsZoomed, setIsZooming) => {
+    let initialDistance = 0;
+    let initialScale = 1;
+    let lastScale = 1;
+    let lastTranslateX = 0;
+    let lastTranslateY = 0;
+    let lastTapTime = 0;
+    let tapCount = 0;
+    let pinchFocalX = 0;
+    let pinchFocalY = 0;
+    let initialTranslateX = 0;
+    let initialTranslateY = 0;
+
+    const getDistance = (touches) => {
+      if (touches.length < 2) return 0;
+      const [touch1, touch2] = touches;
+      const dx = touch1.pageX - touch2.pageX;
+      const dy = touch1.pageY - touch2.pageY;
+      return Math.sqrt(dx * dx + dy * dy);
+    };
+
+    const getCenter = (touches) => {
+      if (touches.length < 2) return { x: imageWidth / 2, y: imageHeight / 2 }; // Use defined height
+      const [touch1, touch2] = touches;
+      const centerX = (touch1.locationX + touch2.locationX) / 2;
+      const centerY = (touch1.locationY + touch2.locationY) / 2;
+      return { x: centerX, y: centerY };
+    };
+
+    const getBounds = (scale) => {
+      const scaledWidth = imageWidth * scale;
+      const scaledHeight = imageHeight * scale; // Use defined height
+      const maxTranslateX = Math.max(0, (scaledWidth - imageWidth) / 2);
+      const maxTranslateY = Math.max(0, (scaledHeight - imageHeight) / 2); // Use defined height
+      return { maxTranslateX, maxTranslateY };
+    };
+
+    const clampTranslate = (translateX, translateY, scale) => {
+      const { maxTranslateX, maxTranslateY } = getBounds(scale);
+      return {
+        x: Math.max(-maxTranslateX, Math.min(maxTranslateX, translateX)),
+        y: Math.max(-maxTranslateY, Math.min(maxTranslateY, translateY)),
+      };
+    };
+
+    const resetZoom = () => {
+        Animated.parallel([
+          Animated.timing(zoomScale, { toValue: 1, duration: 300, easing: Easing.out(Easing.quad), useNativeDriver: true, }),
+          Animated.timing(zoomTranslateX, { toValue: 0, duration: 300, easing: Easing.out(Easing.quad), useNativeDriver: true, }),
+          Animated.timing(zoomTranslateY, { toValue: 0, duration: 300, easing: Easing.out(Easing.quad), useNativeDriver: true, }),
+        ]).start(() => {
+          setIsZoomed(false);
+          setIsZooming(false);
+        });
+      };
+
+    const zoomToPoint = (scale, x = 0, y = 0) => {
+        setIsZooming(true);
+        Animated.parallel([
+          Animated.timing(zoomScale, { toValue: scale, duration: 300, easing: Easing.out(Easing.quad), useNativeDriver: true, }),
+          Animated.timing(zoomTranslateX, { toValue: x, duration: 300, easing: Easing.out(Easing.quad), useNativeDriver: true, }),
+          Animated.timing(zoomTranslateY, { toValue: y, duration: 300, easing: Easing.out(Easing.quad), useNativeDriver: true, }),
+        ]).start(() => {
+          setIsZoomed(scale > 1);
+          setIsZooming(false);
+        });
+      };
+
+    return PanResponder.create({
+      onStartShouldSetPanResponder: (evt) => {
+        return evt.nativeEvent.touches.length >= 2 || zoomScale._value > 1; // Check scale value
+      },
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        return evt.nativeEvent.touches.length >= 2 ||
+               (zoomScale._value > 1 && (Math.abs(gestureState.dx) > 10 || Math.abs(gestureState.dy) > 10)); // Check scale value
+      },
+      onPanResponderGrant: (evt) => {
+        const touches = evt.nativeEvent.touches;
+        if (touches.length >= 2) {
+          initialDistance = getDistance(touches);
+          initialScale = lastScale;
+          const focalPoint = getCenter(touches);
+          pinchFocalX = focalPoint.x;
+          pinchFocalY = focalPoint.y;
+          initialTranslateX = lastTranslateX;
+          initialTranslateY = lastTranslateY;
+          zoomScale.setOffset(lastScale - 1);
+          zoomScale.setValue(1);
+          zoomTranslateX.setOffset(lastTranslateX);
+          zoomTranslateX.setValue(0);
+          zoomTranslateY.setOffset(lastTranslateY);
+          zoomTranslateY.setValue(0);
+        } else if (touches.length === 1) {
+          const now = Date.now();
+          const timeDiff = now - lastTapTime;
+          if (timeDiff < 300) {
+            tapCount += 1;
+          } else {
+            tapCount = 1;
+          }
+          lastTapTime = now;
+          if (zoomScale._value > 1) { // Check scale value
+            zoomTranslateX.setOffset(lastTranslateX);
+            zoomTranslateX.setValue(0);
+            zoomTranslateY.setOffset(lastTranslateY);
+            zoomTranslateY.setValue(0);
+          }
+        }
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        const touches = evt.nativeEvent.touches;
+        if (touches.length >= 2) {
+          const distance = getDistance(touches);
+          if (initialDistance > 0) {
+            const newScale = Math.max(1, Math.min(3, (distance / initialDistance) * initialScale));
+            const scaleChange = newScale - initialScale;
+            const imageCenterX = imageWidth / 2;
+            const imageCenterY = imageHeight / 2; // Use defined height
+            const adjustedTranslateX = initialTranslateX - (scaleChange * (pinchFocalX - imageCenterX));
+            const adjustedTranslateY = initialTranslateY - (scaleChange * (pinchFocalY - imageCenterY));
+            const clamped = clampTranslate(adjustedTranslateX, adjustedTranslateY, newScale);
+            zoomScale.setValue(newScale);
+            zoomTranslateX.setValue(clamped.x);
+            zoomTranslateY.setValue(clamped.y);
+          }
+        } else if (touches.length === 1 && zoomScale._value > 1) { // Check scale value
+          const newTranslateX = lastTranslateX + gestureState.dx;
+          const newTranslateY = lastTranslateY + gestureState.dy;
+          const clamped = clampTranslate(newTranslateX, newTranslateY, lastScale);
+          zoomTranslateX.setValue(clamped.x);
+          zoomTranslateY.setValue(clamped.y);
+        }
+      },
+      onPanResponderRelease: (evt, gestureState) => {
+        const touches = evt.nativeEvent.touches;
+        if (touches.length === 0) {
+          zoomScale.flattenOffset();
+          zoomTranslateX.flattenOffset();
+          zoomTranslateY.flattenOffset();
+          const currentScale = lastScale = zoomScale._value;
+          lastTranslateX = zoomTranslateX._value;
+          lastTranslateY = zoomTranslateY._value;
+          pinchFocalX = 0;
+          pinchFocalY = 0;
+          initialTranslateX = 0;
+          initialTranslateY = 0;
+          const clamped = clampTranslate(lastTranslateX, lastTranslateY, currentScale);
+          if (clamped.x !== lastTranslateX || clamped.y !== lastTranslateY) {
+            lastTranslateX = clamped.x;
+            lastTranslateY = clamped.y;
+            Animated.parallel([
+              Animated.timing(zoomTranslateX, { toValue: clamped.x, duration: 200, useNativeDriver: true, }),
+              Animated.timing(zoomTranslateY, { toValue: clamped.y, duration: 200, useNativeDriver: true, }),
+            ]).start();
+          }
+          if (tapCount === 2 && gestureState.dx < 10 && gestureState.dy < 10) {
+            tapCount = 0;
+            if (zoomScale._value > 1) { // Check scale value
+              resetZoom();
+              lastScale = 1;
+              lastTranslateX = 0;
+              lastTranslateY = 0;
+            } else {
+              const tapX = evt.nativeEvent.locationX;
+              const tapY = evt.nativeEvent.locationY;
+              const zoomScaleVal = 2;
+              const translateX = -(zoomScaleVal - 1) * (tapX - imageWidth / 2);
+              const translateY = -(zoomScaleVal - 1) * (tapY - imageHeight / 2); // Use defined height
+              const clampedZoom = clampTranslate(translateX, translateY, zoomScaleVal);
+              zoomToPoint(zoomScaleVal, clampedZoom.x, clampedZoom.y);
+              lastScale = zoomScaleVal;
+              lastTranslateX = clampedZoom.x;
+              lastTranslateY = clampedZoom.y;
+            }
+          } else if (tapCount === 1 && zoomScale._value <= 1 && gestureState.dx < 10 && gestureState.dy < 10) { // Check scale value
+             // Handle potential single tap for double tap detection
+             setTimeout(() => {
+              if (tapCount === 1) {
+                 // Optional: Add logic for single tap if needed
+                 // handleSingleTap(); // Define this function if needed
+                tapCount = 0;
+              }
+            }, 300);
+          }
+          setIsZoomed(currentScale > 1);
+        }
+      },
+      onPanResponderTerminate: () => {
+        zoomScale.flattenOffset();
+        zoomTranslateX.flattenOffset();
+        zoomTranslateY.flattenOffset();
+      },
+    });
   };
 
   // Post component with animations and carousel support - adapted from Post.js
@@ -347,6 +527,16 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     // NEW: State for image carousel
     const [currentImageIndex, setCurrentImageIndex] = useState(0);
     const scrollViewRef = useRef(null);
+
+    // --- NEW: Zoom state for each PostItem ---
+    const [isZoomed, setIsZoomed] = useState(false);
+    const [isZooming, setIsZooming] = useState(false);
+    const zoomScale = useRef(new Animated.Value(1)).current;
+    const zoomTranslateX = useRef(new Animated.Value(0)).current;
+    const zoomTranslateY = useRef(new Animated.Value(0)).current;
+    const zoomPanResponder = useRef(createZoomPanResponder(zoomScale, zoomTranslateX, zoomTranslateY, setIsZoomed, setIsZooming)).current;
+    // --- END: Zoom state ---
+
     // Animation refs - same as Post.js
     const heartScaleAnim = useRef(new Animated.Value(1)).current;
     const centerHeartAnim = useRef(new Animated.Value(0)).current;
@@ -408,6 +598,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     });
     // Handle image scroll for carousel
     const handleImageScroll = (event) => {
+      // Prevent scrolling if zoomed
+      if (isZoomed) return;
       const contentOffset = event.nativeEvent.contentOffset;
       const currentIndex = Math.round(contentOffset.x / imageWidth);
       if (currentIndex !== currentImageIndex && currentIndex >= 0 && currentIndex < postImages.length) {
@@ -630,7 +822,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     };
     // Render pagination dots for multi-image posts
     const renderPaginationDots = () => {
-      if (!isMultiImage) return null;
+      if (!isMultiImage || isZoomed) return null; // Don't show dots if zoomed
       return (
         <View style={styles.paginationContainer}>
           {postImages.map((_, index) => (
@@ -645,6 +837,54 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         </View>
       );
     };
+
+    // --- NEW: Function to render a zoomable image view ---
+    const renderZoomableImageView = (imageUri, imageId, isVideoType = false) => {
+        if (isVideoType) {
+            return (
+                <Video
+                    source={{ uri: imageUri }}
+                    style={styles.postImage}
+                    controls={true}
+                    resizeMode="cover"
+                    paused={true}
+                    onError={(error) => {
+                        console.log(`❌ Video error:`, error);
+                        console.log(`❌ Failed video URI:`, imageUri);
+                    }}
+                />
+            );
+        }
+        return (
+            <Animated.View
+                style={[
+                    styles.zoomableImageContainer, // New style for the container
+                    {
+                        transform: [
+                            { scale: zoomScale },
+                            { translateX: zoomTranslateX },
+                            { translateY: zoomTranslateY },
+                        ],
+                    },
+                ]}
+                {...zoomPanResponder.panHandlers}
+            >
+                <Image
+                    source={{ uri: imageUri }}
+                    style={styles.postImage}
+                    onError={(error) => {
+                        console.log(`❌ Zoomable Image error:`, error?.nativeEvent?.error);
+                        console.log(`❌ Failed image URI:`, imageUri);
+                    }}
+                    onLoad={() => {
+                        console.log(`✅ Zoomable Image loaded successfully:`, imageUri);
+                    }}
+                />
+            </Animated.View>
+        );
+    };
+    // --- END: renderZoomableImageView ---
+
     // Render image carousel or single image
     const renderImageContent = () => {
       // Safety check - ensure we have valid images
@@ -672,6 +912,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
               onScroll={handleImageScroll}
               scrollEventThrottle={16}
               style={styles.imageScrollView}
+              scrollEnabled={!isZoomed} // Disable scroll when zoomed
             >
               {postImages.map((image, index) => {
                 // Skip images without valid URIs
@@ -680,38 +921,13 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                   return null;
                 }
                 return (
-                  <TouchableOpacity
+                  <View // Use View instead of TouchableOpacity for better PanResponder handling
                     key={image.id || index}
-                    onPress={handleDoubleTap}
-                    activeOpacity={1}
                     style={styles.carouselImageContainer}
                   >
-                    {image.isVideo ? (
-                      <Video
-                        source={{ uri: image.uri }}
-                        style={styles.postImage}
-                        controls={true}
-                        resizeMode="cover"
-                        paused={true}
-                        onError={(error) => {
-                          console.log(`❌ Video ${index + 1} error:`, error);
-                          console.log(`❌ Failed video URI:`, image.uri);
-                        }}
-                      />
-                    ) : (
-                      <Image
-                        source={{ uri: image.uri }}
-                        style={styles.postImage}
-                        onError={(error) => {
-                          console.log(`❌ Post image ${index + 1} error:`, error?.nativeEvent?.error);
-                          console.log(`❌ Failed image URI:`, image.uri);
-                        }}
-                        onLoad={() => {
-                          console.log(`✅ Post image ${index + 1} loaded successfully:`, image.uri);
-                        }}
-                      />
-                    )}
-                  </TouchableOpacity>
+                    {/* Render zoomable image view */}
+                    {renderZoomableImageView(image.uri, image.id, image.isVideo)}
+                  </View>
                 );
               })}
             </ScrollView>
@@ -736,49 +952,25 @@ const PhotoViewerScreen = ({ navigation, route }) => {
               </View>
             </Animated.View>
             {/* Pagination dots */}
-            {renderPaginationDots()}
+            {!isZoomed && renderPaginationDots()} {/* Hide dots when zoomed */}
             {/* Image counter for multi-image posts */}
-            <View style={styles.imageCounterContainer}>
-              <Text style={styles.imageCounterText}>
-                {currentImageIndex + 1}/{postImages.length}
-              </Text>
-            </View>
+            {!isZoomed && ( // Hide counter when zoomed
+                <View style={styles.imageCounterContainer}>
+                <Text style={styles.imageCounterText}>
+                    {currentImageIndex + 1}/{postImages.length}
+                </Text>
+                </View>
+            )}
           </View>
         );
       } else {
         // Single image or video
         return (
           <View style={styles.imageContainer}>
-            <TouchableOpacity
-              onPress={handleDoubleTap}
-              activeOpacity={1}
-              style={styles.postImageContainer}
-            >
-              {postImages[0].isVideo ? (
-                <Video
-                  source={{ uri: postImages[0].uri }}
-                  style={styles.postImage}
-                  controls={true}
-                  resizeMode="cover"
-                  paused={true}
-                  onError={(error) => {
-                    console.log('❌ Single video error:', error);
-                    console.log('❌ Failed video URI:', postImages[0].uri);
-                  }}
-                />
-              ) : (
-                <Image
-                  source={{ uri: postImages[0].uri }}
-                  style={styles.postImage}
-                  onError={(error) => {
-                    console.log('❌ Single post image error:', error?.nativeEvent?.error);
-                    console.log('❌ Failed image URI:', postImages[0].uri);
-                  }}
-                  onLoad={() => {
-                    console.log('✅ Single post image loaded successfully:', postImages[0].uri);
-                  }}
-                />
-              )}
+            {/* Use View instead of TouchableOpacity for better PanResponder handling */}
+            <View style={styles.postImageContainer}>
+              {/* Render zoomable image view */}
+              {renderZoomableImageView(postImages[0].uri, postImages[0].id, postImages[0].isVideo)}
               {/* Center heart animation overlay */}
               <Animated.View
                 style={[
@@ -799,7 +991,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                   />
                 </View>
               </Animated.View>
-            </TouchableOpacity>
+            </View>
           </View>
         );
       }
@@ -864,7 +1056,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
             </View>
           )}
         </View>
-        {/* Enhanced image content with carousel support */}
+        {/* Enhanced image content with zoom support */}
         {renderImageContent()}
         {/* Action buttons below post*/}
         <View style={styles.postFooterContainer}>
@@ -921,14 +1113,12 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       </View>
     );
   };
-
   const onScrollToIndexFailed = (info) => {
     const wait = new Promise(resolve => setTimeout(resolve, 500));
     wait.then(() => {
       flatListRef.current?.scrollToIndex({ index: info.index, animated: true });
     });
   };
-
   if (!currentPosts || currentPosts.length === 0) {
     return (
       <SafeAreaView style={styles.screenContainer}>
@@ -946,11 +1136,9 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       </SafeAreaView>
     );
   }
-
   // --- Modified: Prepare props for EditCaptionModal ---
   const initialCaptionForModal = editingItem ? (editingItem.content || editingItem.caption || '') : '';
   // --- REMOVED: The inline EditCaptionModal definition ---
-
   return (
     <SafeAreaView style={styles.screenContainer}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
@@ -988,7 +1176,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     </SafeAreaView>
   );
 };
-
 const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
@@ -1102,6 +1289,7 @@ const styles = StyleSheet.create({
   },
   imageContainer: {
     position: "relative",
+    overflow: 'hidden', // Important for clipping zoomed content
   },
   // Multi-image carousel styles
   imageScrollView: {
@@ -1114,9 +1302,15 @@ const styles = StyleSheet.create({
   postImageContainer: {
     position: 'relative',
   },
+  // --- NEW: Style for the zoomable Animated.View container ---
+  zoomableImageContainer: {
+    width: "100%", // Ensure it takes the full width
+    height: imageHeight, // Explicit height for proper zoom calculations
+    zIndex: 2,
+  },
   postImage: {
     width: "100%",
-    height: 500,
+    height: imageHeight, // Use defined constant
     borderRadius: 10,
     zIndex: 2,
   },
@@ -1315,5 +1509,4 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
 });
-
 export default PhotoViewerScreen;

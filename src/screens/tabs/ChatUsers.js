@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'; // Added useCallback
+// src/screens/tabs/ChatUsers.js
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -49,7 +50,6 @@ try {
   console.log('DocumentPicker not installed');
 }
 const { width, height } = Dimensions.get('window');
-
 const ChatDetailScreen = () => {
   // Chat state
   const [messages, setMessages] = useState([]);
@@ -89,7 +89,6 @@ const ChatDetailScreen = () => {
   const appStateSubscriptionRef = useRef(null);
   const markAsReadTimeoutRef = useRef(null);
   const { conversationId, receiverId, receiverName, receiverOnline } = route.params;
-
   // ===== START: NEW UTILITY FUNCTION AND EFFECT =====
   // Add this function to your ChatDetailScreen component
   const handleConnectionIssues = useCallback(() => {
@@ -103,7 +102,6 @@ const ChatDetailScreen = () => {
     }
     return true;
   }, [socket]);
-
   // Add this useEffect for periodic connection checking
   useEffect(() => {
     const connectionCheckInterval = setInterval(() => {
@@ -117,11 +115,9 @@ const ChatDetailScreen = () => {
         }, 2000);
       }
     }, 10000); // Check every 10 seconds
-
     return () => clearInterval(connectionCheckInterval);
   }, [socket, conversationId, handleConnectionIssues]);
   // ===== END: NEW UTILITY FUNCTION AND EFFECT =====
-
   // ADDED FOR AUDIO PLAYBACK: Function to handle playing/pausing audio messages
   const handleAudioPlayPause = (messageId, fileUrl) => {
     if (currentlyPlaying === messageId) {
@@ -137,7 +133,6 @@ const ChatDetailScreen = () => {
       setPlayingMessageCurrentTime(0); // Reset time for new message
     }
   };
-
   // ADDED FOR AUDIO PLAYBACK: Function to reset state when audio finishes
   const onPlaybackEnd = () => {
     setPaused(true);
@@ -145,7 +140,6 @@ const ChatDetailScreen = () => {
     setAudioMessageUrl(null);
     setPlayingMessageCurrentTime(0); // Reset time on end
   };
-
   // ADDED: Helper function to get current time for a specific message
   const getCurrentTimeForMessage = (messageId) => {
     // If this message is the one currently playing, return its tracked time
@@ -155,8 +149,6 @@ const ChatDetailScreen = () => {
     // If not playing, return 0 (or you could store last known time per message in state)
     return 0;
   };
-
-
   // Updated handleAudioRecordingComplete function to track duration:
   const handleAudioRecordingComplete = async (audioFile, duration = null) => {
     console.log('🎵 Audio recorded:', audioFile);
@@ -176,7 +168,6 @@ const ChatDetailScreen = () => {
       setUploadingFile(false);
     }
   };
-
   // Initialize WebRTC Service
   useEffect(() => {
     const initializeWebRTC = async () => {
@@ -208,7 +199,6 @@ const ChatDetailScreen = () => {
       enhancedGlobalWebRTCService.clearScreenCallbacks();
     };
   }, [token]);
-
   // FIXED: Add focus effect to reset states when returning from CallScreen
   useFocusEffect(
     React.useCallback(() => {
@@ -227,7 +217,6 @@ const ChatDetailScreen = () => {
       };
     }, [])
   );
-
   // FIXED: Add periodic state check to prevent stuck states
   useEffect(() => {
     const stateCheckInterval = setInterval(() => {
@@ -243,12 +232,10 @@ const ChatDetailScreen = () => {
     }, 2000);
     return () => clearInterval(stateCheckInterval);
   }, [isInitiatingCall, callState]);
-
   // WebRTC Event Handlers
   const handleLocalStream = (stream) => {
     console.log('📹 Local stream received in ChatDetailScreen');
   };
-
   const handleRemoteStream = (stream) => {
     console.log('📺 Remote stream received in ChatDetailScreen');
     if (callState !== 'connected') {
@@ -256,7 +243,6 @@ const ChatDetailScreen = () => {
       setIsCallActive(true);
     }
   };
-
   // REPLACED: handleCallStateChange with more robust state resetting
   const handleCallStateChange = (type, data) => {
     console.log('🔄 Call state change in ChatDetailScreen:', type, data);
@@ -323,7 +309,6 @@ const ChatDetailScreen = () => {
         break;
     }
   };
-
   // REPLACED: handleWebRTCError with more robust state resetting
   const handleWebRTCError = (error) => {
     console.error('❌ WebRTC error in ChatDetailScreen:', error);
@@ -334,13 +319,11 @@ const ChatDetailScreen = () => {
     setIncomingCall(null);
     Alert.alert('Call Error', error.message || 'An error occurred during the call');
   };
-
   const handleIncomingCall = (callData) => {
     console.log('📞 Incoming call received in ChatDetailScreen:', callData);
     setIncomingCall(callData);
     setCallState('incoming');
   };
-
   // Call Functions
   const initiateAudioCall = async () => {
     if (isCallActive || isInitiatingCall) {
@@ -379,7 +362,6 @@ const ChatDetailScreen = () => {
       Alert.alert('Call Failed', 'Unable to start audio call. Please try again.');
     }
   };
-
   const initiateVideoCall = async () => {
     if (isCallActive || isInitiatingCall) {
       Alert.alert('Error', 'You are already in a call or initiating one');
@@ -417,7 +399,6 @@ const ChatDetailScreen = () => {
       Alert.alert('Call Failed', 'Unable to start video call. Please try again.');
     }
   };
-
   const acceptIncomingCall = async () => {
     if (!incomingCall) return;
     try {
@@ -441,7 +422,6 @@ const ChatDetailScreen = () => {
       setIncomingCall(null);
     }
   };
-
   const declineIncomingCall = async () => {
     if (!incomingCall) return;
     try {
@@ -455,7 +435,6 @@ const ChatDetailScreen = () => {
       setCallState('idle');
     }
   };
-
   // Get profile image URL
   const getProfileImageUrl = (user) => {
     if (!user) return null;
@@ -481,7 +460,6 @@ const ChatDetailScreen = () => {
     }
     return null;
   };
-
   // Get message status icon
   const getStatusIcon = (message) => {
     if (message.sender._id !== currentUser?._id) return null;
@@ -496,15 +474,21 @@ const ChatDetailScreen = () => {
         return null;
     }
   };
-
-  // Mark messages as read
+  // Enhanced markMessagesAsRead function with socket emission
   const markMessagesAsRead = async (specificMessageIds = null) => {
     try {
       if (!token || !conversationId) return;
+
       const payload = { conversationId };
       if (specificMessageIds && specificMessageIds.length > 0) {
         payload.messageIds = specificMessageIds;
       }
+
+      // Get unread message IDs before marking as read
+      const unreadMessageIds = messages
+        .filter(msg => msg.sender._id !== currentUser._id && msg.status !== 'read')
+        .map(msg => msg._id);
+
       const response = await fetch(`${BASE_URL}/api/v1/chat/messages/bulk-seen`, {
         method: 'POST',
         headers: {
@@ -513,8 +497,10 @@ const ChatDetailScreen = () => {
         },
         body: JSON.stringify(payload),
       });
+
       const data = await response.json();
       if (response.ok && data.success) {
+        // Update local state
         setMessages(prev => prev.map(msg => {
           if (msg.sender._id !== currentUser._id && msg.status !== 'read') {
             return { ...msg, status: 'read', readAt: new Date().toISOString() };
@@ -522,12 +508,23 @@ const ChatDetailScreen = () => {
           return msg;
         }));
         setUnseenCount(0);
+
+        // IMPORTANT: Emit socket event to notify sender about read status
+        if (socket && socket.connected && unreadMessageIds.length > 0) {
+          socket.emit('messagesRead', {
+            conversationId,
+            messageIds: unreadMessageIds,
+            readBy: currentUser._id,
+            receiverId: receiverId, // The person whose messages we just read
+            timestamp: new Date().toISOString()
+          });
+          console.log('📤 Emitted messagesRead event for', unreadMessageIds.length, 'messages');
+        }
       }
     } catch (error) {
       console.error('❌ Error marking messages as read:', error);
     }
   };
-
   // Handle conversation focus/blur
   const handleConversationFocus = () => {
     if (!conversationFocused && socket) {
@@ -541,7 +538,6 @@ const ChatDetailScreen = () => {
       }, 1000);
     }
   };
-
   const handleConversationBlur = () => {
     if (conversationFocused && socket) {
       socket.emit('conversationBlurred', {
@@ -554,7 +550,6 @@ const ChatDetailScreen = () => {
       }
     }
   };
-
   // Handle app state changes
   useEffect(() => {
     const handleAppStateChange = (nextAppState) => {
@@ -576,16 +571,12 @@ const ChatDetailScreen = () => {
       handleConversationBlur();
     };
   }, []);
-
   // Enhanced Socket listeners with better error handling and reconnection
   useEffect(() => {
     if (!socket || !conversationId) return;
-
     console.log('🔌 Setting up socket listeners for conversation:', conversationId);
-
     // Join conversation room immediately
     socket.emit('joinConversation', { conversationId });
-
     const handleUserOnline = (data) => {
       console.log('👤 User came online:', data);
       setOnlineUsers(prev => new Set([...prev, data.userId]));
@@ -593,7 +584,6 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(true);
       }
     };
-
     const handleUserOffline = (data) => {
       console.log('👤 User went offline:', data);
       setOnlineUsers(prev => {
@@ -605,7 +595,6 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(false);
       }
     };
-
     const handleOnlineUsersList = (data) => {
       console.log('👥 Received online users list:', data);
       if (data && Array.isArray(data)) {
@@ -615,7 +604,6 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(isReceiverOnline);
       }
     };
-
     // Enhanced message handler with better error handling
     const handleNewMessage = (message) => {
       console.log('📨 New message received:', {
@@ -625,13 +613,11 @@ const ChatDetailScreen = () => {
         sender: message.sender?._id,
         content: message.content?.substring(0, 50) + '...'
       });
-
       // Verify this message belongs to current conversation
       if (message.conversationId !== conversationId) {
         console.log('📨 Message not for current conversation, ignoring');
         return;
       }
-
       // Update messages state
       setMessages(prev => {
         // Check if message already exists to prevent duplicates
@@ -640,18 +626,14 @@ const ChatDetailScreen = () => {
           console.log('📨 Message already exists, skipping duplicate');
           return prev;
         }
-        
         console.log('📨 Adding new message to state');
         const newMessages = [...prev, message];
-        
         // Scroll to bottom after state update
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
         }, 100);
-        
         return newMessages;
       });
-
       // Auto-mark as read if conversation is focused and message is from other user
       if (message.sender._id !== currentUser._id && conversationFocused) {
         setTimeout(() => {
@@ -661,31 +643,84 @@ const ChatDetailScreen = () => {
         setUnseenCount(prev => prev + 1);
       }
     };
-
-    // Message status updates
+    // Message status updates - FIXED VERSION
     const handleMessageStatusUpdate = (data) => {
-      console.log('📊 Message status update:', data);
-      if (data.conversationId === conversationId) {
-        setMessages(prev => prev.map(msg => {
-          if (msg.sender._id === currentUser._id && msg.status !== 'read') {
-            return { ...msg, status: data.status, [data.status + 'At']: new Date().toISOString() };
+      console.log('📊 Message status update received:', data);
+
+      // Update messages for both single message and bulk updates
+      setMessages(prev => prev.map(msg => {
+        // Check if this is a message sent by the current user
+        if (msg.sender._id === currentUser._id) {
+          // Check if this specific message should be updated
+          if (data.messageId && msg._id === data.messageId) {
+            console.log('✅ Updating message status to:', data.status);
+            return {
+              ...msg,
+              status: data.status,
+              [data.status + 'At']: data.timestamp || new Date().toISOString()
+            };
           }
-          return msg;
-        }));
-      }
+          // If no specific messageId, update all unread messages from this user to this receiver
+          else if (!data.messageId && data.receiverId === receiverId && msg.status !== 'read') {
+            return {
+              ...msg,
+              status: data.status,
+              [data.status + 'At']: data.timestamp || new Date().toISOString()
+            };
+          }
+        }
+        return msg;
+      }));
     };
 
-    // Bulk message status updates
+    // Bulk message status updates - FIXED VERSION
     const handleBulkMessageStatusUpdate = (data) => {
-      console.log('📊 Bulk message status update:', data);
-      if (data.conversationId === conversationId) {
-        setMessages(prev => prev.map(msg => {
-          if (msg.sender._id === currentUser._id && msg.receiver === data.readBy) {
-            return { ...msg, status: data.status, [data.status + 'At']: new Date().toISOString() };
+      console.log('📊 Bulk message status update received:', data);
+
+      setMessages(prev => prev.map(msg => {
+        // Update all messages sent by current user that are now read
+        if (msg.sender._id === currentUser._id &&
+          data.conversationId === conversationId) {
+
+          // If messageIds array is provided, check if this message is in it
+          if (data.messageIds && Array.isArray(data.messageIds)) {
+            if (data.messageIds.includes(msg._id)) {
+              console.log('✅ Bulk updating message to read:', msg._id);
+              return {
+                ...msg,
+                status: 'read',
+                readAt: data.timestamp || new Date().toISOString()
+              };
+            }
           }
-          return msg;
-        }));
-      }
+          // Otherwise update all unread messages
+          else if (msg.status !== 'read' && data.status === 'read') {
+            return {
+              ...msg,
+              status: 'read',
+              readAt: data.timestamp || new Date().toISOString()
+            };
+          }
+        }
+        return msg;
+      }));
+    };
+
+    // Add this new handler for real-time read receipts
+    const handleMessageRead = (data) => {
+      console.log('👁️ Message read event received:', data);
+
+      setMessages(prev => prev.map(msg => {
+        // Update message if it matches the read message ID or is part of bulk read
+        if (msg.sender._id === currentUser._id) {
+          if (data.messageIds && data.messageIds.includes(msg._id)) {
+            return { ...msg, status: 'read', readAt: new Date().toISOString() };
+          } else if (data.messageId && msg._id === data.messageId) {
+            return { ...msg, status: 'read', readAt: new Date().toISOString() };
+          }
+        }
+        return msg;
+      }));
     };
 
     // Conversation joined confirmation
@@ -693,7 +728,6 @@ const ChatDetailScreen = () => {
       console.log('✅ Successfully joined conversation:', data);
       handleConversationFocus();
     };
-
     // Connection status handlers
     const handleConnect = () => {
       console.log('🔌 Socket connected, rejoining conversation');
@@ -701,18 +735,15 @@ const ChatDetailScreen = () => {
         socket.emit('joinConversation', { conversationId });
       }, 1000);
     };
-
     const handleDisconnect = () => {
       console.log('🔌 Socket disconnected');
     };
-
     const handleReconnect = () => {
       console.log('🔌 Socket reconnected, rejoining conversation');
       setTimeout(() => {
         socket.emit('joinConversation', { conversationId });
       }, 1000);
     };
-
     // Register all event listeners
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
@@ -723,11 +754,11 @@ const ChatDetailScreen = () => {
     socket.on('newMessage', handleNewMessage);
     socket.on('messageStatusUpdate', handleMessageStatusUpdate);
     socket.on('bulkMessageStatusUpdate', handleBulkMessageStatusUpdate);
+    socket.on('messageRead', handleMessageRead);
+    socket.on('messagesRead', handleMessageRead); // Handle both single and plural events
     socket.on('joinedConversation', handleJoinedConversation);
-
     // Request current online users
     socket.emit('getAllOnlineUsers');
-
     // Cleanup function
     return () => {
       console.log('🧹 Cleaning up socket listeners for conversation:', conversationId);
@@ -740,13 +771,13 @@ const ChatDetailScreen = () => {
       socket.off('newMessage', handleNewMessage);
       socket.off('messageStatusUpdate', handleMessageStatusUpdate);
       socket.off('bulkMessageStatusUpdate', handleBulkMessageStatusUpdate);
+      socket.off('messageRead', handleMessageRead);
+      socket.off('messagesRead', handleMessageRead);
       socket.off('joinedConversation', handleJoinedConversation);
-      
       // Leave conversation room
       socket.emit('leaveConversation', { conversationId });
     };
   }, [socket, conversationId, receiverId, currentUser, conversationFocused]);
-
   // Add this useEffect to handle app focus/blur for better real-time updates
   useFocusEffect(
     React.useCallback(() => {
@@ -756,7 +787,6 @@ const ChatDetailScreen = () => {
         socket.emit('joinConversation', { conversationId });
         handleConversationFocus();
       }
-      
       return () => {
         console.log('📱 ChatDetailScreen blurred');
         if (socket && conversationId) {
@@ -765,7 +795,6 @@ const ChatDetailScreen = () => {
       };
     }, [socket, conversationId])
   );
-
   // Initial data loading
   useEffect(() => {
     fetchMessages();
@@ -777,7 +806,6 @@ const ChatDetailScreen = () => {
       }
     };
   }, [conversationId]);
-
   // Extract receiver data from messages
   useEffect(() => {
     if (messages.length > 0 && !receiverData) {
@@ -789,7 +817,6 @@ const ChatDetailScreen = () => {
       }
     }
   }, [messages, receiverId, receiverData]);
-
   // Update online status
   const updateOnlineStatus = async (isOnline) => {
     try {
@@ -813,7 +840,6 @@ const ChatDetailScreen = () => {
       console.error('❌ Error updating online status:', error);
     }
   };
-
   // Fetch messages
   const fetchMessages = async (pageNum = 1, prepend = false) => {
     try {
@@ -854,29 +880,23 @@ const ChatDetailScreen = () => {
       setLoading(false);
     }
   };
-
  // STEP 1: Replace the sendMessage function in ChatDetailScreen
 const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null) => {
   if (messageType === 'text' && (!newMessage.trim() || sending)) return;
   if (messageType !== 'text' && !fileData) return;
-
   const messageText = messageType === 'text' ? newMessage.trim() : newMessage;
   const tempId = `temp_${Date.now()}_${Math.random()}`;
-
   setNewMessage('');
-  
   // Set loading states based on message type
   if (messageType === 'text') {
     setSending(true);
   } else {
     setUploadingFile(true);
   }
-
   try {
     if (messageType === 'text' && socket && socket.connected) {
       // Handle text messages via socket (existing logic)
       console.log('📤 Sending text message via socket');
-
       const messageData = {
         conversationId,
         receiverId,
@@ -884,14 +904,11 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
         messageType: 'text',
         tempId
       };
-
       socket.emit('sendMessage', messageData);
-
       const confirmationTimeout = setTimeout(() => {
         console.log('⚠️ Socket message timeout, falling back to HTTP');
         sendViaHTTP();
       }, 5000);
-
       const handleMessageSent = (data) => {
         if (data.tempId === tempId) {
           clearTimeout(confirmationTimeout);
@@ -901,7 +918,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
           console.log('✅ Message sent via socket successfully');
         }
       };
-
       const handleMessageError = (error) => {
         if (error.tempId === tempId) {
           clearTimeout(confirmationTimeout);
@@ -911,24 +927,19 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
           sendViaHTTP();
         }
       };
-
       socket.on('messageSent', handleMessageSent);
       socket.on('error', handleMessageError);
-
     } else {
       // Handle file messages via HTTP with immediate UI feedback
       await sendViaHTTP();
     }
-
     async function sendViaHTTP() {
       console.log('📤 Sending message via HTTP, type:', messageType);
-
       let requestBody;
       let headers = {
         'Authorization': `Bearer ${token}`,
       };
       let endpoint = `${BASE_URL}/api/v1/chat/message`;
-
       // 🔥 STEP 1A: Create optimistic message for immediate UI feedback (for file uploads)
       let optimisticMessage = null;
       if (messageType !== 'text') {
@@ -954,16 +965,13 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
           createdAt: new Date().toISOString(),
           isOptimistic: true // Flag to identify optimistic messages
         };
-
         // Add optimistic message to UI immediately
         setMessages(prev => [...prev, optimisticMessage]);
-        
         // Scroll to bottom
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
         }, 100);
       }
-
       // Prepare request based on message type
       if (messageType === 'audio') {
         endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
@@ -998,18 +1006,14 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
         }
         requestBody = formData;
       }
-
       const response = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: requestBody,
       });
-
       const data = await response.json();
-      
       if (response.ok && data.success) {
         console.log('✅ Message sent via HTTP successfully');
-        
         // 🔥 STEP 1B: Handle successful file upload
         if (messageType !== 'text' && optimisticMessage) {
           // Replace optimistic message with real message
@@ -1026,7 +1030,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
             }
             return msg;
           }));
-
           // 🔥 STEP 1C: Emit via socket for real-time updates to other users
           if (socket && socket.connected) {
             socket.emit('fileMessageSent', {
@@ -1036,10 +1039,8 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
             });
           }
         }
-        
       } else {
         console.error('❌ HTTP message failed:', data);
-        
         // 🔥 STEP 1D: Handle failed file upload
         if (messageType !== 'text' && optimisticMessage) {
           // Remove optimistic message and show error
@@ -1056,15 +1057,12 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
         }
       }
     }
-
   } catch (error) {
     console.error('❌ Error sending message:', error);
-    
     // Handle error for optimistic messages
     if (messageType !== 'text') {
       setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
     }
-    
     Alert.alert('Error', 'Failed to send message');
     if (messageType === 'text') {
       setNewMessage(messageText);
@@ -1078,7 +1076,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
   }
 };
   // ===== END: REPLACED sendMessage FUNCTION =====
-
   // Delete message
   const deleteMessage = async (messageId) => {
     if (!messageId || deletingMessage) return;
@@ -1105,24 +1102,20 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       setDeletingMessage(false);
     }
   };
-
   // Message handlers
   const handleMessageLongPress = (message) => {
     if (message.sender._id === currentUser?._id) {
       setSelectedMessageForDelete(message);
     }
   };
-
   const cancelDelete = () => {
     setSelectedMessageForDelete(null);
   };
-
   const loadOlderMessages = () => {
     if (hasMoreMessages && !loading) {
       fetchMessages(page + 1, true);
     }
   };
-
   const handleProfilePress = () => {
     navigation.navigate('UserProfile', {
       userId: receiverId,
@@ -1130,7 +1123,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       conversationId: conversationId,
     });
   };
-
   // File handling
   const handleAttachmentPress = () => {
     if (!ImagePicker && !DocumentPicker) {
@@ -1146,7 +1138,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
     }
     setShowAttachmentModal(true);
   };
-
   const requestCameraPermission = async () => {
     if (Platform.OS === 'android') {
       try {
@@ -1169,7 +1160,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
     }
     return true;
   };
-
   const openCamera = async () => {
     if (!ImagePicker) {
       Alert.alert('Error', 'Image picker not available');
@@ -1203,7 +1193,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       }
     });
   };
-
   const openGallery = () => {
     if (!ImagePicker) {
       Alert.alert('Error', 'Image picker not available');
@@ -1227,7 +1216,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       }
     });
   };
-
   const openDocumentPicker = async () => {
     if (!DocumentPicker) {
       Alert.alert('Error', 'Document picker not available');
@@ -1271,7 +1259,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       setUploadingFile(false);
     }
   };
-
   const handleFileDownload = async (fileUrl, fileName, messageType) => {
     try {
       if (!fileUrl) {
@@ -1309,7 +1296,6 @@ Would you like to open this file?`,
       Alert.alert('Error', 'Failed to open file');
     }
   };
-
   const sendSelectedImage = () => {
     if (!selectedPreviewImage) return;
     setShowImagePreview(false);
@@ -1322,7 +1308,6 @@ Would you like to open this file?`,
     sendMessage('image', fileData);
     setSelectedPreviewImage(null);
   };
-
   // Utility functions
   const getInitials = (fullName) => {
     if (!fullName) return '?';
@@ -1332,7 +1317,6 @@ Would you like to open this file?`,
     }
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
-
   const getAvatarColor = (name) => {
     const colors = [
       '#FF6B9D', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
@@ -1341,7 +1325,6 @@ Would you like to open this file?`,
     const charCodeSum = name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
     return colors[charCodeSum % colors.length];
   };
-
   const formatTime = (dateString) => {
     const date = new Date(dateString);
     const now = new Date();
@@ -1358,7 +1341,6 @@ Would you like to open this file?`,
       day: 'numeric'
     });
   };
-
   // Render functions
   const renderHeaderAvatar = () => {
     const userData = receiverData || { fullName: receiverName };
@@ -1382,13 +1364,11 @@ Would you like to open this file?`,
       </View>
     );
   };
-
   const renderMessage = ({ item }) => {
     const isOwnMessage = item.sender._id === currentUser?._id;
     const isSelected = selectedMessageForDelete && selectedMessageForDelete._id === item._id;
     // ADDED FOR AUDIO PLAYBACK: Check if this message is the one currently playing
     const isPlaying = currentlyPlaying === item._id;
-
     return (
       <View style={styles.messageWrapper}>
         <TouchableOpacity
@@ -1527,7 +1507,6 @@ Would you like to open this file?`,
       </View>
     );
   };
-
   const renderHeader = () => (
     <View style={styles.header}>
       <View style={styles.headerContent}>
@@ -1578,8 +1557,7 @@ Would you like to open this file?`,
         >
           {/* Always show the icon, never the loader */}
           <Ionicons name="call-outline" size={24} color="#FF6B9D" />
-        </TouchableOpacity>          
-          
+        </TouchableOpacity>
                 <TouchableOpacity
           style={[
             styles.actionButton,
@@ -1595,14 +1573,12 @@ Would you like to open this file?`,
       </View>
     </View>
   );
-
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
       <Text style={styles.emptyText}>No messages yet</Text>
       <Text style={styles.emptySubtext}>Send a message to start the conversation!</Text>
     </View>
   );
-
   const renderLoadMoreButton = () => {
     if (loading && page > 1) {
       return (
@@ -1620,7 +1596,6 @@ Would you like to open this file?`,
     }
     return null;
   };
-
   const renderAttachmentModal = () => (
     <Modal
       visible={showAttachmentModal}
@@ -1657,7 +1632,6 @@ Would you like to open this file?`,
       </TouchableOpacity>
     </Modal>
   );
-
   const renderImagePreviewModal = () => (
     <Modal
       visible={showImagePreview}
@@ -1692,7 +1666,6 @@ Would you like to open this file?`,
       </View>
     </Modal>
   );
-
   if (loading && messages.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
@@ -1705,7 +1678,6 @@ Would you like to open this file?`,
       </SafeAreaView>
     );
   }
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1C1C1E" />
@@ -1823,7 +1795,6 @@ Would you like to open this file?`,
     </SafeAreaView>
   );
 };
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -2017,7 +1988,6 @@ const styles = StyleSheet.create({
     padding: 8,
     minHeight: 60, // Ensure it has a minimum height for touch targets
     maxHeight: 100, // Prevent it from stretching too tall // Keep padding for touch area
-    
   },
   fileIcon: {
     width: 40,

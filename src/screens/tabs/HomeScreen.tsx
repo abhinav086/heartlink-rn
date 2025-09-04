@@ -2,13 +2,34 @@ import React, { useState, useCallback, useRef, useImperativeHandle, useEffect } 
 import { View, StyleSheet, FlatList, RefreshControl, Alert, ActivityIndicator, Text, BackHandler } from "react-native";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
+// 1. Import MMKV
+import { MMKVLoader, MMKVInstance } from 'react-native-mmkv-storage';
 
 import { Header, SearchBar } from "../../components/Home/Header";
 import Stories from "../../components/Home/Stories";
 import Post from "../../components/Home/Post";
 import BASE_URL from '../../config/config';
 
-type Props = {}; 
+// 2. Initialize MMKV Instance
+let MMKV; // Use `let` to allow fallback
+try {
+  MMKV = new MMKVLoader().initialize();
+} catch (error) {
+  console.error('Failed to initialize MMKV:', error);
+  // Fallback to a mock implementation if MMKV fails
+  MMKV = {
+    getString: () => null,
+    setString: () => { },
+    removeItem: () => { },
+  };
+}
+
+// 3. Define Cache Keys and Duration
+const POSTS_CACHE_KEY = 'cached_posts';
+const POSTS_CACHE_TIMESTAMP_KEY = 'cached_posts_timestamp';
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache
+
+type Props = {};
 
 const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
   const navigation = useNavigation();
@@ -271,15 +292,15 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
 
   const getPostImageUrl = (apiPost) => {
     if (!apiPost || typeof apiPost !== 'object') {
-      return 'https://via.placeholder.com/400';
+      return 'https://via.placeholder.com/400  ';
     }
     
     const images = Array.isArray(apiPost.images) ? apiPost.images : [];
     if (images.length > 0) {
-      return images[0]?.url || images[0]?.uri || images[0] || 'https://via.placeholder.com/400';
+      return images[0]?.url || images[0]?.uri || images[0] || 'https://via.placeholder.com/400  ';
     }
     
-    return apiPost?.image || apiPost?.imageUrl || 'https://via.placeholder.com/400';
+    return apiPost?.image || apiPost?.imageUrl || 'https://via.placeholder.com/400  ';
   };
 
   const getAuthorName = (author) => {
@@ -308,34 +329,17 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
     return author?._id || author?.id || author || 'unknown';
   };
 
-  useEffect(() => {
-    const initializeScreen = async () => {
-      const tokenValid = await checkToken();
-      if (tokenValid) {
-        await fetchPosts(1, true);
-      }
-    };
-    initializeScreen();
+  // 4. Function to clear the posts cache
+  const clearPostsCache = useCallback(() => {
+    try {
+      MMKV.removeItem(POSTS_CACHE_KEY);
+      MMKV.removeItem(POSTS_CACHE_TIMESTAMP_KEY);
+    } catch (error) {
+      console.error('Error clearing posts cache:', error);
+    }
   }, []);
 
-  const checkToken = async () => {
-    try {
-      const token = await AsyncStorage.getItem('token');
-      if (!token) {
-        Alert.alert('Error', 'Please log in to continue.');
-        navigation.navigate('Login');
-        return false;
-      }
-      return true;
-    } catch (error) {
-      console.error('AsyncStorage Error:', error);
-      Alert.alert('Error', 'Failed to verify login status. Please log in again.');
-      navigation.navigate('Login');
-      return false;
-    }
-  };
-
-  // UPDATED: fetchPosts with shuffling support
+  // 5. Modified fetchPosts with caching logic
   const fetchPosts = async (pageNum = 1, isInitial = false, shouldShuffle = false) => {
     try {
       if (isInitial) {
@@ -350,7 +354,35 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
         throw new Error('No authentication token found');
       }
 
-      // UPDATED: Fetch more posts when shuffling to have better variety
+      // 6. Try to get cached data for the first page only, and only on initial load
+      if (pageNum === 1 && isInitial) {
+        try {
+          const cachedPostsString = MMKV.getString(POSTS_CACHE_KEY);
+          const cacheTimestampString = MMKV.getString(POSTS_CACHE_TIMESTAMP_KEY);
+
+          if (cachedPostsString && cacheTimestampString) {
+            const cachedPosts = JSON.parse(cachedPostsString);
+            const cacheTimestamp = parseInt(cacheTimestampString, 10);
+            const now = Date.now();
+
+            // If we have recent cache, use it
+            if ((now - cacheTimestamp) < CACHE_DURATION) {
+              console.log('Using cached posts data');
+              // Apply shuffle to cached data if needed
+              const processedCachedPosts = shouldShuffle ? applyShuffleToFeed(cachedPosts, "smart") : cachedPosts;
+
+              setPosts(processedCachedPosts);
+              setHasMorePosts(true); // Assume there's more until we know otherwise
+              setPage(1);
+              // Don't return yet - still fetch fresh data in background
+            }
+          }
+        } catch (cacheError) {
+          console.warn('Cache reading failed, continuing with fresh fetch:', cacheError);
+        }
+      }
+
+      // Fetch fresh data
       const fetchLimit = shouldShuffle ? 30 : 10; // Fetch more posts for better shuffling
 
       const response = await fetch(
@@ -375,34 +407,60 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
         const postsOnly = newPosts.filter(post => post.type !== 'reel');
         const pagination = data.data.pagination || {};
 
-        // ADDED: Apply shuffling if requested
+        // Apply shuffling if requested
+        let processedPosts = postsOnly;
         if (shouldShuffle && postsOnly.length > 0) {
           console.log(`🔀 REFRESH #${refreshCount + 1} - Shuffling ${postsOnly.length} posts`);
-          const shuffledPosts = applyShuffleToFeed(postsOnly, "smart");
-          
-          // Take only the first 10 posts after shuffling for display
-          if (isInitial || pageNum === 1) {
-            setPosts(shuffledPosts.slice(0, 10));
-          } else {
-            setPosts(prevPosts => [...prevPosts, ...shuffledPosts.slice(0, 10)]);
-          }
-        } else {
-          // Normal flow without shuffling
-          if (isInitial || pageNum === 1) {
-            setPosts(postsOnly);
-          } else {
-            setPosts(prevPosts => [...prevPosts, ...postsOnly]);
-          }
+          processedPosts = applyShuffleToFeed(postsOnly, "smart");
         }
 
-        setHasMorePosts(pagination.hasNextPage || false);
-        setPage(pageNum);
+        // For first page or refresh, replace posts
+        if (isInitial || pageNum === 1) {
+          setPosts(processedPosts);
+          setPage(1);
+          setHasMorePosts(pagination.hasNextPage || false);
+
+          // 7. Cache the fresh data for the first page
+          if (pageNum === 1) {
+            try {
+              MMKV.setString(POSTS_CACHE_KEY, JSON.stringify(processedPosts));
+              MMKV.setString(POSTS_CACHE_TIMESTAMP_KEY, Date.now().toString());
+            } catch (cacheError) {
+              console.warn('Failed to cache posts data:', cacheError);
+            }
+          }
+        } else {
+          // For subsequent pages, append to existing posts
+          setPosts(prevPosts => [...prevPosts, ...processedPosts]);
+          setPage(pageNum);
+          setHasMorePosts(pagination.hasNextPage || false);
+        }
+
       } else {
         throw new Error('Invalid response format');
       }
     } catch (error) {
       console.error('Error fetching posts:', error);
       setError(error.message);
+
+      // 8. If we have cached data and it's the first page, use it as fallback
+      if (pageNum === 1) {
+        try {
+          const cachedPostsString = MMKV.getString(POSTS_CACHE_KEY);
+          if (cachedPostsString) {
+            const cachedPosts = JSON.parse(cachedPostsString);
+            if (cachedPosts && cachedPosts.length > 0) {
+              console.log('Using cached posts as fallback');
+              setPosts(cachedPosts);
+              setHasMorePosts(true);
+              setPage(1);
+            }
+          }
+        } catch (cacheError) {
+          console.warn('Failed to use cache as fallback:', cacheError);
+        }
+      }
+
       if (isInitial) {
         Alert.alert('Error', `Failed to load posts: ${error.message}`);
       }
@@ -412,12 +470,47 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
     }
   };
 
+  // 9. Initialize screen with cache check
+  useEffect(() => {
+    const initializeScreen = async () => {
+      const tokenValid = await checkToken();
+      if (tokenValid) {
+        // Pass `true` for `isInitial` and `false` for `shouldShuffle` on initial load
+        await fetchPosts(1, true, false);
+      }
+    };
+    initializeScreen();
+
+    // Cleanup function to clear cache when component unmounts (optional)
+    // return () => {
+    //   clearPostsCache();
+    // };
+  }, []);
+
+  const checkToken = async () => {
+    try {
+      const token = await AsyncStorage.getItem('token');
+      if (!token) {
+        Alert.alert('Error', 'Please log in to continue.');
+        navigation.navigate('Login');
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error('AsyncStorage Error:', error);
+      Alert.alert('Error', 'Failed to verify login status. Please log in again.');
+      navigation.navigate('Login');
+      return false;
+    }
+  };
+
   // UPDATED: onRefresh with shuffling
   const onRefresh = useCallback(async () => {
     console.log(`🔄 REFRESH TRIGGERED #${refreshCount + 1}`);
     setRefreshing(true);
     setError(null);
-    
+    clearPostsCache(); // Clear cache before refreshing
+
     // Always shuffle on refresh
     await fetchPosts(1, true, true); // true = shouldShuffle
     
@@ -549,7 +642,7 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
         _id: apiPost._id || apiPost.id || `post-${Date.now()}`,
         userImg: userImage ? { uri: userImage } : { uri: 'https://via.placeholder.com/50/333333/ffffff?text=User' },
         username: authorName,
-        postImg: postImageUrl ? { uri: postImageUrl } : { uri: 'https://via.placeholder.com/400/333333/ffffff?text=No+Image' },
+        postImg: postImageUrl ? { uri: postImageUrl } : { uri: '  https://via.placeholder.com/400/333333/ffffff?text=No+Image' },
         caption: apiPost.content || apiPost.caption || '',
         userInitials: getInitials(authorName),
         avatarColor: getAvatarColor(authorName),
@@ -595,8 +688,8 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
   };
 
   const createFallbackPost = () => {
-    const fallbackImage = 'https://via.placeholder.com/50/333333/ffffff?text=User';
-    const fallbackPostImage = 'https://via.placeholder.com/400/333333/ffffff?text=No+Image';
+    const fallbackImage = '  https://via.placeholder.com/50/333333/ffffff?text=User';
+    const fallbackPostImage = '  https://via.placeholder.com/400/333333/ffffff?text=No+Image';
     const fallbackName = 'Unknown User';
     
     return {

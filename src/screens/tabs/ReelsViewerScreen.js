@@ -58,6 +58,25 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   const queueRef = useRef([]);
   const processingRef = useRef(false);
 
+  // --- Robust data validation utilities ---
+  const safeString = useCallback((value, fallback = '') => {
+    if (value === null || value === undefined) return fallback;
+    return String(value);
+  }, []);
+
+  const safeNumber = useCallback((value, fallback = 0) => {
+    const num = Number(value);
+    return isNaN(num) ? fallback : num;
+  }, []);
+
+  const safeArray = useCallback((value, fallback = []) => {
+    return Array.isArray(value) ? value : fallback;
+  }, []);
+
+  const safeObject = useCallback((value, fallback = {}) => {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
+  }, []);
+
   // --- START: Functions from ReelsScreen for consistency ---
   const calculateDummyViews = useCallback((createdAt) => {
     if (!createdAt) return Math.floor(Math.random() * 31) + 20;
@@ -194,6 +213,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
 
   // Enhanced view tracking with watch time analytics (from ReelsScreen)
   const startViewTracking = useCallback((reelId) => {
+    if (!reelId) return;
     viewStartTime.current[reelId] = Date.now();
     // Register view after 3 seconds with initial analytics
     viewTimers.current[reelId] = setTimeout(() => {
@@ -209,6 +229,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
 
   // Enhanced view tracking completion with full analytics (from ReelsScreen)
   const stopViewTracking = useCallback((reelId) => {
+    if (!reelId) return;
     if (viewTimers.current[reelId]) {
       clearTimeout(viewTimers.current[reelId]);
       delete viewTimers.current[reelId];
@@ -230,18 +251,20 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [registerReelView]);
 
-  // Format views count (e.g., 1.2K, 1M) (from ReelsScreen)
+  // Format views count (e.g., 1.2K, 1M) - Enhanced with better validation
   const formatViewCount = useCallback((count) => {
-    if (count < 1000) return count.toString();
-    if (count < 1000000) return `${(count / 1000).toFixed(1)}K`;
-    return `${(count / 1000000).toFixed(1)}M`;
-  }, []);
+    const numCount = safeNumber(count, 0);
+    if (numCount < 1000) return numCount.toString();
+    if (numCount < 1000000) return `${(numCount / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+    return `${(numCount / 1000000).toFixed(1).replace(/\.0$/, '')}M`;
+  }, [safeNumber]);
 
-  // Get real view count from reel data (from ReelsScreen)
+  // Get real view count from reel data - Enhanced validation
   const getRealViewCount = useCallback((reel) => {
-    // Priority order: realTimeViews -> views -> 0
-    return reel.viewCount || reel.realTimeViews || reel.views || 0;
-  }, []);
+    if (!reel) return 0;
+    // Priority order: viewCount -> realTimeViews -> views -> 0
+    return safeNumber(reel.viewCount) || safeNumber(reel.realTimeViews) || safeNumber(reel.views) || 0;
+  }, [safeNumber]);
 
   // Process like queue in background (from ReelsScreen)
   const processLikeQueue = useCallback(async () => {
@@ -295,6 +318,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
 
   // Add like action to queue (from ReelsScreen)
   const addToLikeQueue = useCallback((reelId, action) => {
+    if (!reelId) return;
     const likeAction = {
       reelId,
       action,
@@ -312,15 +336,17 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   // Profile press handler (from ReelsScreen)
   const handleProfilePress = useCallback((authorData) => {
     try {
-      console.log('Profile press triggered for:', authorData?.fullName || authorData?.username);
-      const userId = authorData?._id || authorData?.id;
-      const authorName = authorData?.fullName || authorData?.username;
+      const safeAuthor = safeObject(authorData);
+      const authorName = safeString(safeAuthor.fullName || safeAuthor.username, 'User');
+      console.log('Profile press triggered for:', authorName);
+      const userId = safeString(safeAuthor._id || safeAuthor.id);
+      
       if (!navigation) {
         console.error('Navigation prop not passed to ReelsViewerScreen component');
         Alert.alert('Error', 'Navigation not available');
         return;
       }
-      if (!userId || userId === 'unknown') {
+      if (!userId || userId === 'unknown' || userId === '') {
         console.error('User ID not available in author data');
         Alert.alert('Error', 'Unable to view profile');
         return;
@@ -345,7 +371,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
       console.error('Error handling profile press:', error);
       Alert.alert('Error', 'Unable to view profile at this time');
     }
-  }, [navigation, user]);
+  }, [navigation, user, safeObject, safeString]);
 
   // App state handler (from ReelsScreen)
   useEffect(() => {
@@ -398,31 +424,40 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [currentIndex, reels, startViewTracking, stopViewTracking]);
 
-  // Process initial reels with real view data
+  // Process initial reels with real view data - Enhanced validation
   useEffect(() => {
     if (user && initialReels.length > 0) {
-      const userId = user._id || user.id;
-      const reelsWithLikes = initialReels.map(reel => ({
-        ...reel,
-        isLiked: reel.likes?.some(like =>
-          (typeof like === 'object' ? like.user || like._id : like) === userId
-        ) || false
-      }));
+      const userId = safeString(user._id || user.id);
+      const reelsWithLikes = safeArray(initialReels).map(reel => {
+        const safeReel = safeObject(reel);
+        const likes = safeArray(safeReel.likes);
+        return {
+          ...safeReel,
+          _id: safeString(safeReel._id, `reel-${Date.now()}-${Math.random()}`),
+          isLiked: likes.some(like =>
+            safeString(typeof like === 'object' ? like.user || like._id : like) === userId
+          ) || false
+        };
+      });
       setReels(reelsWithLikes);
     } else if (initialReels.length > 0) {
-      const reelsWithLikes = initialReels.map(reel => ({
-        ...reel,
-        isLiked: false
-      }));
+      const reelsWithLikes = safeArray(initialReels).map(reel => {
+        const safeReel = safeObject(reel);
+        return {
+          ...safeReel,
+          _id: safeString(safeReel._id, `reel-${Date.now()}-${Math.random()}`),
+          isLiked: false
+        };
+      });
       setReels(reelsWithLikes);
     }
-  }, [user, initialReels]);
+  }, [user, initialReels, safeString, safeArray, safeObject]);
 
   const handleBack = () => {
     // End view tracking for current reel before leaving
     const currentReel = reels[currentIndex];
     if (currentReel) {
-      stopViewTracking(currentReel._id); // Changed to stopViewTracking
+      stopViewTracking(currentReel._id);
     }
     navigation.goBack();
   };
@@ -433,7 +468,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
       const oldIndex = currentIndex;
       // End tracking for previous reel
       if (oldIndex !== newIndex && reels[oldIndex]) {
-        stopViewTracking(reels[oldIndex]._id); // Changed to stopViewTracking
+        stopViewTracking(reels[oldIndex]._id);
       }
       // Start tracking for new reel
       if (reels[newIndex]) {
@@ -441,7 +476,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
       }
       setCurrentIndex(newIndex);
     }
-  }, [currentIndex, reels, stopViewTracking, startViewTracking]); // Updated dependencies
+  }, [currentIndex, reels, stopViewTracking, startViewTracking]);
 
   // Start tracking when first reel becomes visible (from ReelsScreen logic)
   useEffect(() => {
@@ -470,7 +505,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     ]).start(() => setLikeAnimations(prev => prev.filter(anim => anim.id !== id)));
   }, []);
 
-  // Instant like functionality with queue processing (from ReelsScreen)
+  // Instant like functionality with queue processing - Enhanced validation
   const handleLikePress = useCallback(async (reelId) => {
     if (!reelId || !token || !user) {
       Alert.alert('Error', 'Unable to like reel');
@@ -486,14 +521,15 @@ const ReelsViewerScreen = ({ navigation, route }) => {
         return;
       }
       const wasLiked = currentReel.isLiked;
-      const userId = user._id || user.id;
+      const userId = safeString(user._id || user.id);
       // INSTANT UI UPDATE
       setReels(prevReels =>
         prevReels.map(reel => {
           if (reel._id === reelId) {
+            const currentLikes = safeArray(reel.likes);
             const newLikes = wasLiked
-              ? reel.likes?.filter(like => (typeof like === 'object' ? like.user || like._id : like) !== userId) || []
-              : [...(reel.likes || []), { user: userId, _id: Date.now().toString() }];
+              ? currentLikes.filter(like => safeString(typeof like === 'object' ? like.user || like._id : like) !== userId)
+              : [...currentLikes, { user: userId, _id: Date.now().toString() }];
             return {
               ...reel,
               isLiked: !wasLiked,
@@ -512,7 +548,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     } catch (error) {
       console.error('Error in instant like:', error);
     }
-  }, [token, user, reels, createLikeAnimation, addToLikeQueue]);
+  }, [token, user, reels, createLikeAnimation, addToLikeQueue, safeArray, safeString]);
 
   // Navigate to comments screen (from ReelsScreen)
   const openComments = useCallback((reel) => {
@@ -520,14 +556,15 @@ const ReelsViewerScreen = ({ navigation, route }) => {
       console.error('Navigation prop not available');
       return;
     }
+    const safeReel = safeObject(reel);
     navigation.navigate('CommentScreen', {
-      reelId: reel._id,
-      reelData: reel,
+      reelId: safeReel._id,
+      reelData: safeReel,
       contentType: 'reel',
       onCommentUpdate: (newCommentCount, realTimeComments) => {
         setReels(prevReels =>
           prevReels.map(r =>
-            r._id === reel._id
+            r._id === safeReel._id
               ? {
                   ...r,
                   commentCount: newCommentCount,
@@ -539,12 +576,13 @@ const ReelsViewerScreen = ({ navigation, route }) => {
         );
       }
     });
-  }, [navigation]);
+  }, [navigation, safeObject]);
 
   const formatTimeAgo = useCallback((dateString) => {
-    if (!dateString) return 'Recently';
+    const safeDateString = safeString(dateString);
+    if (!safeDateString) return 'Recently';
     try {
-      const date = new Date(dateString);
+      const date = new Date(safeDateString);
       if (isNaN(date.getTime())) return 'Recently';
       const now = new Date();
       const diffInSecs = Math.floor((now - date) / 1000);
@@ -556,15 +594,16 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     } catch {
       return 'Recently';
     }
-  }, []);
+  }, [safeString]);
 
   const getInitials = useCallback((name) => {
-    if (!name) return '?';
-    const names = name.trim().split(/\s+/);
+    const safeName = safeString(name);
+    if (!safeName) return '?';
+    const names = safeName.trim().split(/\s+/);
     if (names.length === 0) return '?';
-    if (names.length === 1) return names[0][0].toUpperCase();
-    return (names[0][0] + (names[names.length - 1][0] || '')).toUpperCase();
-  }, []);
+    if (names.length === 1) return (names[0][0] || '?').toUpperCase();
+    return ((names[0][0] || '') + (names[names.length - 1][0] || '')).toUpperCase() || '?';
+  }, [safeString]);
 
   const toggleMute = useCallback(() => setIsMuted(prev => !prev), []);
 
@@ -572,6 +611,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
 
   // Added from ReelsScreen: Toggle pause for a specific reel
   const togglePauseForReel = useCallback((reelId) => {
+    if (!reelId) return;
     setManualPaused((prev) => ({
       ...prev,
       [reelId]: !prev[reelId],
@@ -589,37 +629,50 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   );
 
   const renderReelItem = useCallback(({ item, index }) => {
-    if (!item) return <View style={styles.reelContainer} />;
+    // Enhanced item validation
+    const safeItem = safeObject(item);
+    if (!safeItem || !safeItem._id) {
+      return <View style={styles.reelContainer} />;
+    }
+
     // Updated logic for isPaused (from ReelsScreen)
     const isActive = index === currentIndex && isAppActive;
-    const isPaused = manualPaused[item._id] || !isActive || !isFocused;
-    const isVideo = !!item.video?.url;
-    const author = item.author || {};
-    const authorName = author.fullName || author.username || username;
-    const isLiked = item.isLiked;
-    const likeCount = item.likes?.length || 0;
-    const commentCount = item.commentCount || item.comments?.length || 0;
-    // Get real view count from the reel data (from ReelsScreen)
-    const viewCount = getRealViewCount(item);
-    const viewAnimation = viewCountAnimations[item._id]; // Added from ReelsScreen
-    const mediaSource = item.video?.thumbnail?.url || item.video?.url || item.images?.[0]?.url;
+    const isPaused = manualPaused[safeItem._id] || !isActive || !isFocused;
+    const isVideo = !!(safeItem.video?.url);
+    
+    // Enhanced author data validation
+    const author = safeObject(safeItem.author || safeItem.user);
+    const authorName = safeString(author.fullName || author.username || username, 'User');
+    const isLiked = Boolean(safeItem.isLiked);
+    
+    // Ensure all counts are numbers and convert to strings for display
+    const likes = safeArray(safeItem.likes);
+    const likeCount = safeNumber(likes.length, 0);
+    const commentCount = safeNumber(safeItem.commentCount || safeArray(safeItem.comments).length, 0);
+    
+    // Get real view count from the reel data
+    const viewCount = getRealViewCount(safeItem);
+    const viewAnimation = viewCountAnimations[safeItem._id];
+    
+    // Safe media source extraction
+    const mediaSource = safeString(safeItem.video?.thumbnail?.url || safeItem.video?.url || safeItem.images?.[0]?.url);
 
     return (
       <View style={styles.reelContainer}>
         <View style={styles.mediaContainer}>
-          {isVideo ? (
+          {isVideo && safeItem.video?.url ? (
             <View style={styles.videoWrapper}>
               <Video
-                source={{ uri: item.video.url }}
+                source={{ uri: safeItem.video.url }}
                 style={styles.media}
                 resizeMode="cover"
-                paused={isPaused} // Updated to use isPaused
+                paused={isPaused}
                 repeat={true}
                 muted={isMuted}
                 playInBackground={false}
                 playWhenInactive={false}
                 ignoreSilentSwitch="ignore"
-                poster={mediaSource}
+                poster={mediaSource || undefined}
                 posterResizeMode="cover"
                 onBuffer={({ isBuffering }) => handleBuffer(index, isBuffering)}
                 onError={(error) => console.log('Video error:', error)}
@@ -631,14 +684,19 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               )}
             </View>
           ) : mediaSource ? (
-            <Image source={{ uri: mediaSource }} style={styles.media} resizeMode="cover" />
+            <Image 
+              source={{ uri: mediaSource }} 
+              style={styles.media} 
+              resizeMode="cover"
+              onError={() => console.log('Image load error for:', mediaSource)}
+            />
           ) : (
             <View style={styles.placeholderContainer}>
               <Text style={styles.placeholderText}>🎥</Text>
             </View>
           )}
         </View>
-        {index === currentIndex && <LikeAnimations />} {/* Show animations for current item */}
+        {index === currentIndex && <LikeAnimations />}
         <View style={styles.bottomLeftInfo}>
           <TouchableOpacity
             onPress={() => handleProfilePress(author)}
@@ -646,14 +704,18 @@ const ReelsViewerScreen = ({ navigation, route }) => {
           >
             <Text style={styles.authorName}>{authorName}</Text>
           </TouchableOpacity>
-          <Text style={styles.timeAgo}>{formatTimeAgo(item.createdAt)}</Text>
-          {item.content ? <Text style={styles.caption} numberOfLines={2}>{item.content}</Text> : null}
+          <Text style={styles.timeAgo}>{formatTimeAgo(safeItem.createdAt)}</Text>
+          {safeItem.content && (
+            <Text style={styles.caption} numberOfLines={2}>
+              {safeString(safeItem.content)}
+            </Text>
+          )}
         </View>
         <View style={styles.bottomRightActions}>
           {/* Like Button */}
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => handleLikePress(item._id)}
+            onPress={() => handleLikePress(safeItem._id)}
             activeOpacity={0.7}
           >
             <Icon
@@ -662,12 +724,12 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               color={isLiked ? "#ed167e" : "#fff"}
               style={styles.actionIcon}
             />
-            <Text style={styles.actionCount}>{likeCount}</Text>
+            <Text style={styles.actionCount}>{likeCount.toString()}</Text>
           </TouchableOpacity>
           {/* Comment Button */}
           <TouchableOpacity
             style={styles.actionButton}
-            onPress={() => openComments(item)}
+            onPress={() => openComments(safeItem)}
             activeOpacity={0.7}
           >
             <Icon
@@ -676,9 +738,9 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               color="#fff"
               style={styles.actionIcon}
             />
-            <Text style={styles.actionCount}>{commentCount}</Text>
+            <Text style={styles.actionCount}>{commentCount.toString()}</Text>
           </TouchableOpacity>
-          {/* Real Views Button - Now shows actual tracked views */}
+          {/* Real Views Button */}
           <TouchableOpacity
             style={styles.actionButton}
             activeOpacity={0.7}
@@ -692,7 +754,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
             <Text style={[styles.actionCount, styles.viewCount]}>
               {formatViewCount(viewCount)}
             </Text>
-            {/* Added view count animation from ReelsScreen */}
             {viewAnimation && (
               <Animated.View
                 style={[
@@ -719,8 +780,9 @@ const ReelsViewerScreen = ({ navigation, route }) => {
           >
             {author.photoUrl ? (
               <Image
-                source={{ uri: author.photoUrl.url || author.photoUrl }}
+                source={{ uri: safeString(author.photoUrl.url || author.photoUrl) }}
                 style={styles.authorAvatarImage}
+                onError={() => console.log('Avatar load error')}
               />
             ) : (
               <View style={styles.authorAvatarPlaceholder}>
@@ -731,11 +793,11 @@ const ReelsViewerScreen = ({ navigation, route }) => {
             )}
           </TouchableOpacity>
         </View>
-        {/* Play/Pause button for current reel - Always visible (from ReelsScreen) */}
+        {/* Play/Pause button for current reel */}
         {index === currentIndex && (
           <TouchableOpacity
             style={styles.playPauseButton}
-            onPress={() => togglePauseForReel(item._id)}
+            onPress={() => togglePauseForReel(safeItem._id)}
             activeOpacity={0.7}
           >
             <Icon
@@ -749,24 +811,31 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     );
   }, [
     currentIndex,
-    isAppActive, // Added dependency
+    isAppActive,
     isMuted,
     videoBuffering,
     handleLikePress,
     user,
     likeAnimations,
-    isFocused, // Added dependency
+    isFocused,
     username,
     handleProfilePress,
     openComments,
     formatViewCount,
     getRealViewCount,
-    manualPaused, // Added dependency
-    togglePauseForReel, // Added dependency
-    viewCountAnimations, // Added dependency
+    manualPaused,
+    togglePauseForReel,
+    viewCountAnimations,
+    safeObject,
+    safeString,
+    safeNumber,
+    safeArray,
   ]);
 
-  const keyExtractor = useCallback((item, index) => item?._id || `reel-${index}`, []);
+  const keyExtractor = useCallback((item, index) => {
+    const safeItem = safeObject(item);
+    return safeString(safeItem._id, `reel-${index}`);
+  }, [safeObject, safeString]);
 
   const getItemLayout = useCallback((_, index) => ({ length: SCREEN_HEIGHT, offset: SCREEN_HEIGHT * index, index }), []);
 
@@ -813,6 +882,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
         initialNumToRender={1}
         maxToRenderPerBatch={1}
         windowSize={3}
+        removeClippedSubviews={true}
       />
       {/* Back Button */}
       <TouchableOpacity onPress={handleBack} style={styles.backButton} activeOpacity={0.7}>
@@ -933,9 +1003,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  playPauseButton: { // Added from ReelsScreen
+  playPauseButton: {
     position: 'absolute',
-    top: 110, // Positioned below mute button (60 + 40 + 10 spacing)
+    top: 110,
     right: 16,
     backgroundColor: 'rgba(0,0,0,0.5)',
     width: 40,
@@ -944,12 +1014,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 100,
-    elevation: 10, // For Android
+    elevation: 10,
   },
   queueIndicator: {
     position: 'absolute',
     top: 110,
-    right: 16,
+    left: 16,
     backgroundColor: 'rgba(0,0,0,0.7)',
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -960,24 +1030,6 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '500',
-  },
-  viewTrackingIndicator: {
-    position: 'absolute',
-    top: 110,
-    left: 16,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 10,
-    zIndex: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  viewTrackingText: {
-    color: '#00ff00',
-    fontSize: 10,
-    fontWeight: '500',
-    marginLeft: 4,
   },
   bottomLeftInfo: {
     position: 'absolute',
@@ -996,7 +1048,7 @@ const styles = StyleSheet.create({
   actionButton: {
     alignItems: 'center',
     marginBottom: 20,
-    position: 'relative', // Added for view count animation positioning
+    position: 'relative',
   },
   actionIcon: {
     marginBottom: 4,
@@ -1013,15 +1065,15 @@ const styles = StyleSheet.create({
     textShadowRadius: 2,
   },
   viewCount: {
-    color: '#00ff88', // Green color to indicate real views
+    color: '#00ff88',
     fontWeight: '700',
   },
-  viewCountAnimation: { // Added from ReelsScreen
+  viewCountAnimation: {
     position: 'absolute',
     top: -20,
     alignItems: 'center',
   },
-  viewCountText: { // Added from ReelsScreen
+  viewCountText: {
     color: '#4CAF50',
     fontSize: 12,
     fontWeight: 'bold',

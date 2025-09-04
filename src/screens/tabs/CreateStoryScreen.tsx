@@ -27,12 +27,9 @@ import {
   Camera,
   useCameraDevice,
   useCameraPermission,
-  useCodeScanner,
 } from 'react-native-vision-camera';
 import { useFocusEffect } from '@react-navigation/native';
 import Video from 'react-native-video';
-import ViewShot from 'react-native-view-shot';
-import RNFS from 'react-native-fs';
 
 const { width, height } = Dimensions.get('window');
 
@@ -63,13 +60,13 @@ const CreateStoryScreen = () => {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [maxRecordingTime] = useState(30); // 30 seconds max
   
-  // NEW: Text overlay states
+  // Text overlay states
   const [showTextOverlay, setShowTextOverlay] = useState(false);
   const [textPosition, setTextPosition] = useState({ x: 100, y: 100 });
   const [textColor, setTextColor] = useState(COLORS.lightText);
   const [fontSize, setFontSize] = useState(24);
   
-  // NEW: Capture mode state (photo or video)
+  // Capture mode state (photo or video)
   const [captureMode, setCaptureMode] = useState('photo'); // 'photo' or 'video'
   
   const cameraRef = useRef(null);
@@ -80,7 +77,7 @@ const CreateStoryScreen = () => {
   const recordingProgress = useRef(new Animated.Value(0)).current;
   const shutterScale = useRef(new Animated.Value(1)).current;
   const pan = useRef(new Animated.ValueXY()).current;
-  const viewShotRef = useRef();
+  const videoRef = useRef(null);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -111,7 +108,7 @@ const CreateStoryScreen = () => {
     }
   }, [selectedMedia, fadeAnim]);
 
-  // NEW: PanResponder for dragging text
+  // PanResponder for dragging text
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -160,7 +157,7 @@ const CreateStoryScreen = () => {
     }
   };
 
-  // NEW: Toggle between photo and video modes
+  // Toggle between photo and video modes
   const toggleCaptureMode = () => {
     if (isRecording) return; // Don't allow mode change during recording
     
@@ -341,7 +338,7 @@ const CreateStoryScreen = () => {
     navigation.navigate('CreateLiveStream');
   };
 
-  // NEW: Handle shutter button press based on mode
+  // Handle shutter button press based on mode
   const handleShutterPress = () => {
     if (captureMode === 'photo') {
       takePhoto();
@@ -352,19 +349,6 @@ const CreateStoryScreen = () => {
       } else {
         startRecording();
       }
-    }
-  };
-
-  // NEW: Capture the view with text overlay and save as new image
-  const captureWithText = async () => {
-    try {
-      const uri = await viewShotRef.current.capture();
-      console.log('Captured URI:', uri);
-      return uri;
-    } catch (error) {
-      console.error('Error capturing view:', error);
-      Alert.alert('Error', 'Failed to process image with text');
-      return null;
     }
   };
 
@@ -384,24 +368,14 @@ const CreateStoryScreen = () => {
         return;
       }
 
-      let finalMediaUri = selectedMedia.uri;
-      
-      // For photos with text overlay, capture the view
-      if (selectedMedia.mediaType === 'photo' && showTextOverlay && storyText) {
-        const capturedUri = await captureWithText();
-        if (capturedUri) {
-          finalMediaUri = capturedUri;
-        }
-      }
-
       const formData = new FormData();
       formData.append('media', {
-        uri: finalMediaUri,
+        uri: selectedMedia.uri,
         type: selectedMedia.type || (selectedMedia.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
         name: selectedMedia.fileName || `story_${Date.now()}.${selectedMedia.mediaType === 'video' ? 'mp4' : 'jpg'}`,
       });
 
-      // Only send text content for videos (since we can't embed text in videos)
+      // Send text content for videos (since we can't embed text in videos)
       if (selectedMedia.mediaType === 'video' && storyText.trim()) {
         formData.append('content', storyText.trim());
       }
@@ -461,7 +435,7 @@ const CreateStoryScreen = () => {
     navigation.goBack();
   };
 
-  // NEW: Text overlay functions
+  // Text overlay functions
   const addTextToStory = () => {
     setShowTextOverlay(true);
     pan.setOffset({
@@ -522,54 +496,45 @@ const CreateStoryScreen = () => {
       <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
         <StatusBar barStyle="light-content" backgroundColor={COLORS.black} />
         
-        {/* NEW: ViewShot wrapper for capturing with text overlay */}
-        <ViewShot
-          ref={viewShotRef}
-          options={{ 
-            format: 'jpg', 
-            quality: 0.9,
-            fileName: `story_with_text_${Date.now()}.jpg`
-          }}
-          style={styles.viewShotContainer}
-        >
-          {selectedMedia.mediaType === 'video' ? (
+        {selectedMedia.mediaType === 'video' ? (
+          <View style={styles.videoContainer}>
             <Video
+              ref={videoRef}
               source={{ uri: selectedMedia.uri }}
               style={styles.previewVideoBackground}
               resizeMode="cover"
               repeat
               muted
             />
-          ) : (
-            <ImageBackground source={{ uri: selectedMedia.uri }} style={styles.previewImageBackground}>
-            </ImageBackground>
-          )}
-          
-          {/* NEW: Text Overlay for images */}
-          {showTextOverlay && selectedMedia.mediaType === 'photo' && (
-            <Animated.View
-              style={[
-                styles.textOverlay,
-                {
-                  transform: [{ translateX: pan.x }, { translateY: pan.y }],
-                },
-              ]}
-              {...panResponder.panHandlers}
-            >
-              <Text
+            {/* Text Overlay for videos */}
+            {showTextOverlay && (
+              <Animated.View
                 style={[
-                  styles.storyText,
+                  styles.textOverlay,
                   {
-                    color: textColor,
-                    fontSize: fontSize,
+                    transform: [{ translateX: pan.x }, { translateY: pan.y }],
                   },
                 ]}
+                {...panResponder.panHandlers}
               >
-                {storyText || 'Your text here'}
-              </Text>
-            </Animated.View>
-          )}
-        </ViewShot>
+                <Text
+                  style={[
+                    styles.storyText,
+                    {
+                      color: textColor,
+                      fontSize: fontSize,
+                    },
+                  ]}
+                >
+                  {storyText || 'Your text here'}
+                </Text>
+              </Animated.View>
+            )}
+          </View>
+        ) : (
+          <ImageBackground source={{ uri: selectedMedia.uri }} style={styles.previewImageBackground}>
+          </ImageBackground>
+        )}
         
         <View style={styles.previewOverlay}>
           <View style={styles.previewHeader}>
@@ -584,7 +549,7 @@ const CreateStoryScreen = () => {
             )}
           </View>
 
-          {/* NEW: Text Input and Controls */}
+          {/* Text Input and Controls */}
           <View style={styles.textInputContainer}>
             <TextInput
               style={styles.textInput}
@@ -733,7 +698,7 @@ const CreateStoryScreen = () => {
         <View style={styles.headerSpacer} />
       </View>
 
-      {/* NEW: Capture Mode Toggle */}
+      {/* Capture Mode Toggle */}
       {!isRecording && (
         <View style={styles.captureModeContainer}>
           <View style={styles.captureModeToggle}>
@@ -860,11 +825,9 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.black,
   },
-  // NEW: ViewShot container
-  viewShotContainer: {
+  videoContainer: {
     flex: 1,
-    width: width,
-    height: height,
+    position: 'relative',
   },
   // --- Creator Screen Styles ---
   creatorHeader: {
@@ -896,7 +859,7 @@ const styles = StyleSheet.create({
     color: COLORS.mediumText,
     fontSize: 16,
   },
-  // NEW: Capture Mode Toggle Styles
+  // Capture Mode Toggle Styles
   captureModeContainer: {
     position: 'absolute',
     top: Platform.OS === 'ios' ? 140 : 120,
@@ -1140,7 +1103,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
-  // NEW: Text Overlay Styles
+  // Text Overlay Styles
   textOverlay: {
     position: 'absolute',
     zIndex: 10,
@@ -1153,7 +1116,7 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
   },
-  // NEW: Text Input and Controls
+  // Text Input and Controls
   textInputContainer: {
     paddingHorizontal: 20,
     paddingVertical: 10,
@@ -1294,5 +1257,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-
 export default CreateStoryScreen;

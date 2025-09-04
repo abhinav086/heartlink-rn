@@ -40,7 +40,10 @@ const CommentScreen = () => {
   const [submitting, setSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
-  const [commentsCount, setCommentsCount] = useState(0);
+  // ✅ IMPROVED: Better initialization of comments count
+  const [commentsCount, setCommentsCount] = useState(() => {
+    return actualData?.commentsCount || actualData?.commentCount || actualData?.comments || 0;
+  });
   const [pagination, setPagination] = useState({
     currentPage: 1,
     totalPages: 1,
@@ -60,7 +63,7 @@ const CommentScreen = () => {
   // API Base URL
   const BASE_URL = 'https://backendforheartlink.in';
 
-  // Handle modal close
+  // ✅ ENHANCED: Better modal close handling
   const handleClose = () => {
     setIsVisible(false);
     // Small delay to let the animation complete before going back
@@ -69,7 +72,7 @@ const CommentScreen = () => {
     }, 300);
   };
 
-  // ✅ API: Get auth headers with proper token validation
+  // Get auth headers with proper token validation
   const getAuthHeaders = async () => {
     try {
       const token = await AsyncStorage.getItem('token');
@@ -161,12 +164,12 @@ const CommentScreen = () => {
     console.log(`CommentScreen initialized for ${isReel ? 'reel' : 'post'}Id:`, actualId, 'with', initialCount, 'comments');
   };
 
-  // ✅ ENHANCED: Better debugging and error handling for loadComments function
+  // Enhanced debugging and error handling for loadComments function
   const loadComments = async (page = 1, limit = 10) => {
     try {
       setLoading(page === 1);
       
-      // ✅ Enhanced debugging
+      // Enhanced debugging
       console.log('=== LOADING COMMENTS DEBUG ===');
       console.log('Content Type:', contentType);
       console.log('PostId:', postId);
@@ -177,7 +180,7 @@ const CommentScreen = () => {
       console.log('Actual ID:', actualId);
       console.log('Page:', page, 'Limit:', limit);
       
-      // ✅ Validate required data
+      // Validate required data
       if (!actualId) {
         console.error('❌ No actualId found');
         Alert.alert('Error', 'Content ID is missing');
@@ -226,23 +229,34 @@ const CommentScreen = () => {
             console.log('📊 Set comments count to (fallback):', commentsData.length);
           }
 
-          // Update parent component with latest comment count
+          // ✅ ENHANCED: Better parent component update with more robust callback
           if (onCommentUpdate && result.data[isReel ? 'reel' : 'post']) {
             const contentData = result.data[isReel ? 'reel' : 'post'];
             console.log('🔄 Updating parent with content data:', contentData);
-            onCommentUpdate(
-              contentData.commentCount || result.data.pagination?.totalComments || commentsData.length,
-              contentData.realTimeComments || contentData.commentCount
-            );
+            const finalCommentCount = contentData.commentCount || result.data.pagination?.totalComments || commentsData.length;
+            const realTimeComments = contentData.realTimeComments || finalCommentCount;
+            console.log('🔄 Calling onCommentUpdate with:', { finalCommentCount, realTimeComments });
+            onCommentUpdate(finalCommentCount, realTimeComments);
           } else {
             console.log('⚠️ No onCommentUpdate callback or content data missing');
             console.log('onCommentUpdate exists:', !!onCommentUpdate);
             console.log('Content data exists:', !!result.data[isReel ? 'reel' : 'post']);
+            
+            // ✅ FALLBACK: Still try to update parent with available data
+            if (onCommentUpdate) {
+              const fallbackCount = result.data.pagination?.totalComments || commentsData.length;
+              console.log('🔄 Calling onCommentUpdate with fallback count:', fallbackCount);
+              onCommentUpdate(fallbackCount, fallbackCount);
+            }
           }
         } else {
           console.log('❌ Response not successful or no data:', result);
           setComments([]);
           setCommentsCount(0);
+          // ✅ UPDATE: Still call parent callback even when no comments
+          if (onCommentUpdate) {
+            onCommentUpdate(0, 0);
+          }
         }
       } else {
         const errorText = await response.text();
@@ -259,6 +273,10 @@ const CommentScreen = () => {
           console.log('📭 Content not found or no comments');
           setComments([]);
           setCommentsCount(0);
+          // ✅ UPDATE: Call parent callback even when content not found
+          if (onCommentUpdate) {
+            onCommentUpdate(0, 0);
+          }
         } else if (response.status === 401 || response.status === 403) {
           console.error('🔒 Authentication/Authorization error');
           Alert.alert('Authentication Error', 'Please log in again to view comments');
@@ -297,7 +315,7 @@ const CommentScreen = () => {
     loadComments(1, 10);
   };
 
-  // ✅ FIXED: Use consistent API base URL for adding comments
+  // ✅ ENHANCED: Better comment submission with improved error handling
   const addComment = async () => {
     const trimmedComment = commentText.trim();
     
@@ -336,7 +354,7 @@ const CommentScreen = () => {
       const headers = await getAuthHeaders();
       console.log('Using headers with token');
 
-      // ✅ FIXED: Use consistent /api/v1/posts base URL for both posts and reels
+      // Use consistent /api/v1/posts base URL for both posts and reels
       const apiUrl = isReel 
         ? `${BASE_URL}/api/v1/posts/reels/${actualId}/comment`
         : `${BASE_URL}/api/v1/posts/${actualId}/comment`;
@@ -365,7 +383,7 @@ const CommentScreen = () => {
       console.log('Response data:', result);
 
       if (result.success) {
-        // ✅ SUCCESS: Handle response following API guide format
+        // SUCCESS: Handle response following API guide format
         console.log('Comment created successfully!');
         
         // Get the new comment from the response
@@ -376,7 +394,7 @@ const CommentScreen = () => {
         console.log('New comment from API:', newComment);
         console.log('Updated comment count:', updatedCommentCount);
         
-        // ✅ Create proper comment object with API response data
+        // Create proper comment object with API response data
         const commentToAdd = newComment || {
           _id: Date.now().toString(),
           content: trimmedComment,
@@ -410,8 +428,9 @@ const CommentScreen = () => {
         // Clear input
         setCommentText('');
         
-        // Update parent component's comment count
+        // ✅ ENHANCED: Better parent component update
         if (onCommentUpdate) {
+          console.log('🔄 Updating parent component with:', { updatedCommentCount, realTimeComments });
           onCommentUpdate(updatedCommentCount, realTimeComments);
         }
         
@@ -454,7 +473,7 @@ const CommentScreen = () => {
     }
   };
 
-  // ✅ Enhanced: Render individual comment with proper user data handling
+  // Enhanced render individual comment with proper user data handling
   const renderComment = (comment, index) => {
     const user = comment.user || comment.author || {};
     const username = safeGet(user, 'fullName', safeGet(user, 'username', safeGet(user, 'name', 'Unknown User')));

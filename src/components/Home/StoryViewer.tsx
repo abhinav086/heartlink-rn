@@ -1,5 +1,5 @@
-// StoryViewer.js - Complete Single File with All Logic
-import React, { useState, useEffect, useRef } from 'react';
+// StoryViewer.js - Complete Single File with All Logic (Updated)
+import React, { useState, useEffect, useRef, useLayoutEffect } from 'react'; // Added useLayoutEffect
 import {
   View,
   StyleSheet,
@@ -12,7 +12,6 @@ import {
   Alert,
   Animated,
   TextInput,
-  ScrollView,
   FlatList,
   RefreshControl,
   KeyboardAvoidingView,
@@ -24,13 +23,11 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import BASE_URL from '../../config/config';
 import { useAuth } from '../../context/AuthContext';
-
 const { width, height } = Dimensions.get('window');
 
 // =============================================
 // SIMPLIFIED UTILITY FUNCTIONS
 // =============================================
-
 const getInitials = (name) => {
   if (!name || typeof name !== 'string' || name === 'Unknown User') return '?';
   const names = name.trim().split(' ');
@@ -39,7 +36,6 @@ const getInitials = (name) => {
   }
   return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
 };
-
 const getAvatarColor = (name) => {
   const colors = [
     '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
@@ -49,7 +45,6 @@ const getAvatarColor = (name) => {
   const charCodeSum = name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
   return colors[charCodeSum % colors.length];
 };
-
 const getTimeAgo = (createdAt) => {
   if (!createdAt) return '';
   const now = new Date();
@@ -57,13 +52,11 @@ const getTimeAgo = (createdAt) => {
   const diffInMs = now - storyTime;
   const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
   const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
-
   if (diffInMinutes < 1) return 'now';
   else if (diffInHours < 1) return `${diffInMinutes}m`;
   else if (diffInHours < 24) return `${diffInHours}h`;
   else return `${Math.floor(diffInHours / 24)}d`;
 };
-
 const getValidMediaUrl = (mediaUrl) => {
   if (!mediaUrl || typeof mediaUrl !== 'string') return null;
   const trimmedUrl = mediaUrl.trim();
@@ -76,7 +69,6 @@ const getValidMediaUrl = (mediaUrl) => {
 // =============================================
 // MAIN STORYVIEWER COMPONENT
 // =============================================
-
 const StoryViewer = () => {
   const navigation = useNavigation();
   const route = useRoute();
@@ -88,8 +80,8 @@ const StoryViewer = () => {
   const [currentStoryIndex, setCurrentStoryIndex] = useState(currentIndex);
   const [progress, setProgress] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [paused, setPaused] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [paused, setPaused] = useState(false); // Controls story playback
+  const [deleting, setDeleting] = useState(false); // Loading state for delete action
   const [mediaError, setMediaError] = useState(false);
 
   // Comment Modal States
@@ -137,14 +129,14 @@ const StoryViewer = () => {
   // =============================================
   // EFFECTS
   // =============================================
-
   useEffect(() => {
     StatusBar.setHidden(true);
     return () => StatusBar.setHidden(false);
   }, []);
 
-  useEffect(() => {
-    if (stories && stories.length > 0) {
+  // Use useLayoutEffect to potentially prevent setState during render warning
+  useLayoutEffect(() => {
+    if (stories && stories.length > 0 && currentStoryIndex < stories.length) {
       setMediaError(false);
       startStoryProgress();
       markStoryAsViewed(stories[currentStoryIndex]);
@@ -155,58 +147,77 @@ const StoryViewer = () => {
         setRepliesCount(currentStory.repliesCount || currentStory.replies?.length || 0);
         setViewsCount(currentStory.viewsCount || currentStory.views?.length || 0);
       }
+    } else if (stories && stories.length === 0) {
+        // If stories become empty (e.g., last story deleted), go back
+        console.log("Stories array is empty, navigating back.");
+        navigation.goBack();
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [currentStoryIndex, stories]);
+  }, [currentStoryIndex, stories]); // Removed navigation from deps, as it can cause loops/warnings
 
   // =============================================
   // STORY PROGRESS FUNCTIONS
   // =============================================
-
   const startStoryProgress = () => {
+    // Clear any existing interval
     if (intervalRef.current) clearInterval(intervalRef.current);
-    if (showCommentModal || showViewersModal) return;
-    
-    progressRef.setValue(0);
-    setProgress(0);
-    const progressStep = 100 / (storyDuration / 50);
-    
-    intervalRef.current = setInterval(() => {
-      if (!paused && !mediaError && !showCommentModal && !showViewersModal) {
-        setProgress(prev => {
-          const newProgress = prev + progressStep;
-          if (newProgress >= 100) {
-            handleNextStory();
-            return 0;
-          }
-          return newProgress;
-        });
-      }
-    }, 50);
+
+    // Only start if not paused and no modals are open
+    if (!paused && !showCommentModal && !showViewersModal) {
+      console.log("Starting Story Progress");
+      progressRef.setValue(0);
+      setProgress(0);
+      const progressStep = 100 / (storyDuration / 50);
+      intervalRef.current = setInterval(() => {
+        // Double-check conditions inside the interval tick
+        if (!paused && !mediaError && !showCommentModal && !showViewersModal) {
+          setProgress(prev => {
+            const newProgress = prev + progressStep;
+            if (newProgress >= 100) {
+              console.log("Story progress complete, moving to next story.");
+              handleNextStory();
+              return 0; // Reset progress for next story
+            }
+            return newProgress;
+          });
+        }
+      }, 50);
+    } else {
+        console.log("startStoryProgress: Conditions not met (paused or modal open). Not starting.");
+    }
+  };
+
+  const resumeStoryProgress = () => {
+    console.log("Resuming Story Progress");
+    setPaused(false);
+    startStoryProgress(); // This will now check the conditions correctly
   };
 
   const handleNextStory = () => {
     if (currentStoryIndex < stories.length - 1) {
+      console.log("Navigating to next story");
       setCurrentStoryIndex(prev => prev + 1);
     } else {
-      navigation.goBack();
+      console.log("No more stories, navigating back");
+      navigation.goBack(); // Go back when there are no more stories
     }
   };
 
   const handlePreviousStory = () => {
     if (currentStoryIndex > 0) {
+      console.log("Navigating to previous story");
       setCurrentStoryIndex(prev => prev - 1);
     } else {
-      navigation.goBack();
+      console.log("At first story, navigating back");
+      navigation.goBack(); // Go back if trying to go back from the first story
     }
   };
 
   // =============================================
   // API FUNCTIONS
   // =============================================
-
   const markStoryAsViewed = async (story) => {
     if (!story || isOwnStory) return;
     try {
@@ -222,27 +233,21 @@ const StoryViewer = () => {
   const loadComments = async () => {
     const currentStory = stories[currentStoryIndex];
     if (!currentStory) return;
-
     try {
       setLoadingComments(true);
       console.log('💬 Loading comments for story:', currentStory._id);
       console.log('💬 API URL:', `${BASE_URL}/api/v1/stories/${currentStory._id}/replies`);
-      
       const response = await fetch(`${BASE_URL}/api/v1/stories/${currentStory._id}/replies`, {
         method: 'GET',
         headers: getAuthHeaders(),
       });
-
       console.log('💬 Comments API response status:', response.status);
-
       if (response.ok) {
         const result = await response.json();
         console.log('💬 RAW API RESPONSE:', JSON.stringify(result, null, 2));
-        
         if (result.success && result.data) {
           const replies = result.data.replies || [];
           console.log('💬 REPLIES ARRAY LENGTH:', replies.length);
-          
           // COMPREHENSIVE DEBUG LOG FOR EACH REPLY
           replies.forEach((reply, index) => {
             console.log(`👤 REPLY ${index + 1} COMPLETE DATA:`, {
@@ -260,7 +265,6 @@ const StoryViewer = () => {
               userKeys: reply.user ? Object.keys(reply.user) : []
             });
           });
-          
           setComments(replies);
           setRepliesCount(result.data.totalReplies || replies.length);
         } else {
@@ -282,9 +286,7 @@ const StoryViewer = () => {
   const addComment = async () => {
     const trimmedComment = commentText.trim();
     const currentStory = stories[currentStoryIndex];
-    
     if (!trimmedComment || !currentStory || !currentUser) return;
-
     try {
       setSubmittingComment(true);
       const response = await fetch(`${BASE_URL}/api/v1/stories/${currentStory._id}/reply`, {
@@ -292,7 +294,6 @@ const StoryViewer = () => {
         headers: getAuthHeaders(),
         body: JSON.stringify({ text: trimmedComment }),
       });
-
       if (response.ok) {
         const newComment = {
           _id: Date.now().toString(),
@@ -305,7 +306,6 @@ const StoryViewer = () => {
           },
           repliedAt: new Date().toISOString(),
         };
-        
         setComments(prev => [newComment, ...prev]);
         setRepliesCount(prev => prev + 1);
         setCommentText('');
@@ -321,19 +321,16 @@ const StoryViewer = () => {
     if (liking || isOwnStory) return;
     const currentStory = stories[currentStoryIndex];
     if (!currentStory) return;
-
     try {
       setLiking(true);
       const wasLiked = isLiked;
       setIsLiked(!wasLiked);
       setLikesCount(prev => wasLiked ? Math.max(0, prev - 1) : prev + 1);
-
       const method = wasLiked ? 'DELETE' : 'POST';
       const response = await fetch(`${BASE_URL}/api/v1/stories/${currentStory._id}/like`, {
         method,
         headers: getAuthHeaders(),
       });
-
       if (response.ok) {
         const result = await response.json();
         if (result.data) {
@@ -353,9 +350,7 @@ const StoryViewer = () => {
   const addInlineReply = async () => {
     const trimmedReply = inlineReplyText.trim();
     const currentStory = stories[currentStoryIndex];
-    
     if (!trimmedReply || !currentStory || !currentUser) return;
-
     try {
       setSendingInlineReply(true);
       const response = await fetch(`${BASE_URL}/api/v1/stories/${currentStory._id}/reply`, {
@@ -363,7 +358,6 @@ const StoryViewer = () => {
         headers: getAuthHeaders(),
         body: JSON.stringify({ text: trimmedReply }),
       });
-
       if (response.ok) {
         setRepliesCount(prev => prev + 1);
         setInlineReplyText('');
@@ -379,26 +373,20 @@ const StoryViewer = () => {
   const loadViewers = async () => {
     const currentStory = stories[currentStoryIndex];
     if (!currentStory || !isOwnStory) return;
-
     try {
       setLoadingViewers(true);
       console.log('🔍 Loading viewers for story:', currentStory._id);
-      
       const response = await fetch(`${BASE_URL}/api/v1/stories/stories/${currentStory._id}/viewers`, {
         method: 'GET',
         headers: getAuthHeaders(),
       });
-
       console.log('👥 Viewers API response status:', response.status);
-
       if (response.ok) {
         const result = await response.json();
         console.log('👥 Viewers API full response:', result);
-        
         if (result.success && result.data) {
           const viewersData = result.data.viewers || [];
-          console.log('👥 Processed viewers data:', viewersData);
-          
+          console.log('👥 Processed viewers ', viewersData);
           // Log each viewer's structure
           viewersData.forEach((viewer, index) => {
             console.log(`👤 Viewer ${index}:`, {
@@ -416,7 +404,6 @@ const StoryViewer = () => {
               }
             });
           });
-          
           setViewers(viewersData);
           setViewsCount(result.data.pagination?.totalViewers || viewersData.length || 0);
         } else {
@@ -434,46 +421,106 @@ const StoryViewer = () => {
     }
   };
 
+  // --- NEW DELETE STORY FUNCTION ---
+  const deleteStory = async () => {
+    const currentStory = stories[currentStoryIndex];
+    if (!currentStory || !token) return;
+    Alert.alert(
+      'Delete Story',
+      'Are you sure you want to delete this story?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setDeleting(true);
+              const response = await fetch(`${BASE_URL}/api/v1/stories/stories/${currentStory._id}`, {
+                method: 'DELETE',
+                headers: getAuthHeaders(),
+              });
+              if (response.ok) {
+                 console.log('Story deleted successfully');
+                 // Update local state
+                 const updatedStories = stories.filter(story => story._id !== currentStory._id);
+                 setStories(updatedStories);
+                 if (updatedStories.length === 0) {
+                     // No more stories, close viewer
+                     console.log("No stories left after delete, navigating back.");
+                     navigation.goBack(); // Ensure navigation happens after state update
+                 } else if (currentStoryIndex >= updatedStories.length) {
+                     // Deleted the last story in the list, adjust index
+                     console.log("Deleted last story, adjusting index.");
+                     setCurrentStoryIndex(updatedStories.length - 1);
+                     // useEffect will handle re-initializing the story at the new index
+                 }
+                 // If deleting a story in the middle, currentStoryIndex remains the same,
+                 // pointing to the next story in the filtered array. useEffect handles it.
+              } else {
+                console.error('Failed to delete story:', response.status);
+                Alert.alert('Error', 'Failed to delete story. Please try again.');
+              }
+            } catch (error) {
+              console.error('Error deleting story:', error);
+              Alert.alert('Error', 'An error occurred while deleting the story.');
+            } finally {
+              setDeleting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+  // --- END NEW DELETE STORY FUNCTION ---
+
   // =============================================
   // MODALS
   // =============================================
-
   const openCommentsModal = () => {
+    console.log("Opening Comments Modal - Pausing Story");
+    setPaused(true); // Set paused to true
+    if (intervalRef.current) {
+       clearInterval(intervalRef.current); // Explicitly clear the interval
+       intervalRef.current = null; // Clear the ref
+    }
     setShowCommentModal(true);
-    setPaused(true);
     loadComments();
   };
 
   const closeCommentsModal = () => {
+    console.log("Closing Comments Modal - Resuming Story");
     setShowCommentModal(false);
-    setPaused(false);
-    startStoryProgress();
+    resumeStoryProgress(); // Use the explicit resume function
   };
 
   const openViewersModal = () => {
     if (!isOwnStory) return;
+    console.log("Opening Viewers Modal - Pausing Story");
+    setPaused(true); // Set paused to true
+     if (intervalRef.current) {
+       clearInterval(intervalRef.current); // Explicitly clear the interval
+       intervalRef.current = null; // Clear the ref
+    }
     setShowViewersModal(true);
-    setPaused(true);
     loadViewers();
   };
 
   const closeViewersModal = () => {
+    console.log("Closing Viewers Modal - Resuming Story");
     setShowViewersModal(false);
-    setPaused(false);
-    startStoryProgress();
+    resumeStoryProgress(); // Use the explicit resume function
   };
 
   // =============================================
   // RENDER FUNCTIONS
   // =============================================
-
   const renderComment = ({ item: comment }) => {
     const user = comment.user || {};
     const username = user.fullName || user.username || 'Unknown User';
     const userInitials = getInitials(username);
     const avatarColor = getAvatarColor(username);
     const isOwnComment = currentUser && (user._id === currentUser._id);
-
     // ULTRA COMPREHENSIVE DEBUG FOR EACH RENDER
     console.log(`🖼️ RENDERING COMMENT AVATAR:`, {
       commentId: comment._id,
@@ -488,14 +535,13 @@ const StoryViewer = () => {
       fallbackInitials: userInitials,
       fallbackColor: avatarColor
     });
-
     return (
       <View style={styles.commentItem}>
         <View style={styles.commentAvatar}>
           <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
             {user.photoUrl ? (
               <Image
-                source={{ 
+                source={{
                   uri: user.photoUrl,
                   cache: 'reload' // FORCE RELOAD EVERY TIME
                 }}
@@ -526,7 +572,6 @@ const StoryViewer = () => {
             )}
           </View>
         </View>
-
         <View style={styles.commentContent}>
           <View style={styles.commentBubble}>
             <View style={styles.commentHeader}>
@@ -539,7 +584,6 @@ const StoryViewer = () => {
           </View>
           <Text style={styles.commentTime}>{getTimeAgo(comment.repliedAt)}</Text>
         </View>
-
         {isOwnComment && (
           <View style={styles.commentActions}>
             <Text style={styles.ownCommentIndicator}>•</Text>
@@ -554,7 +598,6 @@ const StoryViewer = () => {
     const username = user.fullName || user.username || 'Unknown User';
     const userInitials = getInitials(username);
     const avatarColor = getAvatarColor(username);
-
     // Debug logging for viewer data structure
     console.log('🔍 Rendering viewer:', {
       viewerId: user._id,
@@ -563,17 +606,16 @@ const StoryViewer = () => {
       hasPhotoUrl: !!user.photoUrl,
       viewerStructure: viewer
     });
-
     return (
       <View style={styles.viewerItem}>
         <View style={styles.viewerAvatar}>
           <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
             {user.photoUrl ? (
-              <Image 
-                source={{ 
+              <Image
+                source={{
                   uri: user.photoUrl,
                   cache: 'force-cache'
-                }} 
+                }}
                 style={styles.avatarImage}
                 onError={(error) => {
                   console.log('❌ Viewer image load error:', user.photoUrl, error.nativeEvent?.error);
@@ -590,7 +632,6 @@ const StoryViewer = () => {
             )}
           </View>
         </View>
-
         <View style={styles.viewerInfo}>
           <View style={styles.viewerNameContainer}>
             <Text style={styles.viewerName}>{username}</Text>
@@ -627,17 +668,16 @@ const StoryViewer = () => {
 
   const renderUserHeader = () => {
     const currentStory = stories[currentStoryIndex];
-    
     return (
       <View style={styles.userHeader}>
         <View style={styles.userInfo}>
           <View style={[styles.userAvatarContainer, { backgroundColor: getAvatarColor(userName) }]}>
             {userAvatar ? (
-              <Image 
-                source={{ 
+              <Image
+                source={{
                   uri: userAvatar,
                   cache: 'force-cache'
-                }} 
+                }}
                 style={styles.userAvatar}
                 onError={(error) => {
                   console.log('❌ Story user avatar load error:', userAvatar, error.nativeEvent?.error);
@@ -653,6 +693,17 @@ const StoryViewer = () => {
           <Text style={styles.userName}>{userName || 'Unknown User'}</Text>
           <Text style={styles.storyTime}>{getTimeAgo(currentStory?.createdAt)}</Text>
         </View>
+        {/* --- DELETE ICON ADDED HERE --- */}
+        {isOwnStory && (
+          <TouchableOpacity onPress={deleteStory} style={styles.deleteButton} disabled={deleting}>
+            {deleting ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Ionicons name="trash-outline" size={24} color="white" />
+            )}
+          </TouchableOpacity>
+        )}
+        {/* --- CLOSE ICON --- */}
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.closeButton}>
           <Ionicons name="close" size={28} color="white" />
         </TouchableOpacity>
@@ -663,7 +714,6 @@ const StoryViewer = () => {
   const renderStoryContent = () => {
     const currentStory = stories[currentStoryIndex];
     if (!currentStory) return null;
-
     const validMediaUrl = getValidMediaUrl(currentStory.mediaUrl);
     if (!validMediaUrl || mediaError) {
       return (
@@ -673,14 +723,13 @@ const StoryViewer = () => {
         </View>
       );
     }
-
     if (currentStory.mediaType === 'video') {
       return (
         <Video
           ref={videoRef}
           source={{ uri: validMediaUrl }}
           style={styles.media}
-          paused={paused}
+          paused={paused} // Controlled by paused state
           repeat={false}
           resizeMode="cover"
           onLoad={() => setLoading(false)}
@@ -689,7 +738,6 @@ const StoryViewer = () => {
         />
       );
     }
-
     return (
       <Image
         source={{ uri: validMediaUrl }}
@@ -705,9 +753,12 @@ const StoryViewer = () => {
   const handlePress = (event) => {
     if (showCommentModal || showViewersModal) return;
     const { locationX } = event.nativeEvent;
+    console.log(`Tapped at X: ${locationX}, Screen Width: ${width}`); // Debug log
     if (locationX < width / 2) {
+      console.log("Navigating to Previous Story (Left Tap)");
       handlePreviousStory();
     } else {
+      console.log("Navigating to Next Story (Right Tap)");
       handleNextStory();
     }
   };
@@ -715,7 +766,6 @@ const StoryViewer = () => {
   // =============================================
   // MAIN RENDER
   // =============================================
-
   if (!stories || stories.length === 0) {
     return (
       <View style={styles.container}>
@@ -731,23 +781,33 @@ const StoryViewer = () => {
       <TouchableOpacity
         style={styles.overlay}
         onPress={handlePress}
-        onLongPress={() => setPaused(true)}
-        onPressOut={() => setPaused(false)}
+        onLongPress={() => {
+            console.log("Long press - Pausing Story");
+            setPaused(true);
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+            }
+        }}
+        onPressOut={() => {
+            // Only resume if no modals are open
+            if (!showCommentModal && !showViewersModal) {
+                console.log("Press out - Resuming Story");
+                resumeStoryProgress(); // Use the explicit resume function
+            }
+        }}
         activeOpacity={1}
       >
         {renderStoryContent()}
-        
         {loading && (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator size="large" color="white" />
           </View>
         )}
-
         <View style={styles.topOverlay}>
           {renderProgressBar()}
           {renderUserHeader()}
         </View>
-
         {/* Bottom Actions - Views indicator beside comment icon */}
         <View style={styles.bottomActions}>
           <View style={styles.leftActionsContainer}>
@@ -757,12 +817,10 @@ const StoryViewer = () => {
                 <Text style={styles.viewsCountText}>{viewsCount}</Text>
               </TouchableOpacity>
             )}
-            
             <TouchableOpacity onPress={openCommentsModal} style={styles.actionButton}>
               <Ionicons name="chatbubble-outline" size={26} color="white" />
             </TouchableOpacity>
           </View>
-
           <View style={styles.replyInputContainer}>
             <TextInput
               ref={inlineInputRef}
@@ -773,10 +831,20 @@ const StoryViewer = () => {
               onChangeText={setInlineReplyText}
               returnKeyType="send"
               onSubmitEditing={addInlineReply}
-              onFocus={() => setPaused(true)}
+              onFocus={() => {
+                  console.log("Inline input focused - Pausing Story");
+                  setPaused(true);
+                  if (intervalRef.current) {
+                    clearInterval(intervalRef.current);
+                    intervalRef.current = null;
+                  }
+              }} // Pause on input focus
               onBlur={() => {
-                setPaused(false);
-                startStoryProgress();
+                // Resume only if no modals are open
+                if (!showCommentModal && !showViewersModal) {
+                   console.log("Inline input blurred - Resuming Story");
+                   resumeStoryProgress(); // Use the explicit resume function
+                }
               }}
             />
             {inlineReplyText.trim() && (
@@ -789,7 +857,6 @@ const StoryViewer = () => {
               </TouchableOpacity>
             )}
           </View>
-
           {!isOwnStory && (
             <TouchableOpacity onPress={handleLikeStory} style={styles.actionButton}>
               {liking ? (
@@ -829,7 +896,6 @@ const StoryViewer = () => {
               <Text style={styles.modalHeaderTitle}>Replies</Text>
               <View style={{ width: 24 }} />
             </View>
-
             <FlatList
               data={comments}
               renderItem={renderComment}
@@ -855,19 +921,17 @@ const StoryViewer = () => {
                   </View>
                 )
               }
-            
             />
-
             <View style={styles.inputContainer}>
               <View style={styles.currentUserAvatar}>
                 {currentUser && (
                   <View style={[styles.avatar, { backgroundColor: getAvatarColor(currentUser.fullName || currentUser.username) }]}>
                     {currentUser.photoUrl ? (
-                      <Image 
-                        source={{ 
+                      <Image
+                        source={{
                           uri: currentUser.photoUrl,
                           cache: 'force-cache'
-                        }} 
+                        }}
                         style={styles.avatarImage}
                         onError={(error) => {
                           console.log('❌ Current user avatar load error:', currentUser.photoUrl, error.nativeEvent?.error);
@@ -884,7 +948,6 @@ const StoryViewer = () => {
                   </View>
                 )}
               </View>
-
               <View style={styles.inputWrapper}>
                 <TextInput
                   ref={commentInputRef}
@@ -896,11 +959,10 @@ const StoryViewer = () => {
                   multiline
                   maxLength={MAX_COMMENT_LENGTH}
                 />
-                <Text style={styles.characterCount}>
+                {/* <Text style={styles.characterCount}>
                   {commentText.length}/{MAX_COMMENT_LENGTH}
-                </Text>
+                </Text> */}
               </View>
-
               <TouchableOpacity
                 style={[styles.sendButton, (!commentText.trim() || submittingComment) && styles.sendButtonDisabled]}
                 onPress={addComment}
@@ -934,7 +996,6 @@ const StoryViewer = () => {
             <Text style={styles.modalHeaderTitle}>{viewsCount} Views</Text>
             <View style={{ width: 24 }} />
           </View>
-
           <FlatList
             data={viewers}
             renderItem={renderViewer}
@@ -963,7 +1024,6 @@ const StoryViewer = () => {
 // =============================================
 // STYLES
 // =============================================
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -993,7 +1053,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     marginTop: 15,
   },
-  
   // Top Section
   topOverlay: {
     position: 'absolute',
@@ -1024,12 +1083,12 @@ const styles = StyleSheet.create({
   userHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'space-between', // Allows space between user info and buttons
   },
   userInfo: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
+    flex: 1, // Takes up available space
   },
   userAvatarContainer: {
     width: 35,
@@ -1054,10 +1113,15 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.7)',
     fontSize: 14,
   },
+  // --- NEW DELETE BUTTON STYLE ---
+  deleteButton: {
+    padding: 5,
+    marginRight: 10, // Space between delete and close
+  },
+  // --- CLOSE BUTTON STYLE ---
   closeButton: {
     padding: 5,
   },
-
   // Bottom Actions - Updated to group views and comment together
   bottomActions: {
     position: 'absolute',
@@ -1118,7 +1182,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-
   // Modal Styles
   modal: {
     justifyContent: 'flex-end',
@@ -1148,7 +1211,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
   },
-
   // Comments/Viewers Container
   commentsContainer: {
     flex: 1,
@@ -1172,7 +1234,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 15,
   },
-
   // Comment Item
   commentItem: {
     flexDirection: 'row',
@@ -1241,7 +1302,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-
   // Viewer Item
   viewerItem: {
     flexDirection: 'row',
@@ -1268,14 +1328,13 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 14,
   },
-
-  // Input Container
-  inputContainer: {
+  // Input Container - FIXED ALIGNMENT
+   inputContainer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingHorizontal: 15,
     paddingVertical: 10,
-    paddingBottom: 45,
+    paddingBottom: 6,
     borderTopWidth: 1,
     borderTopColor: '#333',
   },
@@ -1293,6 +1352,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     paddingHorizontal: 15,
     paddingVertical: 10,
+    paddingTop: 10,
     fontSize: 16,
     maxHeight: 100,
   },
@@ -1315,6 +1375,6 @@ const styles = StyleSheet.create({
   sendButtonDisabled: {
     backgroundColor: '#333',
   },
+  
 });
-
 export default StoryViewer;

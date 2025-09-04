@@ -22,9 +22,9 @@ const ExploreHeader = () => {
       <View style={styles.iconContainer}>
        
         
-        <TouchableOpacity onPress={handleNotificationPress} style={styles.iconButton}>
+        {/* <TouchableOpacity onPress={handleNotificationPress} style={styles.iconButton}>
           <Image source={icons.bell || icons.notification} style={styles.icon} />
-        </TouchableOpacity>
+        </TouchableOpacity> */}
       </View>
     </View>
   );

@@ -16,7 +16,8 @@ import EditPostScreen from '../screens/tabs/EditPostScreen';
 import EditProfileScreen from '../screens/profile/EditProfileScreen';
 import SettingsScreen from '../screens/profile/SettingsScreen';
 import WalletScreen from '../screens/profile/WalletScreen';
-import AboutScreen from '../screens/profile/AboutScreen.tsx'
+import AboutScreen from '../screens/profile/AboutScreen.tsx';
+import PrivacySettingsScreen from '../screens/profile/PrivacySettingsScreen.js';
 import BlockedUsersScreen from '../screens/BlockedUsersScreen.js';
 
 // Live Stream Components
@@ -404,6 +405,11 @@ const AppNavigator = ({ initialRouteName }) => {
         name="AboutScreen" 
         component={AboutScreen} 
         options={getScreenOptions('AboutScreen')}
+      />
+      <Stack.Screen 
+        name="PrivacySettings" 
+        component={PrivacySettingsScreen} 
+        options={getScreenOptions('PrivacySettingsScreen')}
       />
       
       {/* ========== MEDIA VIEWER SCREENS ========== */}

@@ -20,47 +20,70 @@ import Video from 'react-native-video';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useIsFocused } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
+import { MMKVLoader, MMKVInstance } from 'react-native-mmkv-storage';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
-const ReelsScreen = ({ navigation }) => {
-  const [reels, setReels] = useState([]);
+// Initialize MMKV storage with proper typing
+let MMKV: MMKVInstance;
+try {
+  MMKV = new MMKVLoader().initialize();
+} catch (error) {
+  console.error('Failed to initialize MMKV:', error);
+  // Fallback to a mock implementation if MMKV fails
+  MMKV = {
+    getString: () => null,
+    setString: () => {},
+    removeItem: () => {},
+  } as unknown as MMKVInstance;
+}
+
+const REELS_CACHE_KEY = 'cached_reels';
+const REELS_CACHE_TIMESTAMP_KEY = 'cached_reels_timestamp';
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes cache
+
+const ReelsScreen = ({ navigation }: any) => {
+  const [reels, setReels] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
-  const [videoBuffering, setVideoBuffering] = useState({});
+  const [videoBuffering, setVideoBuffering] = useState<{[key: number]: boolean}>({});
   const [appState, setAppState] = useState(AppState.currentState);
   const [isAppActive, setIsAppActive] = useState(true);
-  const [manualPaused, setManualPaused] = useState({});
-  const [currentUser, setCurrentUser] = useState(null);
-  const [viewCounted, setViewCounted] = useState(new Set());
-  const [viewCountAnimations, setViewCountAnimations] = useState({});
-  const [viewRegistrationInProgress, setViewRegistrationInProgress] = useState(new Set());
+  const [manualPaused, setManualPaused] = useState<{[key: string]: boolean}>({});
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [viewCounted, setViewCounted] = useState<Set<string>>(new Set());
+  const [viewCountAnimations, setViewCountAnimations] = useState<{[key: string]: any}>({});
+  const [viewRegistrationInProgress, setViewRegistrationInProgress] = useState<Set<string>>(new Set());
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(1);
   
-  const flatListRef = useRef(null);
-  const [preloadedVideos, setPreloadedVideos] = useState({});
+  const flatListRef = useRef<FlatList>(null);
+  const [preloadedVideos, setPreloadedVideos] = useState<{[key: number]: string}>({});
   const isFocused = useIsFocused();
-  const [likeAnimations, setLikeAnimations] = useState([]);
+  const [likeAnimations, setLikeAnimations] = useState<any[]>([]);
   const animationId = useRef(0);
-  const [likeQueue, setLikeQueue] = useState([]);
+  const [likeQueue, setLikeQueue] = useState<any[]>([]);
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
-  const queueRef = useRef([]);
+  const queueRef = useRef<any[]>([]);
   const processingRef = useRef(false);
-  const viewStartTime = useRef({});
-  const viewTimers = useRef({});
+  const viewStartTime = useRef<{[key: string]: number}>({});
+  const viewTimers = useRef<{[key: string]: NodeJS.Timeout}>({});
   const sessionId = useRef(Math.random().toString(36).substring(2, 15));
 
   const BASE_URL = 'https://backendforheartlink.in';
+  const LIMIT = 20; // Number of reels per page
 
   // --- START: Functions from ReelsViewerScreen for consistency ---
-  const calculateDummyViews = useCallback((createdAt) => {
+  const calculateDummyViews = useCallback((createdAt: string) => {
     if (!createdAt) return Math.floor(Math.random() * 31) + 20;
     try {
       const now = new Date();
       const createdDate = new Date(createdAt);
-      const diffInHours = Math.floor((now - createdDate) / (1000 * 60 * 60));
+      const diffInHours = Math.floor((now.getTime() - createdDate.getTime()) / (1000 * 60 * 60));
       const diffInDays = Math.floor(diffInHours / 24);
       let baseViews;
       let randomRange;
@@ -86,7 +109,7 @@ const ReelsScreen = ({ navigation }) => {
     }
   }, []);
 
-  const formatViewCount = useCallback((count) => {
+  const formatViewCount = useCallback((count: number) => {
     if (count < 1000) return count.toString();
     if (count < 1000000) return `${(count / 1000).toFixed(1)}K`;
     return `${(count / 1000000).toFixed(1)}M`;
@@ -181,7 +204,7 @@ const ReelsScreen = ({ navigation }) => {
   }, [BASE_URL]);
 
   const addToLikeQueue = useCallback(
-    (reelId, action) => {
+    (reelId: string, action: string) => {
       const likeAction = {
         reelId,
         action,
@@ -199,11 +222,11 @@ const ReelsScreen = ({ navigation }) => {
   );
 
   const handleProfilePress = useCallback(
-    (authorData) => {
+    (authorData: any) => {
       try {
         console.log('Profile press triggered for:', authorData?.fullName || authorData?.username);
         console.log('Navigation object:', !!navigation);
-        console.log('Author data:', authorData);
+        console.log('Author ', authorData);
         const userId = authorData?._id;
         const authorName = authorData?.fullName || authorData?.username;
         if (!navigation) {
@@ -240,22 +263,85 @@ const ReelsScreen = ({ navigation }) => {
     [navigation, currentUser]
   );
 
-  const fetchReels = useCallback(async () => {
+  // Clear reels cache
+  const clearReelsCache = useCallback(() => {
     try {
-      setError(null);
-      setLoading(true);
+      MMKV.removeItem(REELS_CACHE_KEY);
+      MMKV.removeItem(REELS_CACHE_TIMESTAMP_KEY);
+    } catch (error) {
+      console.error('Error clearing reels cache:', error);
+    }
+  }, []);
+
+  const fetchReels = useCallback(async (pageNum = 1, isRefresh = false) => {
+    try {
+      if (pageNum === 1) {
+        if (!isRefresh) {
+          setError(null);
+          setLoading(true);
+        } else {
+          setRefreshing(true);
+        }
+      } else {
+        setLoadingMore(true);
+      }
+      
+      // Try to get cached data for first page only
+      if (pageNum === 1 && !isRefresh) {
+        try {
+          const cachedReelsString = MMKV.getString(REELS_CACHE_KEY);
+          const cacheTimestampString = MMKV.getString(REELS_CACHE_TIMESTAMP_KEY);
+          
+          if (cachedReelsString && cacheTimestampString) {
+            const cachedReels = JSON.parse(cachedReelsString);
+            const cacheTimestamp = parseInt(cacheTimestampString, 10);
+            const now = Date.now();
+            
+            // If we have recent cache, use it
+            if ((now - cacheTimestamp) < CACHE_DURATION) {
+              console.log('Using cached reels data');
+              const optimizedReels = cachedReels.map((post: any) => ({
+                ...post,
+                likes: post.likes || [],
+                comments: post.comments || [],
+                viewCount: post.realTimeViews !== undefined ? post.realTimeViews : (post.views || 0),
+              }));
+              
+              setReels(optimizedReels);
+              setViewCounted(new Set());
+              setHasMore(true);
+              setPage(1);
+              
+              // Preload first video
+              if (optimizedReels[0]?.video?.url) {
+                setPreloadedVideos((prev) => ({
+                  ...prev,
+                  0: optimizedReels[0].video.url,
+                }));
+              }
+              
+              // Don't return yet - still fetch fresh data in background
+            }
+          }
+        } catch (cacheError) {
+          console.warn('Cache reading failed, continuing with fresh fetch:', cacheError);
+        }
+      }
+      
+      // Fetch fresh data
       const headers = await getAuthHeaders();
-      const response = await fetch(`${BASE_URL}/api/v1/posts?type=reel&limit=20`, {
+      const response = await fetch(`${BASE_URL}/api/v1/posts?type=reel&page=${pageNum}&limit=${LIMIT}`, {
         method: 'GET',
         headers,
       });
       const data = await response.json();
+      
       if (response.ok && data.success && Array.isArray(data.data?.posts)) {
         const currentUserData = await getCurrentUser();
         const userId = currentUserData?._id || currentUserData?.id;
 
-        const optimizedReels = data.data.posts.map((post) => {
-          const isLiked = post.likes?.some((like) =>
+        const optimizedReels = data.data.posts.map((post: any) => {
+          const isLiked = post.likes?.some((like: any) =>
             (typeof like === 'object' ? like.user || like._id : like) === userId
           ) || false;
 
@@ -285,9 +371,32 @@ const ReelsScreen = ({ navigation }) => {
           };
         });
 
-        setReels(optimizedReels);
+        // For first page or refresh, replace reels
+        if (pageNum === 1 || isRefresh) {
+          setReels(optimizedReels);
+          setPage(1);
+          setHasMore(optimizedReels.length === LIMIT);
+          
+          // Cache the fresh data for first page
+          if (pageNum === 1) {
+            try {
+              MMKV.setString(REELS_CACHE_KEY, JSON.stringify(optimizedReels));
+              MMKV.setString(REELS_CACHE_TIMESTAMP_KEY, Date.now().toString());
+            } catch (cacheError) {
+              console.warn('Failed to cache reels data:', cacheError);
+            }
+          }
+        } else {
+          // For subsequent pages, append to existing reels
+          setReels(prevReels => [...prevReels, ...optimizedReels]);
+          setPage(pageNum);
+          setHasMore(optimizedReels.length === LIMIT);
+        }
+
         setViewCounted(new Set());
-        if (optimizedReels[0]?.video?.url) {
+        
+        // Preload first video if it's the first page
+        if ((pageNum === 1 || isRefresh) && optimizedReels[0]?.video?.url) {
           setPreloadedVideos((prev) => ({
             ...prev,
             0: optimizedReels[0].video.url,
@@ -296,18 +405,43 @@ const ReelsScreen = ({ navigation }) => {
       } else {
         throw new Error(data.message || 'Failed to fetch reels');
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error fetching reels:', err);
       setError(err.message || 'Failed to load reels');
+      
+      // If we have cached data and it's the first page, use it as fallback
+      if (pageNum === 1) {
+        try {
+          const cachedReelsString = MMKV.getString(REELS_CACHE_KEY);
+          if (cachedReelsString) {
+            const cachedReels = JSON.parse(cachedReelsString);
+            if (cachedReels && cachedReels.length > 0) {
+              console.log('Using cached reels as fallback');
+              setReels(cachedReels);
+              setHasMore(true);
+              setPage(1);
+            }
+          }
+        } catch (cacheError) {
+          console.warn('Failed to use cache as fallback:', cacheError);
+        }
+      }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (pageNum === 1) {
+        if (!isRefresh) {
+          setLoading(false);
+        } else {
+          setRefreshing(false);
+        }
+      } else {
+        setLoadingMore(false);
+      }
     }
   }, [BASE_URL]);
 
   // Enhanced view registration with analytics and session tracking
   const registerReelView = useCallback(
-    async (reelId, analyticsData = {}) => {
+    async (reelId: string, analyticsData = {}) => {
       // Prevent duplicate registrations
       if (viewRegistrationInProgress.has(reelId) || viewCounted.has(reelId)) {
         console.log(`View already registered/in progress for reel ${reelId}`);
@@ -395,7 +529,7 @@ const ReelsScreen = ({ navigation }) => {
   );
 
   // Show view count animation (optional visual feedback)
-  const showViewCountAnimation = useCallback((reelId, newCount) => {
+  const showViewCountAnimation = useCallback((reelId: string, newCount: number) => {
     // Create a brief animation to show view count increase
     setViewCountAnimations(prev => ({
       ...prev,
@@ -416,7 +550,7 @@ const ReelsScreen = ({ navigation }) => {
   }, []);
 
   // Enhanced view tracking with watch time analytics
-  const startViewTracking = useCallback((reelId) => {
+  const startViewTracking = useCallback((reelId: string) => {
     viewStartTime.current[reelId] = Date.now();
     
     // Register view after 3 seconds with initial analytics
@@ -432,7 +566,7 @@ const ReelsScreen = ({ navigation }) => {
   }, [registerReelView]);
 
   // Enhanced view tracking completion with full analytics
-  const stopViewTracking = useCallback((reelId) => {
+  const stopViewTracking = useCallback((reelId: string) => {
     if (viewTimers.current[reelId]) {
       clearTimeout(viewTimers.current[reelId]);
       delete viewTimers.current[reelId];
@@ -457,7 +591,7 @@ const ReelsScreen = ({ navigation }) => {
   }, [registerReelView]);
 
   useEffect(() => {
-    const handleAppStateChange = (nextAppState) => {
+    const handleAppStateChange = (nextAppState: string) => {
       if (appState.match(/inactive|background/) && nextAppState === 'active') {
         setIsAppActive(true);
       } else if (nextAppState.match(/inactive|background/)) {
@@ -478,10 +612,15 @@ const ReelsScreen = ({ navigation }) => {
   useEffect(() => {
     const initializeScreen = async () => {
       await getCurrentUser();
-      await fetchReels();
+      await fetchReels(1);
     };
     initializeScreen();
-  }, [fetchReels]);
+    
+    // Cleanup function to clear cache when component unmounts
+    return () => {
+      clearReelsCache();
+    };
+  }, [fetchReels, clearReelsCache]);
 
   useEffect(() => {
     const nextIndex = currentIndex + 1;
@@ -505,11 +644,11 @@ const ReelsScreen = ({ navigation }) => {
   }, [currentIndex, reels, startViewTracking, stopViewTracking]);
 
   const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    await fetchReels();
-  }, [fetchReels]);
+    clearReelsCache(); // Clear cache before refreshing
+    await fetchReels(1, true);
+  }, [fetchReels, clearReelsCache]);
 
-  const handleViewableItemsChanged = useCallback(({ viewableItems }) => {
+  const handleViewableItemsChanged = useCallback(({ viewableItems }: any) => {
     if (viewableItems.length > 0) {
       const firstVisibleItem = viewableItems[0];
       if (firstVisibleItem && typeof firstVisibleItem.index === 'number') {
@@ -557,7 +696,7 @@ const ReelsScreen = ({ navigation }) => {
   }, []);
 
   const handleLike = useCallback(
-    async (reelId) => {
+    async (reelId: string) => {
       if (!reelId || !currentUser) {
         Alert.alert('Error', 'Unable to like reel');
         return;
@@ -608,7 +747,7 @@ const ReelsScreen = ({ navigation }) => {
   );
 
   const openComments = useCallback(
-    (reel) => {
+    (reel: any) => {
       if (!navigation) {
         console.error('Navigation prop not available');
         return;
@@ -617,7 +756,7 @@ const ReelsScreen = ({ navigation }) => {
         reelId: reel._id,
         reelData: reel,
         contentType: 'reel',
-        onCommentUpdate: (newCommentCount, realTimeComments) => {
+        onCommentUpdate: (newCommentCount: number, realTimeComments: any[]) => {
           setReels((prevReels) =>
             prevReels.map((r) =>
               r._id === reel._id
@@ -636,13 +775,13 @@ const ReelsScreen = ({ navigation }) => {
     [navigation]
   );
 
-  const formatTimeAgo = useCallback((dateString) => {
+  const formatTimeAgo = useCallback((dateString: string) => {
     if (!dateString) return 'Recently';
     try {
       const date = new Date(dateString);
       if (isNaN(date.getTime())) return 'Recently';
       const now = new Date();
-      const diffInSecs = Math.floor((now - date) / 1000);
+      const diffInSecs = Math.floor((now.getTime() - date.getTime()) / 1000);
       if (diffInSecs < 60) return 'Just now';
       if (diffInSecs < 3600) return `${Math.floor(diffInSecs / 60)}m`;
       if (diffInSecs < 86400) return `${Math.floor(diffInSecs / 3600)}h`;
@@ -653,7 +792,7 @@ const ReelsScreen = ({ navigation }) => {
     }
   }, []);
 
-  const getInitials = useCallback((name) => {
+  const getInitials = useCallback((name: string) => {
     if (!name) return '?';
     const names = name.trim().split(/\s+/);
     if (names.length === 0) return '?';
@@ -661,7 +800,7 @@ const ReelsScreen = ({ navigation }) => {
     return (names[0][0] + (names[names.length - 1][0] || '')).toUpperCase();
   }, []);
 
-  const getMediaSource = useCallback((item) => {
+  const getMediaSource = useCallback((item: any) => {
     if (item?.video?.thumbnail?.url) return item.video.thumbnail.url;
     if (item?.video?.thumbnail?.cdnUrl) return item.video.thumbnail.cdnUrl;
     if (item?.video?.url) return item.video.url;
@@ -671,11 +810,11 @@ const ReelsScreen = ({ navigation }) => {
 
   const toggleMute = useCallback(() => setIsMuted((prev) => !prev), []);
 
-  const handleBuffer = useCallback((index, isBuffering) => {
+  const handleBuffer = useCallback((index: number, isBuffering: boolean) => {
     setVideoBuffering((prev) => ({ ...prev, [index]: isBuffering }));
   }, []);
 
-  const togglePauseForReel = useCallback((reelId) => {
+  const togglePauseForReel = useCallback((reelId: string) => {
     setManualPaused((prev) => ({
       ...prev,
       [reelId]: !prev[reelId],
@@ -702,7 +841,7 @@ const ReelsScreen = ({ navigation }) => {
   );
 
   const renderReelItem = useCallback(
-    ({ item, index }) => {
+    ({ item, index }: { item: any; index: number }) => {
       const isActive = index === currentIndex && isAppActive;
       const mediaSource = getMediaSource(item);
       const isVideo = !!item.video?.url;
@@ -730,8 +869,8 @@ const ReelsScreen = ({ navigation }) => {
                   ignoreSilentSwitch="ignore"
                   poster={mediaSource}
                   posterResizeMode="cover"
-                  onBuffer={({ isBuffering }) => handleBuffer(index, isBuffering)}
-                  onError={(error) => console.log('Video error:', error)}
+                  onBuffer={({ isBuffering }: { isBuffering: boolean }) => handleBuffer(index, isBuffering)}
+                  onError={(error: any) => console.log('Video error:', error)}
                 />
                 {videoBuffering[index] && (
                   <View style={styles.bufferingOverlay}>
@@ -865,10 +1004,10 @@ const ReelsScreen = ({ navigation }) => {
     ]
   );
 
-  const keyExtractor = useCallback((item) => item._id, []);
+  const keyExtractor = useCallback((item: any) => item._id, []);
 
   const getItemLayout = useCallback(
-    (_, index) => ({
+    (_: any, index: number) => ({
       length: SCREEN_HEIGHT,
       offset: SCREEN_HEIGHT * index,
       index,
@@ -876,7 +1015,24 @@ const ReelsScreen = ({ navigation }) => {
     []
   );
 
-  if (loading && !refreshing) {
+  // Handle loading more reels when reaching the end
+  const handleEndReached = useCallback(() => {
+    if (!loadingMore && hasMore && reels.length > 0) {
+      fetchReels(page + 1);
+    }
+  }, [loadingMore, hasMore, page, reels.length, fetchReels]);
+
+  // Render footer for loading indicator
+  const renderFooter = useCallback(() => {
+    if (!loadingMore) return null;
+    return (
+      <View style={styles.footerLoader}>
+        <ActivityIndicator size="large" color="#ed167e" />
+      </View>
+    );
+  }, [loadingMore]);
+
+  if (loading && !refreshing && reels.length === 0) {
     return (
       <SafeAreaView style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#ed167e" />
@@ -884,12 +1040,12 @@ const ReelsScreen = ({ navigation }) => {
     );
   }
 
-  if (error) {
+  if (error && reels.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity onPress={fetchReels} style={styles.retryButton}>
+          <TouchableOpacity onPress={() => fetchReels(1)} style={styles.retryButton}>
             <Text style={styles.retryText}>Tap to retry</Text>
           </TouchableOpacity>
         </View>
@@ -897,13 +1053,13 @@ const ReelsScreen = ({ navigation }) => {
     );
   }
 
-  if (!reels.length) {
+  if (!reels.length && !loading) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyIcon}>🎥</Text>
           <Text style={styles.emptyTitle}>No Reels Found</Text>
-          <TouchableOpacity onPress={fetchReels} style={styles.retryButton}>
+          <TouchableOpacity onPress={() => fetchReels(1)} style={styles.retryButton}>
             <Text style={styles.retryText}>Refresh</Text>
           </TouchableOpacity>
         </View>
@@ -933,6 +1089,9 @@ const ReelsScreen = ({ navigation }) => {
         windowSize={3}
         removeClippedSubviews
         updateCellsBatchingPeriod={100}
+        onEndReached={handleEndReached}
+        onEndReachedThreshold={0.5}
+        ListFooterComponent={renderFooter}
       />
       <TouchableOpacity style={styles.muteIndicator} onPress={toggleMute} activeOpacity={0.7}>
         <Icon name={isMuted ? 'volume-mute' : 'volume-high'} size={22} color="#fff" />
@@ -1086,6 +1245,10 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 12,
     fontWeight: '500',
+  },
+  footerLoader: {
+    paddingVertical: 20,
+    alignItems: 'center',
   },
   bottomLeftInfo: {
     position: 'absolute',
