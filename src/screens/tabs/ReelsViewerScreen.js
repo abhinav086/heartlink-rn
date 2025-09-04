@@ -1,3 +1,4 @@
+// ReelsViewerScreen.js
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
@@ -14,13 +15,91 @@ import {
   Animated,
   AppState,
   Platform,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Keyboard,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import Video from 'react-native-video';
 import { useAuth } from '../../context/AuthContext';
 import BASE_URL from '../../config/config';
 import { useIsFocused } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+
+// --- NEW: Define EditCaptionModal as a separate component (Adapted from PhotoViewerScreen) ---
+const EditCaptionModal = ({ isVisible, initialCaption, onSave, onClose, isUpdating }) => {
+  const [textInputValue, setTextInputValue] = useState(initialCaption || '');
+  const textInputRef = useRef(null);
+
+  useEffect(() => {
+    if (isVisible) {
+      setTextInputValue(initialCaption || '');
+    }
+  }, [isVisible, initialCaption]);
+
+  const handleSave = () => {
+    onSave(textInputValue);
+  };
+
+  return (
+    <Modal
+      visible={isVisible}
+      animationType="slide"
+      onRequestClose={onClose}
+      transparent={false}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={styles.editModalFullscreen}
+      >
+        <View style={styles.editModalContentFixed}>
+          <View style={styles.editModalHeaderFixed}>
+            <TouchableOpacity onPress={onClose} style={styles.editModalBackButton}>
+              <Icon name="arrow-back" size={24} color="white" />
+            </TouchableOpacity>
+            <Text style={styles.editModalTitleFixed}>Edit Caption</Text>
+            <TouchableOpacity
+              onPress={handleSave}
+              style={styles.editModalSaveHeaderButton}
+              disabled={isUpdating || textInputValue.trim() === (initialCaption || '')}
+            >
+              {isUpdating ? (
+                <ActivityIndicator size="small" color="#ed167e" />
+              ) : (
+                <Text style={styles.editModalSaveHeaderText}>Save</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          <View style={styles.editModalBodyFixed}>
+            <TextInput
+              ref={textInputRef}
+              style={styles.captionInputFixed}
+              value={textInputValue}
+              onChangeText={setTextInputValue}
+              placeholder="Write a caption..."
+              placeholderTextColor="#aaaaaa"
+              multiline
+              textAlignVertical="top"
+              autoFocus={true}
+              blurOnSubmit={true}
+              returnKeyType="done"
+              scrollEnabled={true}
+              autoCorrect={true}
+              autoCapitalize="sentences"
+              keyboardType="default"
+              enablesReturnKeyAutomatically={false}
+              onSubmitEditing={handleSave}
+            />
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+};
+// --- END: New EditCaptionModal Component ---
 
 const ReelsViewerScreen = ({ navigation, route }) => {
   const { reels: initialReels = [], initialIndex = 0, username = 'User' } = route.params || {};
@@ -32,7 +111,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   const [videoBuffering, setVideoBuffering] = useState({});
   const [appState, setAppState] = useState(AppState.currentState);
   const [isAppActive, setIsAppActive] = useState(true);
-  const [manualPaused, setManualPaused] = useState({}); // Added for manual play/pause
+  const [manualPaused, setManualPaused] = useState({});
   const flatListRef = useRef(null);
   const isFocused = useIsFocused();
   const [viewCounted, setViewCounted] = useState(new Set());
@@ -45,8 +124,8 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   const [sessionId] = useState(() => `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`);
   const viewStartTimes = useRef({});
   const viewTracked = useRef(new Set());
-  const viewTimers = useRef({}); // Added for delayed view registration
-  const viewStartTime = useRef({}); // Added for tracking start time
+  const viewTimers = useRef({});
+  const viewStartTime = useRef({});
 
   // Like animation states
   const [likeAnimations, setLikeAnimations] = useState([]);
@@ -57,6 +136,133 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   const [isProcessingQueue, setIsProcessingQueue] = useState(false);
   const queueRef = useRef([]);
   const processingRef = useRef(false);
+
+  // --- NEW: State for Edit Caption Functionality ---
+  const [editingItem, setEditingItem] = useState(null);
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [updatingCaption, setUpdatingCaption] = useState(false);
+  const [menuVisible, setMenuVisible] = useState({});
+
+  // --- NEW: Menu Visibility Functions ---
+  const showMenu = (itemId) => {
+    setMenuVisible(prev => ({ ...prev, [itemId]: true }));
+  };
+
+  const hideMenu = (itemId) => {
+    setMenuVisible(prev => ({ ...prev, [itemId]: false }));
+  };
+
+  // --- NEW: Close Edit Modal Function ---
+  const closeEditModal = () => {
+    Keyboard.dismiss();
+    setTimeout(() => {
+      setIsEditModalVisible(false);
+      setEditingItem(null);
+      setUpdatingCaption(false);
+    }, 50);
+  };
+
+  // --- NEW: Update Caption API Function (Corrected API Call with Logging) ---
+  const updateReelCaption = async (postId, newCaption) => {
+    if (!token) {
+      const error = new Error("No authentication token found.");
+      console.error("[updateReelCaption] Error:", error.message);
+      throw error;
+    }
+    if (!postId) {
+      const error = new Error("Post ID is required.");
+      console.error("[updateReelCaption] Error:", error.message);
+      throw error;
+    }
+
+    const url = `${BASE_URL}/api/v1/posts/${postId}`;
+    const payload = { caption: newCaption };
+    console.log(`[updateReelCaption] Sending PATCH request to: ${url}`, { payload });
+
+    try {
+      const response = await fetch(url, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      console.log(`[updateReelCaption] Received response. Status: ${response.status}`);
+
+      let data;
+      const contentType = response.headers.get("content-type");
+      if (contentType && contentType.indexOf("application/json") !== -1) {
+        data = await response.json();
+        console.log(`[updateReelCaption] Response JSON:`, data);
+      } else {
+        data = { success: response.ok, message: `HTTP ${response.status}` };
+        console.log(`[updateReelCaption] Non-JSON response or no content-type. Data:`, data);
+      }
+
+      if (!response.ok) {
+        const errorMsg = data.message || `Failed to update reel caption (Status: ${response.status})`;
+        console.error(`[updateReelCaption] Server Error (${response.status}):`, errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      if (!data.success) {
+        const errorMsg = data.message || 'Server responded successfully but indicated failure.';
+        console.error(`[updateReelCaption] Application Error:`, errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      console.log(`[updateReelCaption] Success:`, data);
+      return data;
+    } catch (error) {
+      console.error('[updateReelCaption] Network or Unexpected Error:', error);
+      throw error;
+    }
+  };
+
+  // --- NEW: Handle Edit Reel ---
+  const handleEditReel = (item) => {
+    const isOwnReel = (item.author?._id === user?._id) || (item.user?._id === user?._id);
+    if (!isOwnReel) {
+      Alert.alert('Permission Denied', 'You can only edit your own reels.');
+      return;
+    }
+    hideMenu(item._id);
+    setEditingItem(item);
+    setIsEditModalVisible(true);
+  };
+
+  // --- NEW: Execute Caption Update ---
+  const executeCaptionUpdate = async (newCaptionText) => {
+    if (!editingItem || !editingItem._id || !token) {
+      console.warn("[executeCaptionUpdate] Missing editingItem ID or token. Aborting.");
+      Alert.alert('Error', 'Unable to update caption. Please try again.');
+      return;
+    }
+    setUpdatingCaption(true);
+    try {
+      const trimmedCaption = newCaptionText.trim();
+      console.log(`[executeCaptionUpdate] Attempting to update caption for item ID: ${editingItem._id}`);
+      await updateReelCaption(editingItem._id, trimmedCaption);
+      // Update local state
+      setReels(prev => prev.map(r =>
+        r._id === editingItem._id
+          ? { ...r, content: trimmedCaption, caption: trimmedCaption }
+          : r
+      ));
+      closeEditModal();
+      setTimeout(() => {
+        Alert.alert('Success', 'Caption updated successfully');
+      }, 200);
+    } catch (error) {
+      console.error('[executeCaptionUpdate] Error updating reel caption:', error);
+      Alert.alert('Error', error.message || 'Failed to update caption. Please try again.');
+    } finally {
+      setUpdatingCaption(false);
+    }
+  };
+
 
   // --- Robust data validation utilities ---
   const safeString = useCallback((value, fallback = '') => {
@@ -76,6 +282,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   const safeObject = useCallback((value, fallback = {}) => {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : fallback;
   }, []);
+
 
   // --- START: Functions from ReelsScreen for consistency ---
   const calculateDummyViews = useCallback((createdAt) => {
@@ -109,19 +316,14 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, []);
 
-  // --- END: Functions from ReelsScreen ---
-
-  // Enhanced view registration with analytics and session tracking (from ReelsScreen)
   const registerReelView = useCallback(
     async (reelId, analyticsData = {}) => {
-      // Prevent duplicate registrations
       if (viewRegistrationInProgress.has(reelId) || viewCounted.has(reelId)) {
         console.log(`View already registered/in progress for reel ${reelId}`);
         return;
       }
       try {
         setViewRegistrationInProgress(prev => new Set(prev).add(reelId));
-        // Enhanced payload with analytics
         const payload = {
           sessionId: sessionId,
           watchDuration: analyticsData.watchDuration || 0,
@@ -133,7 +335,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
           },
           ...analyticsData
         };
-
         const response = await fetch(`${BASE_URL}/api/v1/posts/reels/${reelId}/view`, {
           method: 'POST',
           headers: {
@@ -142,35 +343,29 @@ const ReelsViewerScreen = ({ navigation, route }) => {
           },
           body: JSON.stringify(payload)
         });
-
         const data = await response.json();
         if (response.ok && data.success) {
           const { viewResult, analytics } = data.data;
-          // Update reel with enhanced view data
           setReels(prevReels =>
             prevReels.map(reel =>
               reel._id === reelId
                 ? {
                     ...reel,
                     viewCount: viewResult.viewCount,
-                    // Add analytics data for rich display
                     viewAnalytics: {
                       totalViews: analytics.totalViews,
                       uniqueViewers: analytics.uniqueViewers,
                       engagement: analytics.engagement,
                       lastUpdated: Date.now()
                     },
-                    // Track view quality
                     viewQuality: data.data.metadata?.quality || 'unknown'
                   }
                 : reel
             )
           );
-          // Mark as viewed only if actually counted
           if (viewResult.counted) {
             setViewCounted(prev => new Set(prev).add(reelId));
             console.log(`✅ View registered for reel ${reelId}: ${viewResult.viewCount} views (${viewResult.source})`);
-            // Optional: Show view count animation
             if (viewResult.uniqueView) {
               showViewCountAnimation(reelId, viewResult.viewCount);
             }
@@ -191,9 +386,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     [viewCounted, token, sessionId, viewRegistrationInProgress, BASE_URL]
   );
 
-  // Show view count animation (optional visual feedback) (from ReelsScreen)
   const showViewCountAnimation = useCallback((reelId, newCount) => {
-    // Create a brief animation to show view count increase
     setViewCountAnimations(prev => ({
       ...prev,
       [reelId]: {
@@ -201,7 +394,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
         timestamp: Date.now()
       }
     }));
-    // Remove animation after 2 seconds
     setTimeout(() => {
       setViewCountAnimations(prev => {
         const newAnimations = { ...prev };
@@ -211,11 +403,9 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }, 2000);
   }, []);
 
-  // Enhanced view tracking with watch time analytics (from ReelsScreen)
   const startViewTracking = useCallback((reelId) => {
     if (!reelId) return;
     viewStartTime.current[reelId] = Date.now();
-    // Register view after 3 seconds with initial analytics
     viewTimers.current[reelId] = setTimeout(() => {
       const watchDuration = Date.now() - viewStartTime.current[reelId];
       registerReelView(reelId, {
@@ -227,7 +417,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }, 3000);
   }, [registerReelView]);
 
-  // Enhanced view tracking completion with full analytics (from ReelsScreen)
   const stopViewTracking = useCallback((reelId) => {
     if (!reelId) return;
     if (viewTimers.current[reelId]) {
@@ -237,7 +426,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     if (viewStartTime.current[reelId]) {
       const watchDuration = Date.now() - viewStartTime.current[reelId];
       delete viewStartTime.current[reelId];
-      // Send comprehensive analytics if watched for meaningful duration
       if (watchDuration > 1000) {
         const watchPercentage = Math.min(100, (watchDuration / 15000) * 100);
         registerReelView(reelId, {
@@ -251,7 +439,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [registerReelView]);
 
-  // Format views count (e.g., 1.2K, 1M) - Enhanced with better validation
   const formatViewCount = useCallback((count) => {
     const numCount = safeNumber(count, 0);
     if (numCount < 1000) return numCount.toString();
@@ -259,14 +446,11 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     return `${(numCount / 1000000).toFixed(1).replace(/\.0$/, '')}M`;
   }, [safeNumber]);
 
-  // Get real view count from reel data - Enhanced validation
   const getRealViewCount = useCallback((reel) => {
     if (!reel) return 0;
-    // Priority order: viewCount -> realTimeViews -> views -> 0
     return safeNumber(reel.viewCount) || safeNumber(reel.realTimeViews) || safeNumber(reel.views) || 0;
   }, [safeNumber]);
 
-  // Process like queue in background (from ReelsScreen)
   const processLikeQueue = useCallback(async () => {
     if (processingRef.current || queueRef.current.length === 0 || !token) {
       return;
@@ -316,7 +500,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     setIsProcessingQueue(false);
   }, [token, BASE_URL]);
 
-  // Add like action to queue (from ReelsScreen)
   const addToLikeQueue = useCallback((reelId, action) => {
     if (!reelId) return;
     const likeAction = {
@@ -333,14 +516,12 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     processLikeQueue();
   }, [processLikeQueue]);
 
-  // Profile press handler (from ReelsScreen)
   const handleProfilePress = useCallback((authorData) => {
     try {
       const safeAuthor = safeObject(authorData);
       const authorName = safeString(safeAuthor.fullName || safeAuthor.username, 'User');
       console.log('Profile press triggered for:', authorName);
       const userId = safeString(safeAuthor._id || safeAuthor.id);
-      
       if (!navigation) {
         console.error('Navigation prop not passed to ReelsViewerScreen component');
         Alert.alert('Error', 'Navigation not available');
@@ -373,7 +554,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [navigation, user, safeObject, safeString]);
 
-  // App state handler (from ReelsScreen)
   useEffect(() => {
     const handleAppStateChange = (nextAppState) => {
       if (appState.match(/inactive|background/) && nextAppState === 'active') {
@@ -393,7 +573,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     };
   }, [appState]);
 
-  // Scroll to initial index on mount
   useEffect(() => {
     if (flatListRef.current && initialIndex > 0 && reels.length > initialIndex) {
       setTimeout(() => {
@@ -402,7 +581,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [initialIndex, reels.length]);
 
-  // Preload next video (from ReelsScreen)
   useEffect(() => {
     const nextIndex = currentIndex + 1;
     if (reels[nextIndex]?.video?.url && !preloadedVideos[nextIndex]) {
@@ -413,7 +591,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [currentIndex, reels, preloadedVideos]);
 
-  // Effect to register view when the current reel changes (from ReelsScreen)
   useEffect(() => {
     const currentReel = reels[currentIndex];
     if (currentReel && currentReel._id) {
@@ -424,7 +601,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [currentIndex, reels, startViewTracking, stopViewTracking]);
 
-  // Process initial reels with real view data - Enhanced validation
   useEffect(() => {
     if (user && initialReels.length > 0) {
       const userId = safeString(user._id || user.id);
@@ -454,7 +630,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   }, [user, initialReels, safeString, safeArray, safeObject]);
 
   const handleBack = () => {
-    // End view tracking for current reel before leaving
     const currentReel = reels[currentIndex];
     if (currentReel) {
       stopViewTracking(currentReel._id);
@@ -466,11 +641,9 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     if (viewableItems.length > 0) {
       const newIndex = viewableItems[0].index;
       const oldIndex = currentIndex;
-      // End tracking for previous reel
       if (oldIndex !== newIndex && reels[oldIndex]) {
         stopViewTracking(reels[oldIndex]._id);
       }
-      // Start tracking for new reel
       if (reels[newIndex]) {
         startViewTracking(reels[newIndex]._id);
       }
@@ -478,7 +651,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [currentIndex, reels, stopViewTracking, startViewTracking]);
 
-  // Start tracking when first reel becomes visible (from ReelsScreen logic)
   useEffect(() => {
     if (reels.length > 0 && currentIndex >= 0 && reels[currentIndex] && isAppActive && isFocused) {
       startViewTracking(reels[currentIndex]._id);
@@ -505,7 +677,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     ]).start(() => setLikeAnimations(prev => prev.filter(anim => anim.id !== id)));
   }, []);
 
-  // Instant like functionality with queue processing - Enhanced validation
   const handleLikePress = useCallback(async (reelId) => {
     if (!reelId || !token || !user) {
       Alert.alert('Error', 'Unable to like reel');
@@ -522,7 +693,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
       }
       const wasLiked = currentReel.isLiked;
       const userId = safeString(user._id || user.id);
-      // INSTANT UI UPDATE
       setReels(prevReels =>
         prevReels.map(reel => {
           if (reel._id === reelId) {
@@ -550,7 +720,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     }
   }, [token, user, reels, createLikeAnimation, addToLikeQueue, safeArray, safeString]);
 
-  // Navigate to comments screen (from ReelsScreen)
   const openComments = useCallback((reel) => {
     if (!navigation) {
       console.error('Navigation prop not available');
@@ -578,6 +747,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     });
   }, [navigation, safeObject]);
 
+  // --- FIXED: Ensure formatTimeAgo always returns a string ---
   const formatTimeAgo = useCallback((dateString) => {
     const safeDateString = safeString(dateString);
     if (!safeDateString) return 'Recently';
@@ -591,7 +761,8 @@ const ReelsViewerScreen = ({ navigation, route }) => {
       if (diffInSecs < 86400) return `${Math.floor(diffInSecs / 3600)}h`;
       if (diffInSecs < 604800) return `${Math.floor(diffInSecs / 86400)}d`;
       return `${Math.floor(diffInSecs / 604800)}w`;
-    } catch {
+    } catch (error) {
+      console.error('Error in formatTimeAgo:', error);
       return 'Recently';
     }
   }, [safeString]);
@@ -609,7 +780,6 @@ const ReelsViewerScreen = ({ navigation, route }) => {
 
   const handleBuffer = useCallback((index, isBuffering) => setVideoBuffering(prev => ({ ...prev, [index]: isBuffering })), []);
 
-  // Added from ReelsScreen: Toggle pause for a specific reel
   const togglePauseForReel = useCallback((reelId) => {
     if (!reelId) return;
     setManualPaused((prev) => ({
@@ -629,33 +799,42 @@ const ReelsViewerScreen = ({ navigation, route }) => {
   );
 
   const renderReelItem = useCallback(({ item, index }) => {
-    // Enhanced item validation
     const safeItem = safeObject(item);
     if (!safeItem || !safeItem._id) {
       return <View style={styles.reelContainer} />;
     }
 
-    // Updated logic for isPaused (from ReelsScreen)
     const isActive = index === currentIndex && isAppActive;
     const isPaused = manualPaused[safeItem._id] || !isActive || !isFocused;
     const isVideo = !!(safeItem.video?.url);
-    
-    // Enhanced author data validation
+
     const author = safeObject(safeItem.author || safeItem.user);
+    // --- FIXED: Ensure authorName is always a string ---
     const authorName = safeString(author.fullName || author.username || username, 'User');
+
     const isLiked = Boolean(safeItem.isLiked);
-    
-    // Ensure all counts are numbers and convert to strings for display
+
     const likes = safeArray(safeItem.likes);
     const likeCount = safeNumber(likes.length, 0);
     const commentCount = safeNumber(safeItem.commentCount || safeArray(safeItem.comments).length, 0);
-    
-    // Get real view count from the reel data
+
     const viewCount = getRealViewCount(safeItem);
     const viewAnimation = viewCountAnimations[safeItem._id];
-    
-    // Safe media source extraction
+
     const mediaSource = safeString(safeItem.video?.thumbnail?.url || safeItem.video?.url || safeItem.images?.[0]?.url);
+
+    const isOwnReel = (safeItem.author?._id === user?._id) || (safeItem.user?._id === user?._id);
+    const isMenuVisible = menuVisible[safeItem._id] || false;
+
+    // --- DEFENSIVE: Ensure all values rendered in <Text> are strings ---
+    const displayAuthorName = String(authorName);
+    const displayTimeAgo = String(formatTimeAgo(safeItem.createdAt));
+    const displayCaptionContent = safeString(safeItem.content);
+    const displayCaptionCaption = safeString(safeItem.caption);
+    const displayLikeCount = String(likeCount);
+    const displayCommentCount = String(commentCount);
+    const displayViewCount = String(formatViewCount(viewCount));
+    const displayInitials = String(getInitials(authorName));
 
     return (
       <View style={styles.reelContainer}>
@@ -684,9 +863,9 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               )}
             </View>
           ) : mediaSource ? (
-            <Image 
-              source={{ uri: mediaSource }} 
-              style={styles.media} 
+            <Image
+              source={{ uri: mediaSource }}
+              style={styles.media}
               resizeMode="cover"
               onError={() => console.log('Image load error for:', mediaSource)}
             />
@@ -702,17 +881,24 @@ const ReelsViewerScreen = ({ navigation, route }) => {
             onPress={() => handleProfilePress(author)}
             activeOpacity={0.8}
           >
-            <Text style={styles.authorName}>{authorName}</Text>
+            {/* --- FIXED: Use displayAuthorName --- */}
+            <Text style={styles.authorName}>{displayAuthorName}</Text>
           </TouchableOpacity>
-          <Text style={styles.timeAgo}>{formatTimeAgo(safeItem.createdAt)}</Text>
-          {safeItem.content && (
+          {/* --- FIXED: Use displayTimeAgo --- */}
+          <Text style={styles.timeAgo}>{displayTimeAgo}</Text>
+          {/* --- FIXED: Use displayCaptionContent/Caption --- */}
+          {displayCaptionContent !== '' && (
             <Text style={styles.caption} numberOfLines={2}>
-              {safeString(safeItem.content)}
+              {displayCaptionContent}
             </Text>
           )}
+          {displayCaptionContent === '' && displayCaptionCaption !== '' && (
+             <Text style={styles.caption} numberOfLines={2}>
+               {displayCaptionCaption}
+             </Text>
+           )}
         </View>
         <View style={styles.bottomRightActions}>
-          {/* Like Button */}
           <TouchableOpacity
             style={styles.actionButton}
             onPress={() => handleLikePress(safeItem._id)}
@@ -724,9 +910,9 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               color={isLiked ? "#ed167e" : "#fff"}
               style={styles.actionIcon}
             />
-            <Text style={styles.actionCount}>{likeCount.toString()}</Text>
+            {/* --- FIXED: Use displayLikeCount --- */}
+            <Text style={styles.actionCount}>{displayLikeCount}</Text>
           </TouchableOpacity>
-          {/* Comment Button */}
           <TouchableOpacity
             style={styles.actionButton}
             onPress={() => openComments(safeItem)}
@@ -738,9 +924,9 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               color="#fff"
               style={styles.actionIcon}
             />
-            <Text style={styles.actionCount}>{commentCount.toString()}</Text>
+            {/* --- FIXED: Use displayCommentCount --- */}
+            <Text style={styles.actionCount}>{displayCommentCount}</Text>
           </TouchableOpacity>
-          {/* Real Views Button */}
           <TouchableOpacity
             style={styles.actionButton}
             activeOpacity={0.7}
@@ -751,8 +937,9 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               color="#fff"
               style={styles.actionIcon}
             />
+            {/* --- FIXED: Use displayViewCount --- */}
             <Text style={[styles.actionCount, styles.viewCount]}>
-              {formatViewCount(viewCount)}
+              {displayViewCount}
             </Text>
             {viewAnimation && (
               <Animated.View
@@ -772,7 +959,38 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               </Animated.View>
             )}
           </TouchableOpacity>
-          {/* Author Avatar */}
+          {isOwnReel && (
+            <View style={styles.menuContainerHorizontal}>
+              {isMenuVisible && (
+                <TouchableWithoutFeedback onPress={() => hideMenu(safeItem._id)}>
+                  <View style={styles.menuOverlayTouchableHorizontal}>
+                    <View style={styles.menuOverlayHorizontal}>
+                      <TouchableOpacity
+                        style={styles.menuButtonHorizontal}
+                        onPress={() => handleEditReel(safeItem)}
+                      >
+                        <MaterialIcons name="edit" size={20} color="white" />
+                        <Text style={styles.menuButtonTextHorizontal}>Edit Caption</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.closeMenuButtonHorizontal}
+                        onPress={() => hideMenu(safeItem._id)}
+                      >
+                        <Icon name="close" size={20} color="white" />
+                        <Text style={styles.menuButtonTextHorizontal}>Close</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </TouchableWithoutFeedback>
+              )}
+              <TouchableOpacity
+                style={styles.threeDotButtonHorizontal}
+                onPress={() => showMenu(safeItem._id)}
+              >
+                <MaterialIcons name="more-horiz" size={24} color="white" />
+              </TouchableOpacity>
+            </View>
+          )}
           <TouchableOpacity
             style={styles.authorAvatar}
             onPress={() => handleProfilePress(author)}
@@ -786,14 +1004,14 @@ const ReelsViewerScreen = ({ navigation, route }) => {
               />
             ) : (
               <View style={styles.authorAvatarPlaceholder}>
+                {/* --- FIXED: Use displayInitials --- */}
                 <Text style={styles.authorAvatarText}>
-                  {getInitials(authorName)}
+                  {displayInitials}
                 </Text>
               </View>
             )}
           </TouchableOpacity>
         </View>
-        {/* Play/Pause button for current reel */}
         {index === currentIndex && (
           <TouchableOpacity
             style={styles.playPauseButton}
@@ -830,6 +1048,12 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     safeString,
     safeNumber,
     safeArray,
+    menuVisible,
+    handleEditReel,
+    hideMenu,
+    showMenu,
+    formatTimeAgo,
+    getInitials,
   ]);
 
   const keyExtractor = useCallback((item, index) => {
@@ -861,9 +1085,21 @@ const ReelsViewerScreen = ({ navigation, route }) => {
     );
   }
 
+  // --- NEW: Prepare props for EditCaptionModal ---
+  // --- MODIFIED: Ensure initialCaptionForModal is always a string ---
+  const initialCaptionForModal = editingItem ? (safeString(editingItem.content) || safeString(editingItem.caption) || '') : '';
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="black" />
+      {/* --- NEW: Pass props to the separate Modal component --- */}
+      <EditCaptionModal
+        isVisible={isEditModalVisible}
+        initialCaption={initialCaptionForModal}
+        onSave={executeCaptionUpdate}
+        onClose={closeEditModal}
+        isUpdating={updatingCaption}
+      />
       <FlatList
         ref={flatListRef}
         data={reels}
@@ -884,15 +1120,12 @@ const ReelsViewerScreen = ({ navigation, route }) => {
         windowSize={3}
         removeClippedSubviews={true}
       />
-      {/* Back Button */}
       <TouchableOpacity onPress={handleBack} style={styles.backButton} activeOpacity={0.7}>
         <Icon name="arrow-back" size={24} color="#fff" />
       </TouchableOpacity>
-      {/* Mute Button */}
       <TouchableOpacity style={styles.muteIndicator} onPress={toggleMute} activeOpacity={0.7}>
         <Icon name={isMuted ? 'volume-mute' : 'volume-high'} size={22} color="#fff" />
       </TouchableOpacity>
-      {/* Real-time Status Indicators */}
       {isProcessingQueue && (
         <View style={styles.queueIndicator}>
           <Text style={styles.queueText}>Syncing...</Text>
@@ -1130,6 +1363,121 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
   },
+  // --- NEW: Add styles for the HORIZONTAL menu (Adapted from PhotoViewerScreen) ---
+  menuContainerHorizontal: {
+    position: 'relative',
+    marginBottom: 20,
+  },
+  threeDotButtonHorizontal: {
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuOverlayTouchableHorizontal: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 15,
+  },
+  menuOverlayHorizontal: {
+    position: 'absolute',
+    bottom: '100%',
+    right: 0,
+    backgroundColor: '#1e1e1e',
+    borderRadius: 8,
+    padding: 4,
+    zIndex: 20,
+    borderWidth: 1,
+    borderColor: '#333',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+    minWidth: 140,
+  },
+  menuButtonHorizontal: {
+    padding: 12,
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  menuButtonTextHorizontal: {
+    color: 'white',
+    fontSize: 14,
+    marginLeft: 8,
+  },
+  closeMenuButtonHorizontal: {
+    padding: 12,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#333',
+    flexDirection: 'row',
+  },
+  // Edit Caption Modal Styles (Adapted from PhotoViewerScreen)
+  editModalFullscreen: {
+    flex: 1,
+    backgroundColor: 'black',
+  },
+  editModalContentFixed: {
+    flex: 1,
+    backgroundColor: '#000',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '90%',
+    minHeight: '50%',
+  },
+  editModalHeaderFixed: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingTop: Platform.OS === 'ios' ? 50 : 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+    backgroundColor: '#1e1e1e',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  editModalBackButton: {
+    padding: 8,
+  },
+  editModalTitleFixed: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: 'white',
+    flex: 1,
+    textAlign: 'center',
+    marginHorizontal: 16,
+  },
+  editModalSaveHeaderButton: {
+    padding: 8,
+    minWidth: 50,
+  },
+  editModalSaveHeaderText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ed167e',
+  },
+  editModalBodyFixed: {
+    flex: 1,
+    padding: 16,
+  },
+  captionInputFixed: {
+    backgroundColor: '#1e1e1e',
+    color: 'white',
+    fontSize: 16,
+    padding: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#333',
+    minHeight: 150,
+    maxHeight: 400,
+    textAlignVertical: 'top',
+  },
+  // --- END: New styles ---
 });
 
 export default ReelsViewerScreen;

@@ -24,12 +24,11 @@ import {
 import Video from 'react-native-video';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
-import { useAuth } from '../../context/AuthContext';
-import BASE_URL from '../../config/config';
+import { useAuth } from '../../context/AuthContext'; // Ensure path is correct
+import BASE_URL from '../../config/config'; // Ensure path is correct
 const { width, height } = Dimensions.get('window');
 const imageWidth = width - 20; // Account for container padding
 const imageHeight = 500; // Define image height for zoom calculations
-
 // --- NEW: Define EditCaptionModal as a separate component ---
 const EditCaptionModal = ({ isVisible, initialCaption, onSave, onClose, isUpdating, editingItem }) => {
   // Local state for the TextInput within the Modal
@@ -98,7 +97,7 @@ const EditCaptionModal = ({ isVisible, initialCaption, onSave, onClose, isUpdati
               autoCorrect={true}
               autoCapitalize="sentences"
               keyboardType="default"
-              enablesReturnKeyAutomatically={false}
+                enablesReturnKeyAutomatically={false}
             />
           </View>
         </View>
@@ -107,16 +106,15 @@ const EditCaptionModal = ({ isVisible, initialCaption, onSave, onClose, isUpdati
   );
 };
 // --- END: New EditCaptionModal Component ---
-
 const PhotoViewerScreen = ({ navigation, route }) => {
   const { posts, initialIndex = 0, username } = route.params;
-  const { token, user } = useAuth();
+  // ✅ FIX: Destructure refreshToken and isAuthenticated from context
+  const { token, user, refreshToken, isAuthenticated } = useAuth();
   const [currentPosts, setCurrentPosts] = useState(posts || []);
   const [loading, setLoading] = useState(false);
   const flatListRef = useRef(null);
   // --- Modified State for Edit Caption Functionality ---
   const [editingItem, setEditingItem] = useState(null);
-  // const [editCaption, setEditCaption] = useState(''); // <-- REMOVED this line
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [updatingCaption, setUpdatingCaption] = useState(false);
   const [menuVisible, setMenuVisible] = useState({});
@@ -146,7 +144,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     setTimeout(() => {
       setIsEditModalVisible(false);
       setEditingItem(null);
-      // setEditCaption(''); // <-- REMOVED this line
       setUpdatingCaption(false);
     }, 50); // Reduced delay
   };
@@ -186,8 +183,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     hideMenu(item._id);
     // Set the item to edit and initialize caption
     setEditingItem(item);
-    // const currentCaption = item.content || item.caption || ''; // <-- REMOVED this line
-    // setEditCaption(currentCaption); // <-- REMOVED this line
     // Show modal
     setIsEditModalVisible(true);
   };
@@ -247,18 +242,15 @@ const PhotoViewerScreen = ({ navigation, route }) => {
               ? {
                   ...post,
                   isLikedByUser: !currentlyLiked,
-                  likeCount: data.data?.likeCount || (currentlyLiked ? (post.likeCount || 1) - 1 : (post.likeCount || 0) + 1),
+                  // ✅ FIX: Use more robust like count update logic
+                  likeCount: data.data?.likeCount !== undefined ? data.data.likeCount : (currentlyLiked ? (post.likeCount || 1) - 1 : (post.likeCount || 0) + 1),
                 }
               : post
           )
         );
         return {
           success: true,
-          data: {
-            likeCount: data.data?.likeCount || (currentlyLiked ? -1 : 1),
-            isLiked: !currentlyLiked,
-            ...data.data
-          }
+          data: data.data // Pass back the full data object
         };
       } else {
         Alert.alert('Error', data.message || 'Failed to update like');
@@ -311,7 +303,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
       cleanUrl = 'https://' + cleanUrl;
     }
-    console.log('🧹 URL sanitized:', { original: url, cleaned: cleanUrl });
+    console.log('🖼️ URL sanitized:', { original: url, cleaned: cleanUrl });
     return cleanUrl;
   };
 
@@ -328,7 +320,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     let pinchFocalY = 0;
     let initialTranslateX = 0;
     let initialTranslateY = 0;
-
     const getDistance = (touches) => {
       if (touches.length < 2) return 0;
       const [touch1, touch2] = touches;
@@ -336,7 +327,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       const dy = touch1.pageY - touch2.pageY;
       return Math.sqrt(dx * dx + dy * dy);
     };
-
     const getCenter = (touches) => {
       if (touches.length < 2) return { x: imageWidth / 2, y: imageHeight / 2 }; // Use defined height
       const [touch1, touch2] = touches;
@@ -344,7 +334,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       const centerY = (touch1.locationY + touch2.locationY) / 2;
       return { x: centerX, y: centerY };
     };
-
     const getBounds = (scale) => {
       const scaledWidth = imageWidth * scale;
       const scaledHeight = imageHeight * scale; // Use defined height
@@ -352,7 +341,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       const maxTranslateY = Math.max(0, (scaledHeight - imageHeight) / 2); // Use defined height
       return { maxTranslateX, maxTranslateY };
     };
-
     const clampTranslate = (translateX, translateY, scale) => {
       const { maxTranslateX, maxTranslateY } = getBounds(scale);
       return {
@@ -360,7 +348,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         y: Math.max(-maxTranslateY, Math.min(maxTranslateY, translateY)),
       };
     };
-
     const resetZoom = () => {
         Animated.parallel([
           Animated.timing(zoomScale, { toValue: 1, duration: 300, easing: Easing.out(Easing.quad), useNativeDriver: true, }),
@@ -371,7 +358,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
           setIsZooming(false);
         });
       };
-
     const zoomToPoint = (scale, x = 0, y = 0) => {
         setIsZooming(true);
         Animated.parallel([
@@ -383,7 +369,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
           setIsZooming(false);
         });
       };
-
     return PanResponder.create({
       onStartShouldSetPanResponder: (evt) => {
         return evt.nativeEvent.touches.length >= 2 || zoomScale._value > 1; // Check scale value
@@ -510,7 +495,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       },
     });
   };
-
   // Post component with animations and carousel support - adapted from Post.js
   const PostItem = ({ item, index }) => {
     const isVideo = item.type === 'reel';
@@ -519,15 +503,51 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     const isMenuVisible = menuVisible[item._id] || false;
     // Check if current user owns this post
     const isOwnPost = item.author?._id === user?._id || item.user?._id === user?._id;
-    // Animation states for each post
+
+    // --- ✅ FIX: Enhanced initialization for likesCount (similar to Post.js FIX 1 for comments) ---
+    const [likesCount, setLikesCount] = useState(() => {
+        // Check all possible field names for likes count
+        const possibleCount =
+            item?.likeCount ||
+            item?.likes ||
+            item?.realTimeLikes || // Add any other potential field names here if they exist in your API
+            0;
+        console.log('📊 Initial likes count setup for PostItem:', {
+            postId: item?._id,
+            likeCount: item?.likeCount,
+            likes: item?.likes,
+            realTimeLikes: item?.realTimeLikes,
+            finalCount: possibleCount
+        });
+        return possibleCount;
+    });
     const [isLiked, setIsLiked] = useState(item.isLikedByUser || false);
-    const [likesCount, setLikesCount] = useState(item.likeCount || 0);
-    const [commentsCount, setCommentsCount] = useState(item.commentsCount || item.comments || 0);
+
+    // --- ✅ FIX: Enhanced initialization for commentsCount (similar to Post.js FIX 1) ---
+    const [commentsCount, setCommentsCount] = useState(() => {
+        // Check all possible field names for comments count
+        const possibleCount =
+            item?.commentsCount ||
+            item?.commentCount ||
+            item?.comments ||
+            item?.totalComments ||
+            item?.comment_count ||
+            item?.numberOfComments ||
+            0;
+        console.log('📊 Initial comments count setup for PostItem:', {
+            postId: item?._id,
+            commentsCount: item?.commentsCount,
+            commentCount: item?.commentCount,
+            comments: item?.comments,
+            totalComments: item?.totalComments,
+            finalCount: possibleCount
+        });
+        return possibleCount;
+    });
     const [likeOperationInProgress, setLikeOperationInProgress] = useState(false);
     // NEW: State for image carousel
     const [currentImageIndex, setCurrentImageIndex] = useState(0);
     const scrollViewRef = useRef(null);
-
     // --- NEW: Zoom state for each PostItem ---
     const [isZoomed, setIsZoomed] = useState(false);
     const [isZooming, setIsZooming] = useState(false);
@@ -536,23 +556,119 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     const zoomTranslateY = useRef(new Animated.Value(0)).current;
     const zoomPanResponder = useRef(createZoomPanResponder(zoomScale, zoomTranslateX, zoomTranslateY, setIsZoomed, setIsZooming)).current;
     // --- END: Zoom state ---
-
     // Animation refs - same as Post.js
     const heartScaleAnim = useRef(new Animated.Value(1)).current;
     const centerHeartAnim = useRef(new Animated.Value(0)).current;
     const centerHeartOpacity = useRef(new Animated.Value(0)).current;
     const heartFillAnim = useRef(new Animated.Value(isLiked ? 1 : 0)).current;
+
+    // --- ✅ FIX: Enhanced effect to sync likes count with more field checks ---
+    useEffect(() => {
+        const newLikesCount =
+            item?.likeCount ||
+            item?.likes ||
+            item?.realTimeLikes || // Add any other potential field names here if they exist in your API
+            0;
+        if (newLikesCount !== likesCount) {
+            console.log('❤️ Updating likes count from item prop change in PostItem:', likesCount, '->', newLikesCount);
+            setLikesCount(newLikesCount);
+        }
+    }, [
+        item?.likeCount,
+        item?.likes,
+        item?.realTimeLikes // Add dependencies for other potential fields
+    ]);
+
+    // --- ✅ FIX: Enhanced effect to sync comments count with more field checks ---
+    useEffect(() => {
+        const newCommentsCount =
+            item?.commentsCount ||
+            item?.commentCount ||
+            item?.comments ||
+            item?.totalComments ||
+            item?.comment_count ||
+            item?.numberOfComments ||
+            0;
+        if (newCommentsCount !== commentsCount) {
+            console.log('📝 Updating comments count from item prop change in PostItem:', commentsCount, '->', newCommentsCount);
+            setCommentsCount(newCommentsCount);
+        }
+    }, [
+        item?.commentsCount,
+        item?.commentCount,
+        item?.comments,
+        item?.totalComments,
+        item?.comment_count,
+        item?.numberOfComments
+    ]);
+
+    // --- ✅ FIX: Add effect to fetch actual comments count if it's missing AND fetch on load ---
+    useEffect(() => {
+        // Only fetch if we have a valid post ID and the user is authenticated
+        const postId = item?._id;
+        if (postId && token && isAuthenticated) { // Check isAuthenticated and token
+            fetchCommentsCount(postId);
+        }
+    }, [item?._id, token, isAuthenticated]); // Dependency on item ID, token, and isAuthenticated
+
+    // --- ✅ FIX: New function to fetch comments count from API (Adapted for PhotoViewerScreen context) ---
+    const fetchCommentsCount = async (postId) => {
+        try {
+            console.log('🔄 Fetching actual comments count for post in PostItem:', postId);
+            // Use the token from context
+            if (!token || !isAuthenticated) {
+                console.warn('⚠️ Not authenticated or token missing, skipping fetchCommentsCount');
+                return;
+            }
+            const response = await fetch(
+                `${BASE_URL}/api/v1/posts/${postId}/comments?page=1&limit=1`,
+                {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                }
+            );
+            if (response.ok) {
+                const result = await response.json();
+                if (result.success && result.data?.pagination?.totalComments !== undefined) {
+                    const actualCount = result.data.pagination.totalComments;
+                    console.log('✅ Fetched actual comments count for PostItem:', actualCount);
+                    // Only update if the fetched count is different or if local count was 0
+                    // This prevents overwriting a potentially fresher count passed in props
+                    if (actualCount !== commentsCount || commentsCount === 0) {
+                        setCommentsCount(actualCount);
+                    }
+                }
+            } else if (response.status === 401) {
+                 console.log('🔄 Got 401 in PostItem, attempting token refresh...');
+                 const refreshSuccess = await refreshToken();
+                 if (refreshSuccess) {
+                     // Retry the fetch after successful refresh
+                     console.log('🔄 Retrying fetchCommentsCount after token refresh...');
+                     fetchCommentsCount(postId); // Recursive call
+                 } else {
+                     console.error('❌ Token refresh failed during fetchCommentsCount');
+                 }
+            }
+        } catch (error) {
+            console.log('⚠️ Could not fetch comments count in PostItem:', error.message);
+            // Don't show error to user as this is a background operation
+        }
+    };
+
     // Enhanced image processing with URL sanitization and carousel support
     const processImages = () => {
-      console.log('🔍 Processing images for post:', item._id);
-      console.log('🔍 Available image data:', {
+      console.log('📸 Processing images for post:', item._id);
+      console.log('📸 Available image data:', {
         'item.images': item.images,
         'item.video': item.video,
         'isVideo': isVideo
       });
       // Handle video content
       if (isVideo && item.video?.url) {
-        console.log('📹 Video post detected:', item.video.url);
+        console.log('🎬 Video post detected:', item.video.url);
         const videoUri = sanitizeImageUrl(item.video.url);
         return [{ uri: videoUri, id: 0, isVideo: true }];
       }
@@ -679,7 +795,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         ]),
       ]).start();
     };
-    // Enhanced like handler with proper error handling - from Post.js
+
+    // --- ✅ FIX: Enhanced like handler with proper error handling and state updates (similar to Post.js) ---
     const handleLikePress = async () => {
       // Prevent multiple simultaneous like operations
       if (likeOperationInProgress) {
@@ -708,7 +825,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         const result = await handleLike(item._id, originalLikedState);
         if (result.success) {
           // Success - update with server response
-          const serverLikeCount = result.data?.likeCount || result.data?.realTimeLikes || newLikesCount;
+          const serverLikeCount = result.data?.likeCount !== undefined ? result.data.likeCount : result.data?.realTimeLikes || newLikesCount;
           const serverIsLiked = result.data?.isLiked !== undefined ? result.data.isLiked : newLikedState;
           console.log('Server response:', { serverIsLiked, serverLikeCount });
           setIsLiked(serverIsLiked);
@@ -729,17 +846,19 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         console.error('❌ Like operation error:', error);
         // Revert to original state on error
         setIsLiked(item.isLikedByUser || false);
-        setLikesCount(item.likeCount || 0);
+        setLikesCount(item.likeCount || item.likes || 0); // Revert to original prop values
         animateHeartButton(item.isLikedByUser || false);
         Alert.alert('Error', 'Failed to update like. Please try again.');
       } finally {
         setLikeOperationInProgress(false);
       }
     };
-    // Comment button press handler - from Post.js
+
+    // Comment button press handler - from Post.js (Updated to match new logic)
     const handleCommentPress = () => {
       console.log('=== COMMENT BUTTON PRESSED ===');
       console.log('Using Post ID:', item._id);
+      console.log('Current comments count:', commentsCount);
       if (!navigation) {
         console.error('❌ Navigation prop not available');
         Alert.alert('Error', 'Navigation not available');
@@ -751,12 +870,19 @@ const PhotoViewerScreen = ({ navigation, route }) => {
           postId: item._id,
           postData: {
             ...item,
-            commentsCount: commentsCount,
+            commentsCount: commentsCount, // Pass current count
             likesCount: likesCount,
           },
-          onCommentUpdate: (newCount) => {
-            console.log('📝 Comment count updated from:', commentsCount, 'to:', newCount);
-            setCommentsCount(newCount);
+          // ✅ Enhanced callback to properly update count (Similar to Post.js FIX 6)
+          onCommentUpdate: (newCount, realTimeComments) => {
+            console.log('📝 Comment count updated from CommentScreen in PostItem:');
+            console.log('  - New count:', newCount);
+            console.log('  - Real-time comments:', realTimeComments);
+            console.log('  - Previous count:', commentsCount);
+            // Use the real-time comments if available, otherwise use newCount
+            const finalCount = realTimeComments !== undefined ? realTimeComments : newCount;
+            console.log('  - Final count to set:', finalCount);
+            setCommentsCount(finalCount);
           }
         });
       } catch (navigationError) {
@@ -837,7 +963,6 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         </View>
       );
     };
-
     // --- NEW: Function to render a zoomable image view ---
     const renderZoomableImageView = (imageUri, imageId, isVideoType = false) => {
         if (isVideoType) {
@@ -849,8 +974,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                     resizeMode="cover"
                     paused={true}
                     onError={(error) => {
-                        console.log(`❌ Video error:`, error);
-                        console.log(`❌ Failed video URI:`, imageUri);
+                        console.log(`🎬 Video error:`, error);
+                        console.log(`🎬 Failed video URI:`, imageUri);
                     }}
                 />
             );
@@ -873,18 +998,17 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                     source={{ uri: imageUri }}
                     style={styles.postImage}
                     onError={(error) => {
-                        console.log(`❌ Zoomable Image error:`, error?.nativeEvent?.error);
-                        console.log(`❌ Failed image URI:`, imageUri);
+                        console.log(`📸 Zoomable Image error:`, error?.nativeEvent?.error);
+                        console.log(`📸 Failed image URI:`, imageUri);
                     }}
                     onLoad={() => {
-                        console.log(`✅ Zoomable Image loaded successfully:`, imageUri);
+                        console.log(`📸 Zoomable Image loaded successfully:`, imageUri);
                     }}
                 />
             </Animated.View>
         );
     };
     // --- END: renderZoomableImageView ---
-
     // Render image carousel or single image
     const renderImageContent = () => {
       // Safety check - ensure we have valid images
@@ -1075,14 +1199,15 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                 </Text>
               </TouchableOpacity>
             )}
-            {/* Clickable comments count */}
-            {commentsCount > 0 && (
-              <TouchableOpacity onPress={handleCommentPress} activeOpacity={0.8}>
-                <Text style={styles.commentsText}>
-                  View all {commentsCount} {commentsCount === 1 ? 'comment' : 'comments'}
-                </Text>
-              </TouchableOpacity>
-            )}
+            {/* ✅ FIX 7: Always show comments, with dynamic text based on count */}
+            <TouchableOpacity onPress={handleCommentPress} activeOpacity={0.8}>
+              <Text style={styles.commentsText}>
+                {commentsCount > 0
+                  ? `View all ${commentsCount} ${commentsCount === 1 ? 'comment' : 'comments'}`
+                  : 'Add a comment...'
+                }
+              </Text>
+            </TouchableOpacity>
             {item.createdAt && (
               <Text style={styles.timeText}>{formatTimeAgo(item.createdAt)}</Text>
             )}
@@ -1397,11 +1522,13 @@ const styles = StyleSheet.create({
     color: '#888',
     fontSize: 12,
     marginBottom: 4,
+    fontWeight: '600',
   },
   commentsText: {
     color: '#888',
     fontSize: 12,
     marginBottom: 4,
+    fontWeight: '500',
     textDecorationLine: 'underline',
   },
   timeText: {

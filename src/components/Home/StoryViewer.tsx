@@ -825,7 +825,7 @@ const StoryViewer = () => {
             <TextInput
               ref={inlineInputRef}
               style={styles.replyTextInput}
-              placeholder="Send message"
+              placeholder="Comment on this story"
               placeholderTextColor="rgba(255,255,255,0.6)"
               value={inlineReplyText}
               onChangeText={setInlineReplyText}

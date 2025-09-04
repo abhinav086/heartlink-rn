@@ -18,6 +18,7 @@ import {
   Dimensions,
   AppState,
   Linking,
+  PermissionsAndroid, // ADDED: Import for requesting microphone permission
 } from 'react-native';
 // ADDED: Import useFocusEffect for screen focus events
 import { useFocusEffect } from '@react-navigation/native';
@@ -478,17 +479,14 @@ const ChatDetailScreen = () => {
   const markMessagesAsRead = async (specificMessageIds = null) => {
     try {
       if (!token || !conversationId) return;
-
       const payload = { conversationId };
       if (specificMessageIds && specificMessageIds.length > 0) {
         payload.messageIds = specificMessageIds;
       }
-
       // Get unread message IDs before marking as read
       const unreadMessageIds = messages
         .filter(msg => msg.sender._id !== currentUser._id && msg.status !== 'read')
         .map(msg => msg._id);
-
       const response = await fetch(`${BASE_URL}/api/v1/chat/messages/bulk-seen`, {
         method: 'POST',
         headers: {
@@ -497,7 +495,6 @@ const ChatDetailScreen = () => {
         },
         body: JSON.stringify(payload),
       });
-
       const data = await response.json();
       if (response.ok && data.success) {
         // Update local state
@@ -508,7 +505,6 @@ const ChatDetailScreen = () => {
           return msg;
         }));
         setUnseenCount(0);
-
         // IMPORTANT: Emit socket event to notify sender about read status
         if (socket && socket.connected && unreadMessageIds.length > 0) {
           socket.emit('messagesRead', {
@@ -646,7 +642,6 @@ const ChatDetailScreen = () => {
     // Message status updates - FIXED VERSION
     const handleMessageStatusUpdate = (data) => {
       console.log('📊 Message status update received:', data);
-
       // Update messages for both single message and bulk updates
       setMessages(prev => prev.map(msg => {
         // Check if this is a message sent by the current user
@@ -672,16 +667,13 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
-
     // Bulk message status updates - FIXED VERSION
     const handleBulkMessageStatusUpdate = (data) => {
       console.log('📊 Bulk message status update received:', data);
-
       setMessages(prev => prev.map(msg => {
         // Update all messages sent by current user that are now read
         if (msg.sender._id === currentUser._id &&
           data.conversationId === conversationId) {
-
           // If messageIds array is provided, check if this message is in it
           if (data.messageIds && Array.isArray(data.messageIds)) {
             if (data.messageIds.includes(msg._id)) {
@@ -705,11 +697,9 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
-
     // Add this new handler for real-time read receipts
     const handleMessageRead = (data) => {
       console.log('👁️ Message read event received:', data);
-
       setMessages(prev => prev.map(msg => {
         // Update message if it matches the read message ID or is part of bulk read
         if (msg.sender._id === currentUser._id) {
@@ -722,7 +712,6 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
-
     // Conversation joined confirmation
     const handleJoinedConversation = (data) => {
       console.log('✅ Successfully joined conversation:', data);
@@ -1146,7 +1135,7 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
           PermissionsAndroid.PERMISSIONS.CAMERA,
           {
             title: 'Camera Permission',
-            message: 'This app needs access to your camera to take photos.',
+            message: 'This app needs access to your camera to take photos/videos.',
             buttonNeutral: 'Ask Me Later',
             buttonNegative: 'Cancel',
             buttonPositive: 'OK',
@@ -1160,12 +1149,54 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
     }
     return true;
   };
+
+  // ADDED: Request microphone permission for video recording
+  const requestMicrophonePermission = async () => {
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Microphone Permission',
+            message: 'This app needs access to your microphone to record videos.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (err) {
+        console.warn('Microphone permission error:', err);
+        return false;
+      }
+    }
+    // iOS permissions are typically handled by the native picker
+    return true;
+  };
+
+  // ADDED: Combined function to request both camera and microphone permissions
+  const requestCameraAndMicrophonePermissions = async () => {
+    const cameraGranted = await requestCameraPermission();
+    if (!cameraGranted) {
+      Alert.alert('Permission Denied', 'Camera permission is required to take photos/videos.');
+      return false;
+    }
+
+    const micGranted = await requestMicrophonePermission();
+    if (!micGranted) {
+      Alert.alert('Permission Denied', 'Microphone permission is required to record videos.');
+      return false;
+    }
+
+    return true;
+  };
+
   const openCamera = async () => {
     if (!ImagePicker) {
       Alert.alert('Error', 'Image picker not available');
       return;
     }
-    const hasPermission = await requestCameraPermission();
+    const hasPermission = await requestCameraPermission(); // Reuse existing camera permission
     if (!hasPermission) {
       Alert.alert('Permission Denied', 'Camera permission is required to take photos.');
       return;
@@ -1193,6 +1224,67 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       }
     });
   };
+
+
+  // ADDED: New function for recording video
+  const recordVideo = async () => {
+    if (!ImagePicker) {
+      Alert.alert('Error', 'Image/Video picker not available');
+      return;
+    }
+    const hasPermissions = await requestCameraAndMicrophonePermissions(); // Request both permissions
+    if (!hasPermissions) {
+      // Alerts are shown inside requestCameraAndMicrophonePermissions
+      return;
+    }
+    setShowAttachmentModal(false); // Close the modal
+
+    const options = {
+      mediaType: 'video', // Specify video
+      // You can add quality, max duration settings if supported by your ImagePicker version
+      // videoQuality: 'high', // Example (check ImagePicker docs)
+      // durationLimit: 30,    // Example: 30 seconds max (check ImagePicker docs)
+    };
+
+    // Use launchCamera for recording directly
+    ImagePicker.launchCamera(options, async (response) => {
+      console.log('Video Picker Response:', response); // Log the response structure
+      if (response.didCancel || response.errorCode || response.errorMessage) {
+        console.log('Video recording cancelled or failed:', response.errorMessage || response.errorCode);
+        return;
+      }
+
+      // Check if assets exist and get the first one (video)
+      if (response.assets && response.assets.length > 0) {
+        const asset = response.assets[0];
+        console.log('Selected Video Asset:', asset); // Log asset details
+
+        // Prepare file data similar to image capture
+        // Ensure the URI, type, and name are correctly extracted
+        const fileData = {
+          uri: asset.uri,
+          type: asset.type || 'video/mp4', // Default type if not provided
+          name: asset.fileName || `recorded_video_${Date.now()}.mp4`, // Default name
+          // Include size if available
+          size: asset.fileSize,
+        };
+
+        setUploadingFile(true); // Show uploading indicator
+        try {
+          // Use the existing sendMessage function with 'video' type
+          await sendMessage('video', fileData);
+        } catch (error) {
+             console.error("Error sending recorded video:", error);
+             Alert.alert("Send Error", "Failed to send recorded video.");
+             setUploadingFile(false); // Hide indicator on error
+        }
+      } else {
+        console.log('No video asset found in response');
+        setUploadingFile(false); // Hide indicator if no asset
+      }
+    });
+  };
+
   const openGallery = () => {
     if (!ImagePicker) {
       Alert.alert('Error', 'Image picker not available');
@@ -1614,6 +1706,13 @@ Would you like to open this file?`,
             <TouchableOpacity style={styles.attachmentOption} onPress={openGallery}>
               <Ionicons name="images" size={24} color="#FF6B9D" />
               <Text style={styles.attachmentOptionText}>Gallery</Text>
+            </TouchableOpacity>
+          )}
+          {/* ADDED: Record Video Option */}
+          {ImagePicker && (
+            <TouchableOpacity style={styles.attachmentOption} onPress={recordVideo}>
+              <Ionicons name="videocam" size={24} color="#FF6B9D" />
+              <Text style={styles.attachmentOptionText}>Record Video</Text>
             </TouchableOpacity>
           )}
           {DocumentPicker && (

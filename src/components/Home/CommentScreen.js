@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import Modal from 'react-native-modal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation, useRoute } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native'; // Corrected import
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const CommentScreen = () => {
@@ -52,7 +52,7 @@ const CommentScreen = () => {
     hasPrevPage: false,
     commentsOnPage: 0
   });
-  
+
   // Refs
   const textInputRef = useRef(null);
   const scrollViewRef = useRef(null);
@@ -60,7 +60,7 @@ const CommentScreen = () => {
   // Character limit for comments
   const MAX_COMMENT_LENGTH = 500;
 
-  // API Base URL
+  // API Base URL - Fixed trailing space
   const BASE_URL = 'https://backendforheartlink.in';
 
   // ✅ ENHANCED: Better modal close handling
@@ -79,7 +79,7 @@ const CommentScreen = () => {
       if (!token) {
         throw new Error('No authentication token available');
       }
-      
+
       return {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -122,9 +122,9 @@ const CommentScreen = () => {
       } else {
         console.warn('No user data found in AsyncStorage');
         // Try alternative storage keys
-        const altUserJson = await AsyncStorage.getItem('userData') || 
-                           await AsyncStorage.getItem('currentUser') ||
-                           await AsyncStorage.getItem('userInfo');
+        const altUserJson = await AsyncStorage.getItem('userData') ||
+          await AsyncStorage.getItem('currentUser') ||
+          await AsyncStorage.getItem('userInfo');
         if (altUserJson) {
           const user = JSON.parse(altUserJson);
           console.log('User found in alternative storage:', user);
@@ -168,7 +168,7 @@ const CommentScreen = () => {
   const loadComments = async (page = 1, limit = 10) => {
     try {
       setLoading(page === 1);
-      
+
       // Enhanced debugging
       console.log('=== LOADING COMMENTS DEBUG ===');
       console.log('Content Type:', contentType);
@@ -179,7 +179,7 @@ const CommentScreen = () => {
       console.log('Is Reel:', isReel);
       console.log('Actual ID:', actualId);
       console.log('Page:', page, 'Limit:', limit);
-      
+
       // Validate required data
       if (!actualId) {
         console.error('❌ No actualId found');
@@ -189,14 +189,14 @@ const CommentScreen = () => {
 
       const headers = await getAuthHeaders();
       console.log('✅ Auth headers prepared');
-      
-      const apiUrl = isReel 
+
+      const apiUrl = isReel
         ? `${BASE_URL}/api/v1/posts/reels/${actualId}/comments?page=${page}&limit=${limit}`
         : `${BASE_URL}/api/v1/posts/${actualId}/comments?page=${page}&limit=${limit}`;
-      
+
       console.log('🔗 API URL:', apiUrl);
       console.log('📋 Request headers:', JSON.stringify(headers, null, 2));
-      
+
       const response = await fetch(apiUrl, {
         method: 'GET',
         headers,
@@ -208,18 +208,18 @@ const CommentScreen = () => {
       if (response.ok) {
         const result = await response.json();
         console.log('✅ Full API response:', JSON.stringify(result, null, 2));
-        
+
         if (result.success && result.data) {
           const commentsData = result.data.comments || [];
           console.log('📝 Comments data:', commentsData.length, 'comments found');
           console.log('📊 Pagination data:', result.data.pagination);
-          
+
           if (page === 1) {
             setComments(commentsData);
           } else {
             setComments(prevComments => [...prevComments, ...commentsData]);
           }
-          
+
           if (result.data.pagination) {
             setPagination(result.data.pagination);
             setCommentsCount(result.data.pagination.totalComments);
@@ -241,7 +241,7 @@ const CommentScreen = () => {
             console.log('⚠️ No onCommentUpdate callback or content data missing');
             console.log('onCommentUpdate exists:', !!onCommentUpdate);
             console.log('Content data exists:', !!result.data[isReel ? 'reel' : 'post']);
-            
+
             // ✅ FALLBACK: Still try to update parent with available data
             if (onCommentUpdate) {
               const fallbackCount = result.data.pagination?.totalComments || commentsData.length;
@@ -261,14 +261,14 @@ const CommentScreen = () => {
       } else {
         const errorText = await response.text();
         console.error('❌ API Error Response:', errorText);
-        
+
         let errorData;
         try {
           errorData = JSON.parse(errorText);
         } catch (e) {
           errorData = { message: errorText };
         }
-        
+
         if (response.status === 404) {
           console.log('📭 Content not found or no comments');
           setComments([]);
@@ -289,9 +289,9 @@ const CommentScreen = () => {
     } catch (error) {
       console.error('💥 Load comments error:', error);
       console.error('Error stack:', error.stack);
-      
+
       let errorMessage = 'Failed to load comments. Please try again.';
-      
+
       if (error.message.includes('Network request failed')) {
         errorMessage = 'Please check your internet connection and try again';
       } else if (error.message.includes('No authentication token')) {
@@ -299,7 +299,7 @@ const CommentScreen = () => {
       } else if (error.message) {
         errorMessage = error.message;
       }
-      
+
       Alert.alert('Error', errorMessage);
       setComments([]);
     } finally {
@@ -318,7 +318,7 @@ const CommentScreen = () => {
   // ✅ ENHANCED: Better comment submission with improved error handling
   const addComment = async () => {
     const trimmedComment = commentText.trim();
-    
+
     // Validation
     if (!trimmedComment) {
       Alert.alert('Error', 'Comment cannot be empty');
@@ -350,15 +350,15 @@ const CommentScreen = () => {
         username: currentUser.username || currentUser.name,
         email: currentUser.email
       });
-      
+
       const headers = await getAuthHeaders();
       console.log('Using headers with token');
 
       // Use consistent /api/v1/posts base URL for both posts and reels
-      const apiUrl = isReel 
+      const apiUrl = isReel
         ? `${BASE_URL}/api/v1/posts/reels/${actualId}/comment`
         : `${BASE_URL}/api/v1/posts/${actualId}/comment`;
-      
+
       console.log('Making request to:', apiUrl);
 
       const requestBody = {
@@ -385,15 +385,15 @@ const CommentScreen = () => {
       if (result.success) {
         // SUCCESS: Handle response following API guide format
         console.log('Comment created successfully!');
-        
+
         // Get the new comment from the response
         const newComment = result.data?.comment;
         const updatedCommentCount = result.data?.commentCount || commentsCount + 1;
         const realTimeComments = result.data?.realTimeComments || updatedCommentCount;
-        
+
         console.log('New comment from API:', newComment);
         console.log('Updated comment count:', updatedCommentCount);
-        
+
         // Create proper comment object with API response data
         const commentToAdd = newComment || {
           _id: Date.now().toString(),
@@ -411,48 +411,48 @@ const CommentScreen = () => {
           canEdit: true,
           canDelete: true
         };
-        
+
         console.log('Comment to add to UI:', commentToAdd);
-        
+
         // Add new comment to the top of the list (like social media apps)
         setComments(prevComments => [commentToAdd, ...prevComments]);
         setCommentsCount(updatedCommentCount);
-        
+
         // Update pagination
         setPagination(prev => ({
           ...prev,
           totalComments: updatedCommentCount,
           commentsOnPage: prev.commentsOnPage + 1
         }));
-        
+
         // Clear input
         setCommentText('');
-        
+
         // ✅ ENHANCED: Better parent component update
         if (onCommentUpdate) {
           console.log('🔄 Updating parent component with:', { updatedCommentCount, realTimeComments });
           onCommentUpdate(updatedCommentCount, realTimeComments);
         }
-        
+
         // Scroll to top to show new comment
         setTimeout(() => {
           scrollViewRef.current?.scrollTo({ y: 0, animated: true });
         }, 100);
-        
+
         // Blur text input
         textInputRef.current?.blur();
-        
+
         // Show success message from API or default
         console.log(result.message || 'Comment posted successfully!');
-        
+
       } else {
         throw new Error(result.message || 'Failed to post comment');
       }
     } catch (error) {
       console.error('Error adding comment:', error);
-      
+
       let errorMessage = 'Failed to post comment. Please try again.';
-      
+
       if (error.message.includes('401') || error.message.includes('authentication')) {
         errorMessage = 'Please log in again to comment';
       } else if (error.message.includes('404')) {
@@ -466,7 +466,7 @@ const CommentScreen = () => {
       } else if (error.message) {
         errorMessage = error.message;
       }
-      
+
       Alert.alert('Error', errorMessage);
     } finally {
       setSubmitting(false);
@@ -483,7 +483,7 @@ const CommentScreen = () => {
     const hasProfilePic = userImg && userImg.trim() !== '';
     const commentContent = safeGet(comment, 'content', safeGet(comment, 'text', ''));
     const isVerified = safeGet(user, 'isVerified', false);
-    
+
     // Format time - prioritize timeAgo from API
     let timeAgo = '';
     if (comment.timeAgo) {
@@ -495,7 +495,7 @@ const CommentScreen = () => {
       const diffMins = Math.floor(diffMs / 60000);
       const diffHours = Math.floor(diffMins / 60);
       const diffDays = Math.floor(diffHours / 24);
-      
+
       if (diffMins < 1) {
         timeAgo = 'just now';
       } else if (diffMins < 60) {
@@ -506,10 +506,10 @@ const CommentScreen = () => {
         timeAgo = `${diffDays}d`;
       }
     }
-    
+
     // Check if this comment is from current user
     const isOwnComment = comment.isCommentByCurrentUser || (currentUser && (
-      user._id === currentUser._id || 
+      user._id === currentUser._id ||
       user.id === currentUser.id ||
       user._id === currentUser.id ||
       user.id === currentUser._id
@@ -520,8 +520,8 @@ const CommentScreen = () => {
         <View style={styles.commentAvatar}>
           <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
             {hasProfilePic ? (
-              <Image 
-                source={{ uri: userImg }} 
+              <Image
+                source={{ uri: userImg }}
                 style={styles.profileImage}
                 onError={(error) => {
                   console.log('Comment user image error:', error?.nativeEvent?.error);
@@ -534,7 +534,7 @@ const CommentScreen = () => {
             )}
           </View>
         </View>
-        
+
         <View style={styles.commentContent}>
           <View style={styles.commentBubble}>
             <View style={styles.commentHeader}>
@@ -549,7 +549,7 @@ const CommentScreen = () => {
             <Text style={styles.commentTime}>{timeAgo}</Text>
           )}
         </View>
-        
+
         {isOwnComment && (
           <View style={styles.commentActions}>
             <Text style={styles.ownCommentIndicator}>•</Text>
@@ -572,10 +572,50 @@ const CommentScreen = () => {
     </View>
   );
 
-  // Modal content
+  // --- ENHANCED ScrollView Props for Better Scrolling ---
+  // Comments List
+  const renderCommentsList = () => (
+    <ScrollView
+      ref={scrollViewRef}
+      style={styles.commentsContainer}
+      contentContainerStyle={styles.commentsContentContainer} // Add this style
+      showsVerticalScrollIndicator={false}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={onRefresh}
+          tintColor="#fff"
+        />
+      }
+      // --- KEY SCROLL IMPROVEMENTS ---
+      scrollEnabled={true} // Explicitly enable scrolling
+      bounces={true}       // Enable bouncing for better UX
+      nestedScrollEnabled={true} // Allow nested scrolling if needed
+      keyboardShouldPersistTaps="handled" // Prevent keyboard from interfering with scroll taps
+    >
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#1DA1F2" />
+          <Text style={styles.loadingText}>Loading comments...</Text>
+        </View>
+      ) : comments.length === 0 ? (
+        <View style={styles.emptyContainer}>
+          <Ionicons name="chatbubble-outline" size={50} color="#666" />
+          <Text style={styles.emptyText}>No comments yet</Text>
+          <Text style={styles.emptySubtext}>Be the first to comment!</Text>
+        </View>
+      ) : (
+        <View style={styles.commentsList}>
+          {comments.map((comment, index) => renderComment(comment, index))}
+        </View>
+      )}
+    </ScrollView>
+  );
+
+  // Modal content - Updated to use the new renderCommentsList function
   const renderModalContent = () => (
     <SafeAreaView style={styles.modalContainer}>
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         style={styles.keyboardContainer}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
@@ -583,36 +623,8 @@ const CommentScreen = () => {
         {/* Header */}
         {renderHeader()}
 
-        {/* Comments List */}
-        <ScrollView
-          ref={scrollViewRef}
-          style={styles.commentsContainer}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              tintColor="#fff"
-            />
-          }
-        >
-          {loading ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#1DA1F2" />
-              <Text style={styles.loadingText}>Loading comments...</Text>
-            </View>
-          ) : comments.length === 0 ? (
-            <View style={styles.emptyContainer}>
-              <Ionicons name="chatbubble-outline" size={50} color="#666" />
-              <Text style={styles.emptyText}>No comments yet</Text>
-              <Text style={styles.emptySubtext}>Be the first to comment!</Text>
-            </View>
-          ) : (
-            <View style={styles.commentsList}>
-              {comments.map((comment, index) => renderComment(comment, index))}
-            </View>
-          )}
-        </ScrollView>
+        {/* Comments List - Updated */}
+        {renderCommentsList()}
 
         {/* Comment Input */}
         <View style={styles.inputContainer}>
@@ -620,8 +632,8 @@ const CommentScreen = () => {
             {currentUser && (
               <View style={[styles.avatar, { backgroundColor: '#1DA1F2' }]}>
                 {currentUser.photoUrl || currentUser.profilePicture ? (
-                  <Image 
-                    source={{ uri: currentUser.photoUrl || currentUser.profilePicture }} 
+                  <Image
+                    source={{ uri: currentUser.photoUrl || currentUser.profilePicture }}
                     style={styles.profileImage}
                   />
                 ) : (
@@ -632,7 +644,7 @@ const CommentScreen = () => {
               </View>
             )}
           </View>
-          
+
           <View style={styles.inputWrapper}>
             <TextInput
               ref={textInputRef}
@@ -651,7 +663,7 @@ const CommentScreen = () => {
               {commentText.length}/{MAX_COMMENT_LENGTH}
             </Text>
           </View>
-          
+
           <TouchableOpacity
             style={[
               styles.sendButton,
@@ -710,12 +722,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    maxHeight: '90%',
-    minHeight: '70%',
-    flex: 1,
+    // Removed maxHeight/minHeight here, rely on flex
+    flex: 1, // Take up available space within the modal
   },
   keyboardContainer: {
-    flex: 1,
+    flex: 1, // Ensure it takes full height
   },
   header: {
     flexDirection: 'row',
@@ -740,8 +751,13 @@ const styles = StyleSheet.create({
     width: 34, // Same as close button to center title
   },
   commentsContainer: {
-    flex: 1,
-    paddingHorizontal: 15,
+    // paddingHorizontal: 15, // Move padding inside contentContainer if needed
+    flex: 1, // Crucial: Take up remaining space
+  },
+  // Add this new style for content container padding
+  commentsContentContainer: {
+    paddingHorizontal: 15, // Apply horizontal padding here
+    // paddingVertical can also go here if needed
   },
   loadingContainer: {
     flex: 1,
