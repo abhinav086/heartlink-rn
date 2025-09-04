@@ -20,6 +20,7 @@ import {
   Platform,
   Keyboard, // Added Keyboard import
   PanResponder, // Import PanResponder for zoom
+  TouchableWithoutFeedback // ✅ NEW: Added for double tap detection
 } from 'react-native';
 import Video from 'react-native-video';
 import Ionicons from 'react-native-vector-icons/Ionicons';
@@ -475,16 +476,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
               lastTranslateX = clampedZoom.x;
               lastTranslateY = clampedZoom.y;
             }
-          } else if (tapCount === 1 && zoomScale._value <= 1 && gestureState.dx < 10 && gestureState.dy < 10) { // Check scale value
-             // Handle potential single tap for double tap detection
-             setTimeout(() => {
-              if (tapCount === 1) {
-                 // Optional: Add logic for single tap if needed
-                 // handleSingleTap(); // Define this function if needed
-                tapCount = 0;
-              }
-            }, 300);
-          }
+          } 
           setIsZoomed(currentScale > 1);
         }
       },
@@ -556,6 +548,11 @@ const PhotoViewerScreen = ({ navigation, route }) => {
     const zoomTranslateY = useRef(new Animated.Value(0)).current;
     const zoomPanResponder = useRef(createZoomPanResponder(zoomScale, zoomTranslateX, zoomTranslateY, setIsZoomed, setIsZooming)).current;
     // --- END: Zoom state ---
+
+    // ✅ NEW: Enhanced double tap detection refs (like in Post.js)
+    const lastTapRef = useRef(null);
+    const tapTimeoutRef = useRef(null);
+
     // Animation refs - same as Post.js
     const heartScaleAnim = useRef(new Animated.Value(1)).current;
     const centerHeartAnim = useRef(new Animated.Value(0)).current;
@@ -610,6 +607,15 @@ const PhotoViewerScreen = ({ navigation, route }) => {
             fetchCommentsCount(postId);
         }
     }, [item?._id, token, isAuthenticated]); // Dependency on item ID, token, and isAuthenticated
+
+    // Cleanup timeout on unmount
+    useEffect(() => {
+      return () => {
+        if (tapTimeoutRef.current) {
+          clearTimeout(tapTimeoutRef.current);
+        }
+      };
+    }, []);
 
     // --- ✅ FIX: New function to fetch comments count from API (Adapted for PhotoViewerScreen context) ---
     const fetchCommentsCount = async (postId) => {
@@ -796,6 +802,53 @@ const PhotoViewerScreen = ({ navigation, route }) => {
       ]).start();
     };
 
+    // ✅ NEW: Enhanced double tap handler specifically for liking (like in Post.js)
+    const handleImageDoubleTap = () => {
+      console.log('💖 Double tap detected on image - attempting to like');
+      
+      // Always trigger like on double tap, regardless of current state
+      if (!likeOperationInProgress) {
+        // If already liked, we could either do nothing or unlike
+        // For Instagram-like behavior, double tap should always like (not toggle)
+        if (!isLiked) {
+          console.log('💖 Post not liked - liking now');
+          handleLikePress();
+        } else {
+          console.log('💖 Post already liked - showing heart animation anyway');
+          // Show the heart animation even if already liked
+          animateCenterHeart();
+        }
+      } else {
+        console.log('💖 Like operation in progress - ignoring double tap');
+      }
+    };
+
+    // ✅ NEW: Improved double tap detection for images (like in Post.js)
+    const handleImagePress = () => {
+      const now = Date.now();
+      const DOUBLE_TAP_DELAY = 300;
+
+      if (tapTimeoutRef.current) {
+        clearTimeout(tapTimeoutRef.current);
+      }
+
+      if (lastTapRef.current && (now - lastTapRef.current) < DOUBLE_TAP_DELAY) {
+        // Double tap detected
+        console.log('🔥 Double tap detected!');
+        lastTapRef.current = null; // Reset to prevent triple tap issues
+        handleImageDoubleTap();
+      } else {
+        // Single tap - wait to see if another tap comes
+        lastTapRef.current = now;
+        tapTimeoutRef.current = setTimeout(() => {
+          // Single tap confirmed (no second tap within delay)
+          console.log('👆 Single tap confirmed');
+          lastTapRef.current = null;
+          // You could add single tap behavior here if needed
+        }, DOUBLE_TAP_DELAY);
+      }
+    };
+
     // --- ✅ FIX: Enhanced like handler with proper error handling and state updates (similar to Post.js) ---
     const handleLikePress = async () => {
       // Prevent multiple simultaneous like operations
@@ -914,25 +967,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         Alert.alert('Error', 'Navigation not available');
       }
     };
-    // Double tap to like functionality
-    let lastTap = null;
-    const handleDoubleTap = () => {
-      const now = Date.now();
-      const DOUBLE_PRESS_DELAY = 300;
-      if (lastTap && (now - lastTap) < DOUBLE_PRESS_DELAY) {
-        // Only like if not already liked and not in progress
-        if (!isLiked && !likeOperationInProgress) {
-          console.log('💖 Double tap detected - liking post');
-          handleLikePress();
-        } else if (isLiked) {
-          console.log('💖 Double tap detected but post already liked');
-        } else {
-          console.log('💖 Double tap detected but like operation in progress');
-        }
-      } else {
-        lastTap = now;
-      }
-    };
+
     const handleProfilePress = () => {
       try {
         console.log('Profile press triggered for:', authorName);
@@ -963,7 +998,8 @@ const PhotoViewerScreen = ({ navigation, route }) => {
         </View>
       );
     };
-    // --- NEW: Function to render a zoomable image view ---
+
+    // --- ✅ ENHANCED: Function to render a zoomable image view with double tap support ---
     const renderZoomableImageView = (imageUri, imageId, isVideoType = false) => {
         if (isVideoType) {
             return (
@@ -981,31 +1017,33 @@ const PhotoViewerScreen = ({ navigation, route }) => {
             );
         }
         return (
-            <Animated.View
-                style={[
-                    styles.zoomableImageContainer, // New style for the container
-                    {
-                        transform: [
-                            { scale: zoomScale },
-                            { translateX: zoomTranslateX },
-                            { translateY: zoomTranslateY },
-                        ],
-                    },
-                ]}
-                {...zoomPanResponder.panHandlers}
-            >
-                <Image
-                    source={{ uri: imageUri }}
-                    style={styles.postImage}
-                    onError={(error) => {
-                        console.log(`📸 Zoomable Image error:`, error?.nativeEvent?.error);
-                        console.log(`📸 Failed image URI:`, imageUri);
-                    }}
-                    onLoad={() => {
-                        console.log(`📸 Zoomable Image loaded successfully:`, imageUri);
-                    }}
-                />
-            </Animated.View>
+            <TouchableWithoutFeedback onPress={handleImagePress}>
+              <Animated.View
+                  style={[
+                      styles.zoomableImageContainer, // New style for the container
+                      {
+                          transform: [
+                              { scale: zoomScale },
+                              { translateX: zoomTranslateX },
+                              { translateY: zoomTranslateY },
+                          ],
+                      },
+                  ]}
+                  {...zoomPanResponder.panHandlers}
+              >
+                  <Image
+                      source={{ uri: imageUri }}
+                      style={styles.postImage}
+                      onError={(error) => {
+                          console.log(`📸 Zoomable Image error:`, error?.nativeEvent?.error);
+                          console.log(`📸 Failed image URI:`, imageUri);
+                      }}
+                      onLoad={() => {
+                          console.log(`📸 Zoomable Image loaded successfully:`, imageUri);
+                      }}
+                  />
+              </Animated.View>
+            </TouchableWithoutFeedback>
         );
     };
     // --- END: renderZoomableImageView ---
@@ -1049,7 +1087,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
                     key={image.id || index}
                     style={styles.carouselImageContainer}
                   >
-                    {/* Render zoomable image view */}
+                    {/* Render zoomable image view with double tap support */}
                     {renderZoomableImageView(image.uri, image.id, image.isVideo)}
                   </View>
                 );
@@ -1093,7 +1131,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
           <View style={styles.imageContainer}>
             {/* Use View instead of TouchableOpacity for better PanResponder handling */}
             <View style={styles.postImageContainer}>
-              {/* Render zoomable image view */}
+              {/* Render zoomable image view with double tap support */}
               {renderZoomableImageView(postImages[0].uri, postImages[0].id, postImages[0].isVideo)}
               {/* Center heart animation overlay */}
               <Animated.View
@@ -1180,7 +1218,7 @@ const PhotoViewerScreen = ({ navigation, route }) => {
             </View>
           )}
         </View>
-        {/* Enhanced image content with zoom support */}
+        {/* Enhanced image content with zoom support and double tap */}
         {renderImageContent()}
         {/* Action buttons below post*/}
         <View style={styles.postFooterContainer}>
