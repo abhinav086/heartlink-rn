@@ -114,6 +114,15 @@ const ReelsScreen = ({ navigation }: any) => {
     if (count < 1000000) return `${(count / 1000).toFixed(1)}K`;
     return `${(count / 1000000).toFixed(1)}M`;
   }, []);
+
+  const getRealViewCount = useCallback((reel: any) => {
+    if (!reel) return 0;
+    const safeNumber = (value: any, fallback: number = 0) => {
+      const num = Number(value);
+      return isNaN(num) ? fallback : num;
+    };
+    return safeNumber(reel.viewCount) || safeNumber(reel.realTimeViews) || safeNumber(reel.views) || 0;
+  }, []);
   // --- END: Functions from ReelsViewerScreen ---
 
   const getAuthHeaders = async () => {
@@ -849,8 +858,9 @@ const ReelsScreen = ({ navigation }: any) => {
       const isPaused = manualPaused[item._id] || !isActive || !isFocused;
       const likeCount = item.likes?.length || 0;
       const commentCount = item.commentCount || item.comments?.length || 0;
-      const viewCount = item.viewCount || 0;
+      const viewCount = getRealViewCount(item);
       const viewAnimation = viewCountAnimations[item._id];
+      const displayViewCount = String(formatViewCount(viewCount));
 
       return (
         <View style={styles.reelContainer}>
@@ -925,7 +935,7 @@ const ReelsScreen = ({ navigation }: any) => {
             </TouchableOpacity>
             <TouchableOpacity style={styles.actionButton} activeOpacity={0.7}>
               <Icon name="eye-outline" size={26} color="#fff" style={styles.actionIcon} />
-              <Text style={styles.actionCount}>{formatViewCount(viewCount)}</Text>
+              <Text style={styles.actionCount}>{displayViewCount}</Text>
               {viewAnimation && (
                 <Animated.View
                   style={[
@@ -999,6 +1009,7 @@ const ReelsScreen = ({ navigation }: any) => {
       togglePauseForReel,
       openComments,
       handleProfilePress,
+      getRealViewCount,
       formatViewCount,
       viewCountAnimations,
     ]
