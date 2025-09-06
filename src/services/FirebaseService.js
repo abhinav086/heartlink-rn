@@ -1,100 +1,177 @@
-// services/FirebaseService.ts
+// services/FirebaseService.js - Fixed version with proper Android icon handling
 import messaging from '@react-native-firebase/messaging';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform, Alert, PermissionsAndroid } from 'react-native';
-import BASE_URL from '../config/config';
+import notifee, { AndroidStyle } from '@notifee/react-native';
+import { Platform, Alert } from 'react-native';
+import DeviceInfo from 'react-native-device-info';
+
+// Import your API config
+import { BASE_URL } from '../config/config';
+
 
 class FirebaseService {
-  private navigationRef: any = null;
-  private onTokenRefreshListener: (() => void) | null = null;
-  private onMessageListener: (() => void) | null = null;
-  private onNotificationOpenedListener: (() => void) | null = null;
+  constructor() {
+    this.navigationRef = null;
+    this.onTokenRefreshListener = null;
+    this.onMessageListener = null;
+    this.isInitialized = false;
+    this.initialNotificationChecked = false;
+    this.currentToken = null;
+  }
 
-  // Initialize Firebase messaging
-  async initialize(authToken?: string): Promise<string | null> {
+  async initialize(authToken) {
     try {
-      console.log('🔥 Initializing Firebase messaging...');
+      console.log('🔥 Initializing Firebase messaging with backend integration...');
 
-      // Check if Firebase is supported
-      if (!messaging().isDeviceRegisteredForRemoteMessages) {
+      // Notifee initialization
+      await notifee.requestPermission();
+      if (Platform.OS === 'android') {
+        await notifee.createChannel({
+          id: 'chat_messages',
+          name: 'Chat Messages',
+          importance: 4,
+          sound: 'default',
+        });
+        console.log('🔊 Notifee chat channel created');
+      }
+
+      if (messaging().isDeviceRegisteredForRemoteMessages !== undefined && !messaging().isDeviceRegisteredForRemoteMessages) {
         await messaging().registerDeviceForRemoteMessages();
       }
 
-      // Request permissions
       const hasPermission = await this.requestPermissions();
       if (!hasPermission) {
         console.log('❌ Push notification permission denied');
         return null;
       }
 
-      // Get FCM token
       const token = await this.getFCMToken();
-      console.log('🔑 FCM Token obtained:', token ? 'Success' : 'Failed');
-
-      // Send token to backend if auth token is available
       if (token && authToken) {
         await this.sendTokenToBackend(token, authToken);
       }
 
-      // Setup message handlers
-      this.setupMessageHandlers();
-      
-      console.log('✅ Firebase messaging initialized successfully');
+      if (!this.isInitialized) {
+        this.setupMessageHandlers(authToken);
+        this.isInitialized = true;
+      }
+
+      if (this.navigationRef && !this.initialNotificationChecked) {
+        this.checkInitialNotification();
+      }
+
       return token;
     } catch (error) {
-      console.error('❌ Firebase initialization error:', error);
+      console.error('❌ FirebaseService initialization error:', error);
       return null;
     }
   }
 
-  // Request notification permissions
-  async requestPermissions(): Promise<boolean> {
+  async sendTokenToBackend(token, authToken) {
+    try {
+      console.log('📤 Sending FCM token to backend...');
+      
+      const deviceId = await DeviceInfo.getUniqueId();
+      const deviceType = Platform.OS;
+
+      const response = await fetch(`${BASE_URL}/api/v1/fcm/register-token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          fcmToken: token,
+          deviceType: deviceType,
+          deviceId: deviceId,
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ FCM token sent to backend successfully:', result.message);
+        await AsyncStorage.setItem('fcm_token_registered', 'true');
+        return true;
+      } else {
+        const error = await response.json();
+        console.error('❌ Failed to send FCM token to backend:', error.message);
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Error sending FCM token to backend:', error);
+      return false;
+    }
+  }
+
+  async removeTokenFromBackend(authToken) {
+    try {
+      console.log('📤 Removing FCM token from backend...');
+      
+      const deviceId = await DeviceInfo.getUniqueId();
+
+      const response = await fetch(`${BASE_URL}/api/v1/fcm/remove-token`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          deviceId: deviceId,
+        }),
+      });
+
+      if (response.ok) {
+        console.log('✅ FCM token removed from backend successfully');
+        await AsyncStorage.removeItem('fcm_token_registered');
+        return true;
+      } else {
+        console.error('❌ Failed to remove FCM token from backend');
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Error removing FCM token from backend:', error);
+      return false;
+    }
+  }
+
+  async requestPermissions() {
     try {
       if (Platform.OS === 'ios') {
         const authStatus = await messaging().requestPermission();
         const enabled =
           authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
           authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-
-        if (!enabled) {
-          console.log('📱 iOS push notification permission denied');
-        }
-        
         return enabled;
       } else {
-        // Android 13+ requires POST_NOTIFICATIONS permission
         if (Platform.Version >= 33) {
+          const { PermissionsAndroid } = require('react-native');
           const granted = await PermissionsAndroid.request(
             PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
           );
-          const hasPermission = granted === PermissionsAndroid.RESULTS.GRANTED;
-          
-          if (!hasPermission) {
-            console.log('📱 Android push notification permission denied');
-          }
-          
-          return hasPermission;
+          return granted === PermissionsAndroid.RESULTS.GRANTED;
         }
         return true;
       }
     } catch (error) {
-      console.error('❌ Error requesting permissions:', error);
+      console.error('❌ Error requesting notification permissions:', error);
       return false;
     }
   }
 
-  // Get FCM token
-  async getFCMToken(): Promise<string | null> {
+    async getFCMToken() {
     try {
-      let token = await AsyncStorage.getItem('fcm_token');
-      
-      if (!token) {
-        token = await messaging().getToken();
-        if (token) {
-          await AsyncStorage.setItem('fcm_token', token);
-        }
+      const token = await messaging().getToken();
+      if (token) {
+        await AsyncStorage.setItem('fcm_token', token);
+        this.currentToken = token;
+
+        // Log full token
+        console.log('🔑 Full FCM Token:', token);
+
+        // Also show alert for easy copy (optional)
+        // Alert.alert('Your FCM Token', token);
+      } else {
+        console.warn('⚠️ No FCM token returned');
       }
-      
       return token;
     } catch (error) {
       console.error('❌ Error getting FCM token:', error);
@@ -102,224 +179,156 @@ class FirebaseService {
     }
   }
 
-  // Send token to backend
-  async sendTokenToBackend(token: string, authToken: string): Promise<void> {
-    try {
-      console.log('📤 Sending FCM token to backend...');
-      
-      const response = await fetch(`${BASE_URL}/api/v1/users/fcm-token`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({ fcmToken: token }),
-      });
+  setupMessageHandlers(authToken) {
+    if (!this.onMessageListener) {
+      this.onMessageListener = messaging().onMessage(async remoteMessage => {
+        console.log('📱 FCM foreground message:', remoteMessage.notification?.title);
+        
+        try {
+          const { notification, data } = remoteMessage;
 
-      const data = await response.json();
-      
-      if (response.ok) {
-        console.log('✅ FCM token sent to backend successfully');
-      } else {
-        console.error('❌ Failed to send FCM token to backend:', data.message);
-      }
-    } catch (error) {
-      console.error('❌ Error sending FCM token to backend:', error);
-    }
-  }
+          // Build Android-specific notification config
+          const androidConfig = {
+            channelId: 'chat_messages',
+            pressAction: { id: 'default' },
+            // Use ic_launcher as fallback, or omit smallIcon to use default
+            ...(Platform.OS === 'android' && {
+              smallIcon: 'ic_launcher', // Use the app's launcher icon
+              color: '#BB8FCE', // Your app's accent color
+            }),
+            style: {
+              type: AndroidStyle.MESSAGING,
+              person: {
+                name: data?.senderName || 'Someone',
+                // Only set icon if we have a valid URL
+                ...(data?.senderPhoto && { icon: data.senderPhoto }),
+              },
+              messages: [{
+                text: notification?.body || 'New message',
+                timestamp: Date.now(),
+              }],
+            },
+          };
 
-  // Remove token from backend
-  async removeTokenFromBackend(authToken: string): Promise<void> {
-    try {
-      console.log('🗑️ Removing FCM token from backend...');
-      
-      const response = await fetch(`${BASE_URL}/api/v1/users/fcm-token`, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
-      });
+          await notifee.displayNotification({
+            title: notification?.title || 'New Message',
+            body: notification?.body || 'You have a new message',
+            data: data || {},
+            android: androidConfig,
+            ios: {
+              sound: 'default',
+              badgeCount: 1,
+            },
+          });
 
-      if (response.ok) {
-        console.log('✅ FCM token removed from backend successfully');
-      } else {
-        console.error('❌ Failed to remove FCM token from backend');
-      }
-    } catch (error) {
-      console.error('❌ Error removing FCM token from backend:', error);
-    }
-  }
-
-  // Setup message handlers
-  setupMessageHandlers(): void {
-    // Handle background/quit state messages
-    messaging().setBackgroundMessageHandler(async remoteMessage => {
-      console.log('📱 Message handled in background:', remoteMessage.notification?.title);
-      this.handleNotification(remoteMessage);
-    });
-
-    // Handle foreground messages
-    this.onMessageListener = messaging().onMessage(async remoteMessage => {
-      console.log('📱 FCM message received in foreground:', remoteMessage.notification?.title);
-      this.handleForegroundNotification(remoteMessage);
-    });
-
-    // Handle notification opened from quit state
-    messaging()
-      .getInitialNotification()
-      .then(remoteMessage => {
-        if (remoteMessage) {
-          console.log('📱 Notification caused app to open from quit state:', remoteMessage.notification?.title);
-          this.handleNotificationOpen(remoteMessage);
+          console.log('✅ Foreground notification displayed successfully');
+        } catch (error) {
+          console.error('❌ Error displaying foreground notification:', error);
+          
+          // Fallback: try with minimal notification
+          try {
+            await notifee.displayNotification({
+              title: remoteMessage.notification?.title || 'New Message',
+              body: remoteMessage.notification?.body || 'You have a new message',
+              android: {
+                channelId: 'chat_messages',
+                pressAction: { id: 'default' },
+                // Don't specify smallIcon to use default
+              },
+            });
+            console.log('✅ Fallback notification displayed');
+          } catch (fallbackError) {
+            console.error('❌ Fallback notification also failed:', fallbackError);
+          }
         }
       });
+    }
 
-    // Handle notification opened from background state
-    this.onNotificationOpenedListener = messaging().onNotificationOpenedApp(
-      remoteMessage => {
-        console.log('📱 Notification caused app to open from background:', remoteMessage.notification?.title);
-        this.handleNotificationOpen(remoteMessage);
-      }
-    );
-
-    // Handle token refresh
-    this.onTokenRefreshListener = messaging().onTokenRefresh(async token => {
-      console.log('🔄 FCM token refreshed');
-      await AsyncStorage.setItem('fcm_token', token);
-      
-      // Get auth token and send new FCM token to backend
-      const authToken = await AsyncStorage.getItem('token');
-      if (authToken) {
-        await this.sendTokenToBackend(token, authToken);
-      }
-    });
-  }
-
-  // Handle foreground notifications
-  handleForegroundNotification(remoteMessage: any): void {
-    const { notification, data } = remoteMessage;
-    
-    // Show alert for foreground notifications
-    Alert.alert(
-      notification?.title || 'New Notification',
-      notification?.body || 'You have a new notification',
-      [
-        { text: 'Dismiss', style: 'cancel' },
-        { 
-          text: 'View', 
-          onPress: () => this.handleNotificationOpen(remoteMessage) 
-        },
-      ]
-    );
-  }
-
-  // Handle notification data storage
-  handleNotification(remoteMessage: any): void {
-    const { data } = remoteMessage;
-    console.log('💾 Storing notification data:', data);
-    
-    // Store notification data for later processing
-    if (data) {
-      AsyncStorage.setItem('pending_notification', JSON.stringify(data));
+    if (!this.onTokenRefreshListener) {
+      this.onTokenRefreshListener = messaging().onTokenRefresh(async refreshedToken => {
+        console.log('🔄 FCM token refreshed');
+        this.currentToken = refreshedToken;
+        await AsyncStorage.setItem('fcm_token', refreshedToken);
+        
+        if (authToken) {
+          await this.sendTokenToBackend(refreshedToken, authToken);
+        }
+      });
     }
   }
 
-  // Handle notification open/tap
-  handleNotificationOpen(remoteMessage: any): void {
+  handleNotificationOpen(remoteMessage) {
     const { data } = remoteMessage;
-    
+
     if (data) {
       console.log('🔗 Navigating based on notification:', data.type);
       this.navigateBasedOnNotification(data);
     }
   }
 
-  // Navigate based on notification data
-  navigateBasedOnNotification(data: any): void {
-    const { type, userId, postId, dateRequestId, callId } = data;
-    
+  navigateBasedOnNotification(data) {
+    const { type, conversationId, senderId, messageId } = data;
+
     if (!this.navigationRef) {
-      console.log('⚠️ Navigation ref not available, storing for later');
       AsyncStorage.setItem('pending_notification', JSON.stringify(data));
       return;
     }
 
     try {
       switch (type) {
+        case 'message':
+          if (conversationId && senderId) {
+            this.navigationRef.navigate('ChatDetail', { 
+              conversationId, 
+              userId: senderId 
+            });
+          } else if (senderId) {
+            this.navigationRef.navigate('UserProfile', { userId: senderId });
+          }
+          break;
+
+        case 'story_reply':
+          if (senderId) {
+            this.navigationRef.navigate('ChatDetail', { userId: senderId });
+          }
+          break;
+
         case 'follow':
         case 'impression':
-          if (userId) {
-            this.navigationRef.navigate('UserProfile', { userId });
-          } else {
-            this.navigationRef.navigate('NotificationsScreen');
+          if (senderId) {
+            this.navigationRef.navigate('UserProfile', { userId: senderId });
           }
           break;
-          
-        case 'like':
-        case 'comment':
-          if (postId) {
-            this.navigationRef.navigate('PhotoViewerScreen', { postId });
-          } else {
-            this.navigationRef.navigate('NotificationsScreen');
-          }
-          break;
-          
-        case 'date_request':
-        case 'date_accepted':
-        case 'date_declined':
-          if (dateRequestId) {
-            this.navigationRef.navigate('DateRequestDetail', { requestId: dateRequestId });
-          } else {
-            this.navigationRef.navigate('DateRequests');
-          }
-          break;
-          
-        case 'incoming_call':
-          if (callId && userId) {
-            this.navigationRef.navigate('CallPage', { callId, userId });
-          }
-          break;
-          
-        case 'chat_message':
-          if (userId) {
-            this.navigationRef.navigate('ChatDetail', { userId });
-          } else {
-            this.navigationRef.navigate('UsersListScreen');
-          }
-          break;
-          
+
         default:
-          this.navigationRef.navigate('NotificationsScreen');
+          console.log(`Unknown notification type: ${type}`);
+          this.navigationRef.navigate('Chat');
       }
     } catch (error) {
       console.error('❌ Navigation error:', error);
-      this.navigationRef.navigate('NotificationsScreen');
     }
   }
 
-  // Set navigation reference
-  setNavigationRef(navigationRef: any): void {
+  setNavigationRef(navigationRef) {
     this.navigationRef = navigationRef;
     console.log('🧭 Navigation reference set');
     
-    // Check for pending notifications
-    this.checkPendingNotifications();
+    if (navigationRef) {
+      this.checkPendingNotifications();
+      if (!this.initialNotificationChecked) {
+        this.checkInitialNotification();
+      }
+    }
   }
 
-  // Check for pending notifications when navigation becomes available
-  async checkPendingNotifications(): Promise<void> {
+  async checkPendingNotifications() {
     try {
       const pendingNotification = await AsyncStorage.getItem('pending_notification');
       if (pendingNotification) {
         const data = JSON.parse(pendingNotification);
-        console.log('🔄 Processing pending notification:', data.type);
-        
-        // Add delay to ensure navigation is ready
         setTimeout(() => {
           this.navigateBasedOnNotification(data);
-        }, 1000);
-        
+        }, 500);
         await AsyncStorage.removeItem('pending_notification');
       }
     } catch (error) {
@@ -327,15 +336,29 @@ class FirebaseService {
     }
   }
 
-  // Get message listener for components
-  getMessageListener() {
-    return messaging().onMessage;
+  async checkInitialNotification() {
+    if (this.initialNotificationChecked) return;
+    
+    try {
+      const remoteMessage = await messaging().getInitialNotification();
+      if (remoteMessage) {
+        console.log('📱 App opened by notification tap');
+        this.handleNotificationOpen(remoteMessage);
+      }
+    } catch (error) {
+      console.error('❌ Error checking initial notification:', error);
+    } finally {
+      this.initialNotificationChecked = true;
+    }
   }
 
-  // Cleanup listeners
-  cleanup(): void {
-    console.log('🧹 Cleaning up Firebase listeners');
+  async cleanup(authToken) {
+    console.log('🧹 Cleaning up Firebase listeners...');
     
+    if (authToken) {
+      await this.removeTokenFromBackend(authToken);
+    }
+
     if (this.onTokenRefreshListener) {
       this.onTokenRefreshListener();
       this.onTokenRefreshListener = null;
@@ -344,9 +367,33 @@ class FirebaseService {
       this.onMessageListener();
       this.onMessageListener = null;
     }
-    if (this.onNotificationOpenedListener) {
-      this.onNotificationOpenedListener();
-      this.onNotificationOpenedListener = null;
+    
+    this.isInitialized = false;
+    this.initialNotificationChecked = false;
+    this.currentToken = null;
+  }
+
+  async testNotification(authToken) {
+    try {
+      const response = await fetch(`${BASE_URL}/api/v1/fcm/test`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          message: 'Test notification from app'
+        }),
+      });
+
+      if (response.ok) {
+        Alert.alert('Success', 'Test notification sent!');
+      } else {
+        Alert.alert('Error', 'Failed to send test notification');
+      }
+    } catch (error) {
+      console.error('❌ Test notification error:', error);
+      Alert.alert('Error', 'Network error');
     }
   }
 }

@@ -1,4 +1,4 @@
-// Post.js - Enhanced version with proper double tap to like functionality
+// src/components/Home/Post.js
 import React, { useState, useRef, useEffect } from "react";
 import {
   View,
@@ -13,8 +13,7 @@ import {
   Dimensions,
   PanResponder,
   TextInput,
-  ActivityIndicator,
-  TouchableWithoutFeedback
+  ActivityIndicator
 } from "react-native";
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Modal from 'react-native-modal';
@@ -26,22 +25,19 @@ const BASE_URL = "https://backendforheartlink.in"; // Ensure this matches your c
 
 const Post = ({ data, navigation, onLikeUpdate }) => {
   const { token, user, refreshToken, isAuthenticated } = useAuth();
-
   const [isLiked, setIsLiked] = useState(data?.isLiked || false);
   const [likesCount, setLikesCount] = useState(data?.likes || 0);
-  
   // ✅ FIX 1: Better initialization with all possible field names and proper logging
   const [commentsCount, setCommentsCount] = useState(() => {
     // Check all possible field names for comments count
-    const possibleCount = 
-      data?.commentsCount || 
-      data?.commentCount || 
-      data?.comments || 
+    const possibleCount =
+      data?.commentsCount ||
+      data?.commentCount ||
+      data?.comments ||
       data?.totalComments ||
       data?.comment_count ||
       data?.numberOfComments ||
       0;
-    
     console.log('📊 Initial comments count setup:', {
       postId: data?._id || data?.id,
       commentsCount: data?.commentsCount,
@@ -50,35 +46,32 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
       totalComments: data?.totalComments,
       finalCount: possibleCount
     });
-    
     return possibleCount;
   });
-  
   const [isFollowing, setIsFollowing] = useState(false);
   const [followLoading, setFollowLoading] = useState(false);
   const [likeOperationInProgress, setLikeOperationInProgress] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const scrollViewRef = useRef(null);
-
   const [isReportModalVisible, setReportModalVisible] = useState(false);
   const [reportReason, setReportReason] = useState('');
   const [reportComment, setReportComment] = useState('');
   const [isReporting, setIsReporting] = useState(false);
-
   const [isZoomed, setIsZoomed] = useState(false);
   const [isZooming, setIsZooming] = useState(false);
   const zoomScale = useRef(new Animated.Value(1)).current;
   const zoomTranslateX = useRef(new Animated.Value(0)).current;
   const zoomTranslateY = useRef(new Animated.Value(0)).current;
 
+  // --- NEW: Enhanced double tap detection refs (like in PhotoViewerScreen.js) ---
+  const lastTapRef = useRef(null);
+  const tapTimeoutRef = useRef(null);
+  // --- END: New double tap refs ---
+
   const heartScaleAnim = useRef(new Animated.Value(1)).current;
   const centerHeartAnim = useRef(new Animated.Value(0)).current;
   const centerHeartOpacity = useRef(new Animated.Value(0)).current;
   const heartFillAnim = useRef(new Animated.Value(isLiked ? 1 : 0)).current;
-
-  // ✅ NEW: Enhanced double tap detection refs
-  const lastTapRef = useRef(null);
-  const tapTimeoutRef = useRef(null);
 
   const safeGet = (obj, property, fallback = '') => {
     try {
@@ -89,24 +82,33 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     }
   };
 
+  // --- NEW: Cleanup timeout on unmount (like in PhotoViewerScreen.js) ---
+  useEffect(() => {
+    return () => {
+      if (tapTimeoutRef.current) {
+        clearTimeout(tapTimeoutRef.current);
+      }
+    };
+  }, []);
+  // --- END: Cleanup timeout ---
+
   // ✅ FIX 2: Enhanced effect to sync comments count with more field checks
   useEffect(() => {
-    const newCommentsCount = 
-      data?.commentsCount || 
-      data?.commentCount || 
-      data?.comments || 
+    const newCommentsCount =
+      data?.commentsCount ||
+      data?.commentCount ||
+      data?.comments ||
       data?.totalComments ||
       data?.comment_count ||
       data?.numberOfComments ||
       0;
-      
     if (newCommentsCount !== commentsCount) {
       console.log('📝 Updating comments count from data prop change:', commentsCount, '->', newCommentsCount);
       setCommentsCount(newCommentsCount);
     }
   }, [
-    data?.commentsCount, 
-    data?.commentCount, 
+    data?.commentsCount,
+    data?.commentCount,
     data?.comments,
     data?.totalComments,
     data?.comment_count,
@@ -122,15 +124,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     }
   }, [data?._id, data?.id]);
 
-  // Cleanup timeout on unmount
-  useEffect(() => {
-    return () => {
-      if (tapTimeoutRef.current) {
-        clearTimeout(tapTimeoutRef.current);
-      }
-    };
-  }, []);
-
   // ✅ FIX 4: New function to fetch comments count from API
   const fetchCommentsCount = async (postId) => {
     try {
@@ -138,7 +131,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
       const response = await makeAuthenticatedRequest(
         `${BASE_URL}/api/v1/posts/${postId}/comments?page=1&limit=1`
       );
-      
       if (response.ok) {
         const result = await response.json();
         if (result.success && result.data?.pagination?.totalComments !== undefined) {
@@ -157,7 +149,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     console.warn('Post component received invalid data:', data);
     return null;
   }
-
   if (!isAuthenticated || !token) {
     return (
       <View style={[styles.container, { paddingVertical: 20 }]}>
@@ -167,7 +158,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
       </View>
     );
   }
-
   // Use the post ID directly from the transformed data
   const postId = data._id || data.id;
   if (!postId) {
@@ -181,7 +171,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     );
   }
   console.log('✅ Post component using postId:', postId);
-
   const userId = data?.user?._id || data?.user?.id || data?.userId || data?.authorId;
   const isOwnPost = userId && user && (userId === user.id || userId === user._id);
   const shouldShowFollowButton = userId && userId !== 'unknown' && !isOwnPost;
@@ -223,7 +212,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
       }).filter(img => img.uri);
       return processedImages;
     }
-
     let singleImageUri = null;
     if (data.images && Array.isArray(data.images) && data.images.length === 1) {
       const img = data.images[0];
@@ -257,7 +245,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
 
   const postImages = processImages();
   const isMultiImage = postImages.length > 1;
-
   const userImg = safeGet(data, 'userImg', { uri: 'https://via.placeholder.com/50/333333/ffffff?text=User' });
   const username = safeGet(data, 'username', 'Unknown User');
   const caption = safeGet(data, 'caption', '');
@@ -289,65 +276,19 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     });
   };
 
-  // ✅ NEW: Enhanced double tap handler specifically for liking
-  const handleImageDoubleTap = () => {
-    console.log('💖 Double tap detected on image - attempting to like');
-    
-    // Always trigger like on double tap, regardless of current state
-    if (!likeOperationInProgress) {
-      // If already liked, we could either do nothing or unlike
-      // For Instagram-like behavior, double tap should always like (not toggle)
-      if (!isLiked) {
-        console.log('💖 Post not liked - liking now');
-        handleLikePress();
-      } else {
-        console.log('💖 Post already liked - showing heart animation anyway');
-        // Show the heart animation even if already liked
-        animateCenterHeart();
-      }
-    } else {
-      console.log('💖 Like operation in progress - ignoring double tap');
-    }
-  };
-
-  // ✅ NEW: Improved double tap detection for images
-  const handleImagePress = () => {
-    const now = Date.now();
-    const DOUBLE_TAP_DELAY = 300;
-
-    if (tapTimeoutRef.current) {
-      clearTimeout(tapTimeoutRef.current);
-    }
-
-    if (lastTapRef.current && (now - lastTapRef.current) < DOUBLE_TAP_DELAY) {
-      // Double tap detected
-      console.log('🔥 Double tap detected!');
-      lastTapRef.current = null; // Reset to prevent triple tap issues
-      handleImageDoubleTap();
-    } else {
-      // Single tap - wait to see if another tap comes
-      lastTapRef.current = now;
-      tapTimeoutRef.current = setTimeout(() => {
-        // Single tap confirmed (no second tap within delay)
-        console.log('👆 Single tap confirmed');
-        lastTapRef.current = null;
-        // You could add single tap behavior here if needed
-      }, DOUBLE_TAP_DELAY);
-    }
-  };
-
   const createZoomPanResponder = () => {
     let initialDistance = 0;
     let initialScale = 1;
     let lastScale = 1;
     let lastTranslateX = 0;
     let lastTranslateY = 0;
+    // --- NEW: Variables for double-tap detection ---
+    const DOUBLE_PRESS_DELAY = 300;
+    // --- END: New variables ---
     let pinchFocalX = 0;
     let pinchFocalY = 0;
     let initialTranslateX = 0;
     let initialTranslateY = 0;
-    let tapCount = 0;
-    let lastTapTime = 0;
 
     const getDistance = (touches) => {
       if (touches.length < 2) return 0;
@@ -383,9 +324,44 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     };
 
     return PanResponder.create({
+      // --- MODIFIED: onStartShouldSetPanResponder ---
       onStartShouldSetPanResponder: (evt) => {
-        return evt.nativeEvent.touches.length >= 2 || isZoomed;
+        const touches = evt.nativeEvent.touches;
+        console.log(`Touches started: ${touches.length}`);
+
+        // --- NEW/UPDATED: Double Tap Detection Logic for Liking ---
+        if (touches.length === 1) { // Only check for double tap on single touch start
+          const now = Date.now();
+          const DOUBLE_TAP_DELAY = 300;
+
+          if (lastTapRef.current && (now - lastTapRef.current) < DOUBLE_TAP_DELAY) {
+            // Double tap detected!
+            console.log('🔥 Double tap for LIKE detected in onStartShouldSetPanResponder!');
+
+            // Clear any pending single tap timeout to prevent conflicting actions
+            if (tapTimeoutRef.current) {
+              clearTimeout(tapTimeoutRef.current);
+              tapTimeoutRef.current = null;
+            }
+
+            // Immediately trigger the like action
+            handleImageDoubleTap(); // This calls handleLikePress internally
+
+            lastTapRef.current = null; // Reset double tap tracking
+            return false; // Crucially, prevent the PanResponder from activating for zoom/pan
+          } else {
+            // First tap of a potential double tap sequence
+            lastTapRef.current = now;
+            // Do not return true here yet, let onMove or onPanResponderRelease decide
+            // based on movement or release.
+          }
+        }
+        // --- END: Double Tap Detection ---
+
+        // Allow PanResponder to activate for multi-touch (pinch to zoom) or if already zoomed (for panning)
+        return touches.length >= 2 || isZoomed;
       },
+      // Respond to multi-touch moves or dragging when zoomed and moved significantly
       onMoveShouldSetPanResponder: (evt, gestureState) => {
         return evt.nativeEvent.touches.length >= 2 ||
                (isZoomed && (Math.abs(gestureState.dx) > 10 || Math.abs(gestureState.dy) > 10));
@@ -406,22 +382,8 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
           zoomTranslateX.setValue(0);
           zoomTranslateY.setOffset(lastTranslateY);
           zoomTranslateY.setValue(0);
-        } else if (touches.length === 1) {
-          const now = Date.now();
-          const timeDiff = now - lastTapTime;
-          if (timeDiff < 300) {
-            tapCount += 1;
-          } else {
-            tapCount = 1;
-          }
-          lastTapTime = now;
-          if (isZoomed) {
-            zoomTranslateX.setOffset(lastTranslateX);
-            zoomTranslateX.setValue(0);
-            zoomTranslateY.setOffset(lastTranslateY);
-            zoomTranslateY.setValue(0);
-          }
         }
+        // No specific action needed for single touch grant in this setup
       },
       onPanResponderMove: (evt, gestureState) => {
         const touches = evt.nativeEvent.touches;
@@ -441,6 +403,7 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
             zoomTranslateY.setValue(clamped.y);
           }
         } else if (touches.length === 1 && isZoomed) {
+          // Allow dragging when zoomed with one finger
           const newTranslateX = lastTranslateX + gestureState.dx;
           const newTranslateY = lastTranslateY + gestureState.dy;
           const clamped = clampTranslate(newTranslateX, newTranslateY, lastScale);
@@ -448,22 +411,20 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
           zoomTranslateY.setValue(clamped.y);
         }
       },
+      // --- MODIFIED: onPanResponderRelease ---
       onPanResponderRelease: (evt, gestureState) => {
         const touches = evt.nativeEvent.touches;
         if (touches.length === 0) {
           zoomScale.flattenOffset();
           zoomTranslateX.flattenOffset();
           zoomTranslateY.flattenOffset();
-
           const currentScale = lastScale = zoomScale._value;
           lastTranslateX = zoomTranslateX._value;
           lastTranslateY = zoomTranslateY._value;
-
           pinchFocalX = 0;
           pinchFocalY = 0;
           initialTranslateX = 0;
           initialTranslateY = 0;
-
           const clamped = clampTranslate(lastTranslateX, lastTranslateY, currentScale);
           if (clamped.x !== lastTranslateX || clamped.y !== lastTranslateY) {
             lastTranslateX = clamped.x;
@@ -473,36 +434,45 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
               Animated.timing(zoomTranslateY, { toValue: clamped.y, duration: 200, useNativeDriver: true, }),
             ]).start();
           }
-
-          // Handle zoom double tap (different from like double tap)
-          if (tapCount === 2 && gestureState.dx < 10 && gestureState.dy < 10) {
-            tapCount = 0;
-            if (isZoomed) {
-              resetZoom();
-              lastScale = 1;
-              lastTranslateX = 0;
-              lastTranslateY = 0;
-            } else {
-              const tapX = evt.nativeEvent.locationX;
-              const tapY = evt.nativeEvent.locationY;
-              const imageHeight = 500;
-              const zoomScaleVal = 2;
-              const translateX = -(zoomScaleVal - 1) * (tapX - imageWidth / 2);
-              const translateY = -(zoomScaleVal - 1) * (tapY - imageHeight / 2);
-              const clampedZoom = clampTranslate(translateX, translateY, zoomScaleVal);
-              zoomToPoint(zoomScaleVal, clampedZoom.x, clampedZoom.y);
-              lastScale = zoomScaleVal;
-              lastTranslateX = clampedZoom.x;
-              lastTranslateY = clampedZoom.y;
-            }
-          }
           setIsZoomed(currentScale > 1);
+
+          // --- NEW/UPDATED: Handle Single Tap Confirmation for Double-Tap Sequence ---
+          // Check if this release was from a single tap (only one touch released and minimal movement)
+          if (evt.nativeEvent.changedTouches.length === 1 &&
+              Math.abs(gestureState.dx) < 10 &&
+              Math.abs(gestureState.dy) < 10) {
+
+            // This looks like a single tap release. Set a timeout.
+            // If a second tap comes quickly, the onStartShouldSetPanResponder logic will catch it,
+            // clear this timeout, and perform the like.
+            // If no second tap comes, this timeout executes (you can add single tap actions here if needed).
+            if (tapTimeoutRef.current) {
+              clearTimeout(tapTimeoutRef.current); // Clear any existing timeout
+            }
+            // Set timeout for potential single tap action or just to finalize the double-tap check cycle
+            tapTimeoutRef.current = setTimeout(() => {
+              console.log('👆 Single tap confirmed (from PanResponder release)');
+              // Perform single tap action here if needed (e.g., hide/show UI elements)
+              // Currently, we just use it to complete the double-tap detection cycle cleanly.
+              tapTimeoutRef.current = null;
+              // Ensure lastTapRef is cleared if it wasn't already (e.g., if timeout wasn't cleared by a second tap)
+              // This handles cases where the second tap might not have been fast enough or was missed slightly.
+              lastTapRef.current = null;
+            }, 300); // Use the same delay as DOUBLE_TAP_DELAY
+          }
+          // --- END: Handle Single Tap ---
         }
       },
       onPanResponderTerminate: () => {
         zoomScale.flattenOffset();
         zoomTranslateX.flattenOffset();
         zoomTranslateY.flattenOffset();
+        // Clear any pending double tap timeouts if gesture is terminated
+        if (tapTimeoutRef.current) {
+          clearTimeout(tapTimeoutRef.current);
+          tapTimeoutRef.current = null;
+        }
+        lastTapRef.current = null;
       },
     });
   };
@@ -556,6 +526,53 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     }
     return response;
   };
+
+  // --- ✅ NEW: Enhanced double tap handler specifically for liking (like in PhotoViewerScreen.js) ---
+  const handleImageDoubleTap = () => {
+    console.log('💖 Double tap detected on image - attempting to like');
+    // Always trigger like on double tap, regardless of current state
+    if (!likeOperationInProgress) {
+      // If already liked, we could either do nothing or unlike
+      // For Instagram-like behavior, double tap should always like (not toggle)
+      if (!isLiked) {
+        console.log('💖 Post not liked - liking now');
+        handleLikePress(); // Call your existing like handler
+      } else {
+        console.log('💖 Post already liked - showing heart animation anyway');
+        // Show the heart animation even if already liked
+        animateCenterHeart(); // Call your existing animation
+      }
+    } else {
+      console.log('💖 Like operation in progress - ignoring double tap');
+    }
+  };
+
+  // --- ✅ NEW: Improved double tap detection for images (like in PhotoViewerScreen.js) ---
+  // This function is now primarily used for the double-tap to like logic triggered by the PanResponder
+  const handleImagePress = () => {
+    const now = Date.now();
+    const DOUBLE_TAP_DELAY = 300; // Milliseconds
+    if (tapTimeoutRef.current) {
+      clearTimeout(tapTimeoutRef.current);
+    }
+    if (lastTapRef.current && (now - lastTapRef.current) < DOUBLE_TAP_DELAY) {
+      // Double tap detected
+      console.log('🔥 Double tap detected (via handleImagePress)!');
+      lastTapRef.current = null; // Reset to prevent issues
+      handleImageDoubleTap(); // Execute the double tap action for liking
+    } else {
+      // Single tap - wait to see if another tap comes
+      lastTapRef.current = now;
+      tapTimeoutRef.current = setTimeout(() => {
+        // Single tap confirmed (no second tap within delay)
+        console.log('👆 Single tap confirmed (via handleImagePress)');
+        lastTapRef.current = null;
+        // You could add single tap behavior here if needed (e.g., hide/show UI)
+        // Note: This path might not be reached if PanResponder handles it first.
+      }, DOUBLE_TAP_DELAY);
+    }
+  };
+  // --- END: New double tap handlers ---
 
   const handleReportPost = async () => {
     if (!postId) {
@@ -730,24 +747,20 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
       const originalLikedState = isLiked;
       const originalLikesCount = likesCount;
       const newLikesCount = newLikedState ? likesCount + 1 : Math.max(0, likesCount - 1);
-
       console.log('=== LIKE OPERATION START ===');
       console.log('Post ID:', postId);
       console.log('Current state:', { isLiked, likesCount });
       console.log('New state:', { isLiked: newLikedState, likesCount: newLikesCount });
-
       setIsLiked(newLikedState);
       setLikesCount(newLikesCount);
       animateHeartButton(newLikedState);
       if (newLikedState) {
         animateCenterHeart();
       }
-
       console.log('Making API request to:', `${BASE_URL}/api/v1/posts/${postId}/like`);
       const response = await makeAuthenticatedRequest(`${BASE_URL}/api/v1/posts/${postId}/like`, { method: 'PATCH' });
       const result = await response.json();
       console.log('API Response:', { status: response.status, success: result.success, data: result.data });
-
       if (response.ok && result.success) {
         const serverLikeCount = result.data?.likeCount || result.data?.realTimeLikes || newLikesCount;
         const serverIsLiked = result.data?.isLiked !== undefined ? result.data.isLiked : newLikedState;
@@ -758,7 +771,6 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
           animateHeartButton(serverIsLiked);
         }
         console.log('✅ Like operation completed successfully');
-
         if (onLikeUpdate && typeof onLikeUpdate === 'function') {
           try {
             onLikeUpdate(postId, serverIsLiked, serverLikeCount);
@@ -818,11 +830,9 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
           console.log('  - New count:', newCount);
           console.log('  - Real-time comments:', realTimeComments);
           console.log('  - Previous count:', commentsCount);
-          
           // Use the real-time comments if available, otherwise use newCount
           const finalCount = realTimeComments !== undefined ? realTimeComments : newCount;
           console.log('  - Final count to set:', finalCount);
-          
           setCommentsCount(finalCount);
         }
       });
@@ -903,33 +913,32 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
       return null;
     }
     return (
-      <TouchableWithoutFeedback key={image.id || index} onPress={handleImagePress}>
-        <Animated.View
-          style={[
-            styles.carouselImageContainer,
-            {
-              transform: [
-                { scale: zoomScale },
-                { translateX: zoomTranslateX },
-                { translateY: zoomTranslateY },
-              ],
-            },
-          ]}
-          {...zoomPanResponder.panHandlers}
-        >
-          <Image
-            source={{ uri: image.uri }}
-            style={styles.postImage}
-            onError={(error) => {
-              console.log(`❌ Post image ${index + 1} error:`, error?.nativeEvent?.error);
-              console.log(`❌ Failed image URI:`, image.uri);
-            }}
-            onLoad={() => {
-              console.log(`✅ Post image ${index + 1} loaded successfully:`, image.uri);
-            }}
-          />
-        </Animated.View>
-      </TouchableWithoutFeedback>
+      <Animated.View
+        key={image.id || index}
+        style={[
+          styles.carouselImageContainer,
+          {
+            transform: [
+              { scale: zoomScale },
+              { translateX: zoomTranslateX },
+              { translateY: zoomTranslateY },
+            ],
+          },
+        ]}
+        {...zoomPanResponder.panHandlers}
+      >
+        <Image
+          source={{ uri: image.uri }}
+          style={styles.postImage}
+          onError={(error) => {
+            console.log(`❌ Post image ${index + 1} error:`, error?.nativeEvent?.error);
+            console.log(`❌ Failed image URI:`, image.uri);
+          }}
+          onLoad={() => {
+            console.log(`✅ Post image ${index + 1} loaded successfully:`, image.uri);
+          }}
+        />
+      </Animated.View>
     );
   };
 
@@ -985,44 +994,42 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
     } else {
       return (
         <View style={styles.imageContainer}>
-          <TouchableWithoutFeedback onPress={handleImagePress}>
+          <Animated.View
+            style={[
+              styles.postImageContainer,
+              {
+                transform: [
+                  { scale: zoomScale },
+                  { translateX: zoomTranslateX },
+                  { translateY: zoomTranslateY },
+                ],
+              },
+            ]}
+            {...zoomPanResponder.panHandlers}
+          >
+            <Image
+              source={{ uri: postImages[0].uri }}
+              style={styles.postImage}
+              onError={(error) => {
+                console.log('❌ Single post image error:', error?.nativeEvent?.error);
+                console.log('❌ Failed image URI:', postImages[0].uri);
+              }}
+              onLoad={() => {
+                console.log('✅ Single post image loaded successfully:', postImages[0].uri);
+              }}
+            />
             <Animated.View
               style={[
-                styles.postImageContainer,
-                {
-                  transform: [
-                    { scale: zoomScale },
-                    { translateX: zoomTranslateX },
-                    { translateY: zoomTranslateY },
-                  ],
-                },
+                styles.centerHeartContainer,
+                { opacity: centerHeartOpacity, transform: [{ scale: centerHeartAnim }] }
               ]}
-              {...zoomPanResponder.panHandlers}
+              pointerEvents="none"
             >
-              <Image
-                source={{ uri: postImages[0].uri }}
-                style={styles.postImage}
-                onError={(error) => {
-                  console.log('❌ Single post image error:', error?.nativeEvent?.error);
-                  console.log('❌ Failed image URI:', postImages[0].uri);
-                }}
-                onLoad={() => {
-                  console.log('✅ Single post image loaded successfully:', postImages[0].uri);
-                }}
-              />
-              <Animated.View
-                style={[
-                  styles.centerHeartContainer,
-                  { opacity: centerHeartOpacity, transform: [{ scale: centerHeartAnim }] }
-                ]}
-                pointerEvents="none"
-              >
-                <View style={styles.centerHeartWrapper}>
-                  <Ionicons name="heart" size={100} color="#E93A7A" style={styles.centerHeart} />
-                </View>
-              </Animated.View>
+              <View style={styles.centerHeartWrapper}>
+                <Ionicons name="heart" size={100} color="#E93A7A" style={styles.centerHeart} />
+              </View>
             </Animated.View>
-          </TouchableWithoutFeedback>
+          </Animated.View>
         </View>
       );
     }
@@ -1105,7 +1112,7 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
           {/* ✅ FIX 7: Always show comments, with dynamic text based on count */}
           <TouchableOpacity onPress={handleCommentPress} activeOpacity={0.8}>
             <Text style={styles.commentsText}>
-              {commentsCount > 0 
+              {commentsCount > 0
                 ? `View all ${commentsCount} ${commentsCount === 1 ? 'comment' : 'comments'}`
                 : 'Add a comment...'
               }
@@ -1205,6 +1212,7 @@ const Post = ({ data, navigation, onLikeUpdate }) => {
   );
 };
 
+// [Styles remain the same as in original file]
 const styles = StyleSheet.create({
   container: {
     backgroundColor: "black",

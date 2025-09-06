@@ -13,6 +13,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../../context/AuthContext';
+import AsyncStorage from '@react-native-async-storage/async-storage'; // 👈 Add this
 
 const NotificationsScreen = () => {
   const navigation = useNavigation();
@@ -26,6 +27,41 @@ const NotificationsScreen = () => {
   useEffect(() => {
     fetchNotifications();
   }, [activeTab]);
+
+  // ✅ NEW FUNCTION: Validate FCM Token
+  const validateFCMToken = async () => {
+    try {
+      const fcmToken = await AsyncStorage.getItem('fcm_token');
+      if (!fcmToken) {
+        Alert.alert('Error', 'No FCM token found. Please restart the app.');
+        return;
+      }
+
+      Alert.alert('Validating...', 'Please wait while we validate your FCM token.');
+
+      const response = await fetch('https://backendforheartlink.in/api/v1/fcm/validate-token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ fcmToken }),
+      });
+
+      const result = await response.json();
+
+      if (result.statusCode === 200) {
+        Alert.alert(
+          '✅ Validation Result',
+          `Token: ${result.data.token}\nStatus: ${result.data.isValid ? 'VALID' : 'INVALID'}\nMessage: ${result.message}`
+        );
+      } else {
+        Alert.alert('❌ Validation Failed', result.message || 'Unknown error');
+      }
+    } catch (error) {
+      console.error('Validation error:', error);
+      Alert.alert('❌ Error', 'Failed to validate token. Check logs for details.');
+    }
+  };
 
   const fetchNotifications = async (page = 1) => {
     try {
@@ -180,7 +216,7 @@ const NotificationsScreen = () => {
   const markAsRead = async (notificationId) => {
     try {
       const response = await fetch(
-        `https://backendforheartlink.in/api/v1/notifications/${notificationId}/read`,
+        `   https://backendforheartlink.in/api/v1/notifications/   ${notificationId}/read`,
         {
           method: 'PATCH',
           headers: {
@@ -297,8 +333,12 @@ const NotificationsScreen = () => {
       </TouchableOpacity>
       <Text style={styles.headerTitle}>Notifications</Text>
       <View style={styles.headerRight}>
-        <TouchableOpacity onPress={handleRefresh}>
+        <TouchableOpacity onPress={handleRefresh} style={styles.headerButton}>
           <Icon name="refresh" size={24} color="white" />
+        </TouchableOpacity>
+        {/* ✅ ADD VALIDATE TOKEN BUTTON */}
+        <TouchableOpacity onPress={validateFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
+          <Text style={styles.validateButtonText}>Validate</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -371,7 +411,21 @@ const styles = StyleSheet.create({
     color: 'white',
   },
   headerRight: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerButton: {
+    padding: 8,
+  },
+  validateButtonText: {
+    color: '#007AFF',
+    fontSize: 12,
+    fontWeight: '600',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+    borderRadius: 12,
   },
   tabBar: {
     flexDirection: 'row',

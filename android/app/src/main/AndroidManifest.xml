@@ -115,5 +115,18 @@
         <meta-data 
             android:name="android.webkit.WebView.EnableSafeBrowsing"
             android:value="false" />
+
+            <service
+        android:name=".MyFirebaseMessagingService"
+        android:exported="false">
+
+        
+        <intent-filter>
+            <action android:name="com.google.firebase.MESSAGING_EVENT" />
+        </intent-filter>
+    </service>
+    <!-- Add this metadata for default notification icon -->
+
+
     </application>
 </manifest>
