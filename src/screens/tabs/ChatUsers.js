@@ -18,7 +18,7 @@ import {
   Dimensions,
   AppState,
   Linking,
-  PermissionsAndroid, // ADDED: Import for requesting microphone permission
+  PermissionsAndroid,
 } from 'react-native';
 // ADDED: Import useFocusEffect for screen focus events
 import { useFocusEffect } from '@react-navigation/native';
@@ -49,6 +49,13 @@ try {
   DocumentPicker = require('react-native-document-picker');
 } catch (e) {
   console.log('DocumentPicker not installed');
+}
+// ADDED: Import react-native-fs for video preview handling
+let RNFS;
+try {
+  RNFS = require('react-native-fs');
+} catch (e) {
+  console.log('react-native-fs not installed');
 }
 const { width, height } = Dimensions.get('window');
 const ChatDetailScreen = () => {
@@ -82,6 +89,8 @@ const ChatDetailScreen = () => {
   const [audioMessageUrl, setAudioMessageUrl] = useState(null); // Holds the URL of the audio file to be played
   // ADDED: State to track current time of the playing message
   const [playingMessageCurrentTime, setPlayingMessageCurrentTime] = useState(0);
+  // ADDED: State to store local URIs for video previews
+  const [videoPreviews, setVideoPreviews] = useState({});
   const { user: currentUser, token } = useAuth();
   const navigation = useNavigation();
   const route = useRoute();
@@ -91,11 +100,9 @@ const ChatDetailScreen = () => {
   const markAsReadTimeoutRef = useRef(null);
   const { conversationId, receiverId, receiverName, receiverOnline } = route.params;
   // ===== START: NEW UTILITY FUNCTION AND EFFECT =====
-  // Add this function to your ChatDetailScreen component
   const handleConnectionIssues = useCallback(() => {
     if (!socket || !socket.connected) {
       console.log('🔄 Attempting to reconnect socket...');
-      // Force socket reconnection
       if (typeof socket?.connect === 'function') {
         socket.connect();
       }
@@ -103,61 +110,99 @@ const ChatDetailScreen = () => {
     }
     return true;
   }, [socket]);
-  // Add this useEffect for periodic connection checking
   useEffect(() => {
     const connectionCheckInterval = setInterval(() => {
       if (!handleConnectionIssues() && socket) {
         console.log('⚠ Socket disconnected, attempting to reconnect...');
-        // Try to rejoin conversation after reconnection
         setTimeout(() => {
           if (socket?.connected && conversationId) {
             socket.emit('joinConversation', { conversationId });
           }
         }, 2000);
       }
-    }, 10000); // Check every 10 seconds
+    }, 10000);
     return () => clearInterval(connectionCheckInterval);
   }, [socket, conversationId, handleConnectionIssues]);
   // ===== END: NEW UTILITY FUNCTION AND EFFECT =====
+  // ADDED: Function to handle video preview generation/fetching
+  const handleVideoPreview = async (message) => {
+    // Only process video messages that don't already have a local preview and have a remote URL
+    if (
+      message.messageType === 'video' &&
+      message.fileUrl &&
+      message.fileUrl.startsWith('http') &&
+      !videoPreviews[message.fileUrl]
+    ) {
+      try {
+        // Create a unique local filename for the cached video
+        const localFileName = `${message._id}_preview.mp4`;
+        const localFilePath = `${RNFS.CachesDirectoryPath}/${localFileName}`;
+        // Check if the file already exists locally (e.g., from a previous render)
+        const exists = await RNFS.exists(localFilePath);
+        if (exists) {
+            console.log(`🔁 Video preview already exists for ${message._id}`);
+            setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: `file://${localFilePath}` }));
+            return;
+        }
+        // If not, download the video file (or at least the beginning part)
+        // Note: react-native-fs download might download the whole file.
+        // For true thumbnail generation, a native module is usually better.
+        // This approach fetches the file to get a local URI that *might* allow Image to grab a frame.
+        console.log(`🔽 Downloading video for preview: ${message.fileUrl} -> ${localFilePath}`);
+        const download = RNFS.downloadFile({
+          fromUrl: message.fileUrl,
+          toFile: localFilePath,
+          discretionary: true, // iOS background download hint
+          cacheable: true,     // iOS cache hint
+        });
+        const downloadResult = await download.promise;
+        if (downloadResult.statusCode === 200) {
+          console.log(`✅ Video downloaded for preview: ${message._id}`);
+          // Update state with the local file URI
+          setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: `file://${localFilePath}` }));
+        } else {
+           console.warn(`⚠️ Failed to download video for preview (${downloadResult.statusCode}): ${message._id}`);
+           // Optionally set an error state for this message
+           setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: 'error' }));
+        }
+      } catch (error) {
+        console.error('❌ Error handling video preview for message:', message._id, error);
+        // Set error state so UI can show fallback
+        setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: 'error' }));
+      }
+    }
+  };
   // ADDED FOR AUDIO PLAYBACK: Function to handle playing/pausing audio messages
   const handleAudioPlayPause = (messageId, fileUrl) => {
     if (currentlyPlaying === messageId) {
       // If the same audio message is tapped, toggle its paused state
       setPaused(!paused);
-      // Note: Getting real-time currentTime from <Video> is tricky here.
-      // We rely on the onProgress callback below for updates.
     } else {
       // If a new audio message is tapped, start playing it
       setCurrentlyPlaying(messageId);
-      setAudioMessageUrl(fileUrl); // Set the URL for the <Video> component
+      setAudioMessageUrl(fileUrl);
       setPaused(false);
-      setPlayingMessageCurrentTime(0); // Reset time for new message
+      setPlayingMessageCurrentTime(0);
     }
   };
-  // ADDED FOR AUDIO PLAYBACK: Function to reset state when audio finishes
   const onPlaybackEnd = () => {
     setPaused(true);
     setCurrentlyPlaying(null);
     setAudioMessageUrl(null);
-    setPlayingMessageCurrentTime(0); // Reset time on end
+    setPlayingMessageCurrentTime(0);
   };
-  // ADDED: Helper function to get current time for a specific message
   const getCurrentTimeForMessage = (messageId) => {
-    // If this message is the one currently playing, return its tracked time
     if (currentlyPlaying === messageId) {
       return playingMessageCurrentTime;
     }
-    // If not playing, return 0 (or you could store last known time per message in state)
     return 0;
   };
-  // Updated handleAudioRecordingComplete function to track duration:
   const handleAudioRecordingComplete = async (audioFile, duration = null) => {
     console.log('🎵 Audio recorded:', audioFile);
     setIsAudioRecording(false);
     if (audioFile && audioFile.uri) {
       setUploadingFile(true);
       try {
-        // Pass duration if available (you may need to update AudioRecorder to return duration)
         await sendMessage('audio', audioFile, duration);
       } catch (error) {
         console.error("Error sending audio message:", error);
@@ -228,7 +273,6 @@ const ChatDetailScreen = () => {
         setCallState('idle');
         setIsCallActive(false);
         setIsInitiatingCall(false);
-        setIncomingCall(null);
       }
     }, 2000);
     return () => clearInterval(stateCheckInterval);
@@ -607,7 +651,8 @@ const ChatDetailScreen = () => {
         conversationId: message.conversationId,
         currentConversationId: conversationId,
         sender: message.sender?._id,
-        content: message.content?.substring(0, 50) + '...'
+        content: message.content?.substring(0, 50) + '...',
+        messageType: message.messageType
       });
       // Verify this message belongs to current conversation
       if (message.conversationId !== conversationId) {
@@ -869,201 +914,201 @@ const ChatDetailScreen = () => {
       setLoading(false);
     }
   };
- // STEP 1: Replace the sendMessage function in ChatDetailScreen
-const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null) => {
-  if (messageType === 'text' && (!newMessage.trim() || sending)) return;
-  if (messageType !== 'text' && !fileData) return;
-  const messageText = messageType === 'text' ? newMessage.trim() : newMessage;
-  const tempId = `temp_${Date.now()}_${Math.random()}`;
-  setNewMessage('');
-  // Set loading states based on message type
-  if (messageType === 'text') {
-    setSending(true);
-  } else {
-    setUploadingFile(true);
-  }
-  try {
-    if (messageType === 'text' && socket && socket.connected) {
-      // Handle text messages via socket (existing logic)
-      console.log('📤 Sending text message via socket');
-      const messageData = {
-        conversationId,
-        receiverId,
-        content: messageText,
-        messageType: 'text',
-        tempId
-      };
-      socket.emit('sendMessage', messageData);
-      const confirmationTimeout = setTimeout(() => {
-        console.log('⚠️ Socket message timeout, falling back to HTTP');
-        sendViaHTTP();
-      }, 5000);
-      const handleMessageSent = (data) => {
-        if (data.tempId === tempId) {
-          clearTimeout(confirmationTimeout);
-          socket.off('messageSent', handleMessageSent);
-          socket.off('error', handleMessageError);
-          setSending(false);
-          console.log('✅ Message sent via socket successfully');
-        }
-      };
-      const handleMessageError = (error) => {
-        if (error.tempId === tempId) {
-          clearTimeout(confirmationTimeout);
-          socket.off('messageSent', handleMessageSent);
-          socket.off('error', handleMessageError);
-          console.log('❌ Socket message failed, falling back to HTTP');
-          sendViaHTTP();
-        }
-      };
-      socket.on('messageSent', handleMessageSent);
-      socket.on('error', handleMessageError);
+  // STEP 1: Replace the sendMessage function in ChatDetailScreen
+  const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null) => {
+    if (messageType === 'text' && (!newMessage.trim() || sending)) return;
+    if (messageType !== 'text' && !fileData) return;
+    const messageText = messageType === 'text' ? newMessage.trim() : newMessage;
+    const tempId = `temp_${Date.now()}_${Math.random()}`;
+    setNewMessage('');
+    // Set loading states based on message type
+    if (messageType === 'text') {
+      setSending(true);
     } else {
-      // Handle file messages via HTTP with immediate UI feedback
-      await sendViaHTTP();
+      setUploadingFile(true);
     }
-    async function sendViaHTTP() {
-      console.log('📤 Sending message via HTTP, type:', messageType);
-      let requestBody;
-      let headers = {
-        'Authorization': `Bearer ${token}`,
-      };
-      let endpoint = `${BASE_URL}/api/v1/chat/message`;
-      // 🔥 STEP 1A: Create optimistic message for immediate UI feedback (for file uploads)
-      let optimisticMessage = null;
-      if (messageType !== 'text') {
-        optimisticMessage = {
-          _id: tempId,
-          conversationId,
-          sender: {
-            _id: currentUser._id,
-            fullName: currentUser.fullName,
-            username: currentUser.username,
-            photoUrl: currentUser.photoUrl
-          },
-          receiver: {
-            _id: receiverId,
-            fullName: receiverName
-          },
-          messageType,
-          content: messageText || '',
-          fileUrl: fileData.uri, // Temporary local URI
-          fileName: fileData.name || 'File',
-          fileSize: fileData.size,
-          status: 'sending', // Custom status for optimistic update
-          createdAt: new Date().toISOString(),
-          isOptimistic: true // Flag to identify optimistic messages
-        };
-        // Add optimistic message to UI immediately
-        setMessages(prev => [...prev, optimisticMessage]);
-        // Scroll to bottom
-        setTimeout(() => {
-          flatListRef.current?.scrollToEnd({ animated: true });
-        }, 100);
-      }
-      // Prepare request based on message type
-      if (messageType === 'audio') {
-        endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
-        const formData = new FormData();
-        formData.append('voice', {
-          uri: fileData.uri,
-          type: fileData.type || 'audio/mp3',
-          name: fileData.name || `voice_message_${Date.now()}.mp3`,
-        });
-        formData.append('conversationId', conversationId);
-        formData.append('receiverId', receiverId);
-        if (audioDuration) {
-          formData.append('duration', audioDuration.toString());
-        }
-        requestBody = formData;
-      } else if (messageType === 'text') {
-        headers['Content-Type'] = 'application/json';
-        requestBody = JSON.stringify({
+    try {
+      if (messageType === 'text' && socket && socket.connected) {
+        // Handle text messages via socket (existing logic)
+        console.log('📤 Sending text message via socket');
+        const messageData = {
           conversationId,
           receiverId,
           content: messageText,
           messageType: 'text',
-        });
-      } else {
-        const formData = new FormData();
-        formData.append('file', fileData);
-        formData.append('conversationId', conversationId);
-        formData.append('receiverId', receiverId);
-        formData.append('messageType', messageType);
-        if (messageText) {
-          formData.append('content', messageText);
-        }
-        requestBody = formData;
-      }
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: requestBody,
-      });
-      const data = await response.json();
-      if (response.ok && data.success) {
-        console.log('✅ Message sent via HTTP successfully');
-        // 🔥 STEP 1B: Handle successful file upload
-        if (messageType !== 'text' && optimisticMessage) {
-          // Replace optimistic message with real message
-          setMessages(prev => prev.map(msg => {
-            if (msg._id === tempId && msg.isOptimistic) {
-              return {
-                ...data.data, // Real message from server
-                statusInfo: {
-                  isSent: true,
-                  isDelivered: false,
-                  isRead: false
-                }
-              };
-            }
-            return msg;
-          }));
-          // 🔥 STEP 1C: Emit via socket for real-time updates to other users
-          if (socket && socket.connected) {
-            socket.emit('fileMessageSent', {
-              message: data.data,
-              conversationId,
-              receiverId
-            });
+          tempId
+        };
+        socket.emit('sendMessage', messageData);
+        const confirmationTimeout = setTimeout(() => {
+          console.log('⚠️ Socket message timeout, falling back to HTTP');
+          sendViaHTTP();
+        }, 5000);
+        const handleMessageSent = (data) => {
+          if (data.tempId === tempId) {
+            clearTimeout(confirmationTimeout);
+            socket.off('messageSent', handleMessageSent);
+            socket.off('error', handleMessageError);
+            setSending(false);
+            console.log('✅ Message sent via socket successfully');
           }
-        }
+        };
+        const handleMessageError = (error) => {
+          if (error.tempId === tempId) {
+            clearTimeout(confirmationTimeout);
+            socket.off('messageSent', handleMessageSent);
+            socket.off('error', handleMessageError);
+            console.log('❌ Socket message failed, falling back to HTTP');
+            sendViaHTTP();
+          }
+        };
+        socket.on('messageSent', handleMessageSent);
+        socket.on('error', handleMessageError);
       } else {
-        console.error('❌ HTTP message failed:', data);
-        // 🔥 STEP 1D: Handle failed file upload
-        if (messageType !== 'text' && optimisticMessage) {
-          // Remove optimistic message and show error
-          setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
-          Alert.alert('Error', data.message || 'Failed to send message');
-          if (messageType === 'text') {
-            setNewMessage(messageText);
+        // Handle file messages via HTTP with immediate UI feedback
+        await sendViaHTTP();
+      }
+      async function sendViaHTTP() {
+        console.log('📤 Sending message via HTTP, type:', messageType);
+        let requestBody;
+        let headers = {
+          'Authorization': `Bearer ${token}`,
+        };
+        let endpoint = `${BASE_URL}/api/v1/chat/message`;
+        // 🔥 STEP 1A: Create optimistic message for immediate UI feedback (for file uploads)
+        let optimisticMessage = null;
+        if (messageType !== 'text') {
+          optimisticMessage = {
+            _id: tempId,
+            conversationId,
+            sender: {
+              _id: currentUser._id,
+              fullName: currentUser.fullName,
+              username: currentUser.username,
+              photoUrl: currentUser.photoUrl
+            },
+            receiver: {
+              _id: receiverId,
+              fullName: receiverName
+            },
+            messageType,
+            content: messageText || '',
+            fileUrl: fileData.uri, // Temporary local URI
+            fileName: fileData.name || 'File',
+            fileSize: fileData.size,
+            status: 'sending', // Custom status for optimistic update
+            createdAt: new Date().toISOString(),
+            isOptimistic: true // Flag to identify optimistic messages
+          };
+          // Add optimistic message to UI immediately
+          setMessages(prev => [...prev, optimisticMessage]);
+          // Scroll to bottom
+          setTimeout(() => {
+            flatListRef.current?.scrollToEnd({ animated: true });
+          }, 100);
+        }
+        // Prepare request based on message type
+        if (messageType === 'audio') {
+          endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
+          const formData = new FormData();
+          formData.append('voice', {
+            uri: fileData.uri,
+            type: fileData.type || 'audio/mp3',
+            name: fileData.name || `voice_message_${Date.now()}.mp3`,
+          });
+          formData.append('conversationId', conversationId);
+          formData.append('receiverId', receiverId);
+          if (audioDuration) {
+            formData.append('duration', audioDuration.toString());
+          }
+          requestBody = formData;
+        } else if (messageType === 'text') {
+          headers['Content-Type'] = 'application/json';
+          requestBody = JSON.stringify({
+            conversationId,
+            receiverId,
+            content: messageText,
+            messageType: 'text',
+          });
+        } else {
+          const formData = new FormData();
+          formData.append('file', fileData);
+          formData.append('conversationId', conversationId);
+          formData.append('receiverId', receiverId);
+          formData.append('messageType', messageType);
+          if (messageText) {
+            formData.append('content', messageText);
+          }
+          requestBody = formData;
+        }
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body: requestBody,
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+          console.log('✅ Message sent via HTTP successfully');
+          // 🔥 STEP 1B: Handle successful file upload
+          if (messageType !== 'text' && optimisticMessage) {
+            // Replace optimistic message with real message
+            setMessages(prev => prev.map(msg => {
+              if (msg._id === tempId && msg.isOptimistic) {
+                return {
+                  ...data.data, // Real message from server
+                  statusInfo: {
+                    isSent: true,
+                    isDelivered: false,
+                    isRead: false
+                  }
+                };
+              }
+              return msg;
+            }));
+            // 🔥 STEP 1C: Emit via socket for real-time updates to other users
+            if (socket && socket.connected) {
+              socket.emit('fileMessageSent', {
+                message: data.data,
+                conversationId,
+                receiverId
+              });
+            }
           }
         } else {
-          Alert.alert('Error', data.message || 'Failed to send message');
-          if (messageType === 'text') {
-            setNewMessage(messageText);
+          console.error('❌ HTTP message failed:', data);
+          // 🔥 STEP 1D: Handle failed file upload
+          if (messageType !== 'text' && optimisticMessage) {
+            // Remove optimistic message and show error
+            setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
+            Alert.alert('Error', data.message || 'Failed to send message');
+            if (messageType === 'text') {
+              setNewMessage(messageText);
+            }
+          } else {
+            Alert.alert('Error', data.message || 'Failed to send message');
+            if (messageType === 'text') {
+              setNewMessage(messageText);
+            }
           }
         }
       }
+    } catch (error) {
+      console.error('❌ Error sending message:', error);
+      // Handle error for optimistic messages
+      if (messageType !== 'text') {
+        setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
+      }
+      Alert.alert('Error', 'Failed to send message');
+      if (messageType === 'text') {
+        setNewMessage(messageText);
+      }
+    } finally {
+      if (messageType === 'text') {
+        setSending(false);
+      } else {
+        setUploadingFile(false);
+      }
     }
-  } catch (error) {
-    console.error('❌ Error sending message:', error);
-    // Handle error for optimistic messages
-    if (messageType !== 'text') {
-      setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
-    }
-    Alert.alert('Error', 'Failed to send message');
-    if (messageType === 'text') {
-      setNewMessage(messageText);
-    }
-  } finally {
-    if (messageType === 'text') {
-      setSending(false);
-    } else {
-      setUploadingFile(false);
-    }
-  }
-};
+  };
   // ===== END: REPLACED sendMessage FUNCTION =====
   // Delete message
   const deleteMessage = async (messageId) => {
@@ -1149,7 +1194,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
     }
     return true;
   };
-
   // ADDED: Request microphone permission for video recording
   const requestMicrophonePermission = async () => {
     if (Platform.OS === 'android') {
@@ -1173,7 +1217,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
     // iOS permissions are typically handled by the native picker
     return true;
   };
-
   // ADDED: Combined function to request both camera and microphone permissions
   const requestCameraAndMicrophonePermissions = async () => {
     const cameraGranted = await requestCameraPermission();
@@ -1181,16 +1224,13 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       Alert.alert('Permission Denied', 'Camera permission is required to take photos/videos.');
       return false;
     }
-
     const micGranted = await requestMicrophonePermission();
     if (!micGranted) {
       Alert.alert('Permission Denied', 'Microphone permission is required to record videos.');
       return false;
     }
-
     return true;
   };
-
   const openCamera = async () => {
     if (!ImagePicker) {
       Alert.alert('Error', 'Image picker not available');
@@ -1224,8 +1264,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       }
     });
   };
-
-
   // ADDED: New function for recording video
   const recordVideo = async () => {
     if (!ImagePicker) {
@@ -1238,14 +1276,12 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       return;
     }
     setShowAttachmentModal(false); // Close the modal
-
     const options = {
       mediaType: 'video', // Specify video
       // You can add quality, max duration settings if supported by your ImagePicker version
       // videoQuality: 'high', // Example (check ImagePicker docs)
       // durationLimit: 30,    // Example: 30 seconds max (check ImagePicker docs)
     };
-
     // Use launchCamera for recording directly
     ImagePicker.launchCamera(options, async (response) => {
       console.log('Video Picker Response:', response); // Log the response structure
@@ -1253,12 +1289,10 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
         console.log('Video recording cancelled or failed:', response.errorMessage || response.errorCode);
         return;
       }
-
       // Check if assets exist and get the first one (video)
       if (response.assets && response.assets.length > 0) {
         const asset = response.assets[0];
         console.log('Selected Video Asset:', asset); // Log asset details
-
         // Prepare file data similar to image capture
         // Ensure the URI, type, and name are correctly extracted
         const fileData = {
@@ -1268,7 +1302,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
           // Include size if available
           size: asset.fileSize,
         };
-
         setUploadingFile(true); // Show uploading indicator
         try {
           // Use the existing sendMessage function with 'video' type
@@ -1284,7 +1317,6 @@ const sendMessage = async (messageType = 'text', fileData = null, audioDuration 
       }
     });
   };
-
   const openGallery = () => {
     if (!ImagePicker) {
       Alert.alert('Error', 'Image picker not available');
@@ -1506,8 +1538,32 @@ Would you like to open this file?`,
                 )}
               </TouchableOpacity>
             )}
+            {/* UPDATED FOR VIDEO PREVIEW */}
+            {item.messageType === 'video' && (
+              <TouchableOpacity
+                style={styles.imageMessageContainer} // Reuse image container styles
+                onPress={() => handleFileDownload(item.fileUrl, item.fileName, item.messageType)} // Handle tap
+                activeOpacity={0.9}
+              >
+                {/* --- VIDEO PREVIEW LOGIC --- */}
+                {/* We'll use a placeholder until the thumbnail is generated */}
+                <View style={[styles.messageImage, styles.videoPlaceholder]}>
+                  <Ionicons name="videocam" size={30} color="#999" />
+                </View>
+                {/* Overlay play icon */}
+                <View style={styles.videoOverlay}>
+                  <Ionicons name="play-circle" size={40} color="rgba(255, 255, 255, 0.8)" />
+                </View>
+                {/* --- END VIDEO PREVIEW LOGIC --- */}
+                {item.content && (
+                  <Text style={styles.messageText}>
+                    {item.content}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            )}
             {/* UPDATED FOR AUDIO PLAYBACK: This block now handles audio playback using the AudioPlayer component */}
-            {(item.messageType === 'file' || item.messageType === 'audio' || item.messageType === 'video') && (
+            {(item.messageType === 'file' || item.messageType === 'audio') && item.messageType !== 'video' && (
               <TouchableOpacity
                 style={styles.fileMessageContainer}
                 onPress={() => {
@@ -1524,25 +1580,34 @@ Would you like to open this file?`,
               >
                 {/* Check if it's an audio message to render the new player */}
                 {item.messageType === 'audio' ? (
-                  // Use the new AudioPlayer component
-                  <AudioPlayer
-                    isPlaying={isPlaying && !paused} // Pass playing state
-                    onPressPlayPause={() => handleAudioPlayPause(item._id, item.fileUrl)} // Pass handler
-                    duration={item.duration ? parseFloat(item.duration) : 0} // Pass duration if available (assuming API sends it as a string)
-                    currentTime={getCurrentTimeForMessage(item._id)} // Pass current time (see note below)
-                    disabled={false} // Or pass a state if needed
-                  />
+                  // Use a custom view for WhatsApp-style audio player
+                  <View style={[styles.audioPlayerContainer]}>
+                    {/* Play/Pause Button */}
+                    <TouchableOpacity
+                      style={styles.audioPlayButton}
+                      onPress={() => handleAudioPlayPause(item._id, item.fileUrl)}
+                    >
+                      <Ionicons name="play" size={20} color="#00C853" />
+                    </TouchableOpacity>
+
+                    {/* Progress Bar */}
+                    <View style={styles.progressBar}>
+                      <View style={[styles.progressFill, { width: `${(playingMessageCurrentTime / (item.duration || 1)) * 100}%` }]} />
+                    </View>
+
+                    {/* Duration Text - Bottom Left */}
+                    {/* <Text style={styles.durationText}>{formatDuration(item.duration)}</Text> */}
+
+                    {/* Read Status - Bottom Right */}
+                    {/* <View style={styles.readStatus}>
+                      <Text style={styles.readStatusText}>✓✓</Text>
+                    </View> */}
+                  </View>
                 ) : (
-                  // Render the previous UI for file/video
+                  // Render the previous UI for file (non-video, non-audio)
                   <>
                     <View style={styles.fileIcon}>
-                      <Ionicons
-                        name={
-                          item.messageType === 'video' ? 'videocam' : 'document'
-                        }
-                        size={28}
-                        color="#FF6B9D"
-                      />
+                      <Ionicons name="document" size={28} color="#FF6B9D" />
                     </View>
                     <View style={styles.fileInfo}>
                       <Text style={styles.fileName} numberOfLines={1}>
@@ -1744,7 +1809,7 @@ Would you like to open this file?`,
             <Ionicons name="close" size={28} color="#fff" />
           </TouchableOpacity>
           <Text style={styles.imagePreviewTitle}>
-            {selectedPreviewImage?.fileName ? selectedPreviewImage.fileName : 'Send Photo'}
+            {selectedPreviewImage?.fileName ? selectedPreviewImage.fileName : 'Preview'}
           </Text>
           {selectedPreviewImage && !selectedPreviewImage.uri?.startsWith('http') && (
             <TouchableOpacity onPress={sendSelectedImage}>
@@ -1894,6 +1959,15 @@ Would you like to open this file?`,
     </SafeAreaView>
   );
 };
+
+// Add this utility function near other utilities
+const formatDuration = (seconds) => {
+  if (!seconds) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+};
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -2073,6 +2147,7 @@ const styles = StyleSheet.create({
   },
   imageMessageContainer: {
     overflow: 'hidden',
+    position: 'relative', // Needed for absolute overlay
   },
   messageImage: {
     width: 200,
@@ -2080,6 +2155,24 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 8,
   },
+  // --- ADDED: Styles for video preview ---
+  videoPlaceholder: {
+    backgroundColor: '#333', // Dark background if thumbnail fails
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  videoOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 8, // Account for marginBottom
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)', // Semi-transparent overlay
+    borderRadius: 12, // Match messageImage border radius
+  },
+  // --- END ADDED: Styles for video preview ---
   fileMessageContainer: {
     // flexDirection: 'row', // Removed as AudioPlayer handles its own layout
     // alignItems: 'center',  // Removed as AudioPlayer handles its own layout
@@ -2348,6 +2441,51 @@ const styles = StyleSheet.create({
     flex: 1,
     width: width,
     height: height - 100,
+  },
+  // ADDED: WhatsApp-style audio player styles
+  audioPlayerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#2C2C2E',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2C2C2E', // Pink border like WhatsApp
+    width: '100%',
+    minHeight: 40,
+  },
+  audioPlayButton: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  progressBar: {
+    flex: 1,
+    height: 2,
+    backgroundColor: '#444',
+    marginHorizontal: 12,
+    borderRadius: 1,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#00C853', // Green fill like WhatsApp
+    borderRadius: 1,
+  },
+  durationText: {
+    fontSize: 12,
+    color: '#999',
+    fontWeight: '500',
+  },
+  readStatus: {
+    marginRight: 8,
+  },
+  readStatusText: {
+    fontSize: 12,
+    color: '#00C853', // Green checkmarks like WhatsApp
+    fontWeight: '600',
   },
 });
 export default ChatDetailScreen;

@@ -292,15 +292,15 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
 
   const getPostImageUrl = (apiPost) => {
     if (!apiPost || typeof apiPost !== 'object') {
-      return 'https://via.placeholder.com/400  ';
+      return 'https://via.placeholder.com/400    ';
     }
     
     const images = Array.isArray(apiPost.images) ? apiPost.images : [];
     if (images.length > 0) {
-      return images[0]?.url || images[0]?.uri || images[0] || 'https://via.placeholder.com/400  ';
+      return images[0]?.url || images[0]?.uri || images[0] || 'https://via.placeholder.com/400    ';
     }
     
-    return apiPost?.image || apiPost?.imageUrl || 'https://via.placeholder.com/400  ';
+    return apiPost?.image || apiPost?.imageUrl || 'https://via.placeholder.com/400    ';
   };
 
   const getAuthorName = (author) => {
@@ -642,7 +642,7 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
         _id: apiPost._id || apiPost.id || `post-${Date.now()}`,
         userImg: userImage ? { uri: userImage } : { uri: 'https://via.placeholder.com/50/333333/ffffff?text=User' },
         username: authorName,
-        postImg: postImageUrl ? { uri: postImageUrl } : { uri: '  https://via.placeholder.com/400/333333/ffffff?text=No+Image' },
+        postImg: postImageUrl ? { uri: postImageUrl } : { uri: '    https://via.placeholder.com/400/333333/ffffff?text=No+Image' },
         caption: apiPost.content || apiPost.caption || '',
         userInitials: getInitials(authorName),
         avatarColor: getAvatarColor(authorName),
@@ -688,8 +688,8 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
   };
 
   const createFallbackPost = () => {
-    const fallbackImage = '  https://via.placeholder.com/50/333333/ffffff?text=User';
-    const fallbackPostImage = '  https://via.placeholder.com/400/333333/ffffff?text=No+Image';
+    const fallbackImage = '    https://via.placeholder.com/50/333333/ffffff?text=User';
+    const fallbackPostImage = '    https://via.placeholder.com/400/333333/ffffff?text=No+Image';
     const fallbackName = 'Unknown User';
     
     return {
@@ -754,7 +754,11 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
     if (!loadingMore) return null;
     return (
       <View style={styles.footerLoader}>
-        <ActivityIndicator size="small" color="#ffffff" />
+        {/* --- Updated Footer Loader --- */}
+        <View style={styles.redLoaderContainer}>
+          <ActivityIndicator size="small" color="red" />
+        </View>
+        {/* --------------------------- */}
         <Text style={styles.footerText}>Loading more posts...</Text>
       </View>
     );
@@ -803,7 +807,11 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
       <View style={[styles.container, styles.loadingContainer]}>
         <ListHeader />
         <View style={styles.centerLoader}>
-          <ActivityIndicator size="large" color="#ffffff" />
+          {/* --- Updated Main Loader --- */}
+          <View style={styles.redLoaderContainer}>
+            <ActivityIndicator size="large" color="red" />
+          </View>
+          {/* ------------------------- */}
           <Text style={styles.loadingText}>Loading posts...</Text>
         </View>
       </View>
@@ -828,8 +836,8 @@ const HomeScreen = React.forwardRef<any, Props>((props: Props, ref) => {
           <RefreshControl
             refreshing={refreshing}
             onRefresh={onRefresh}
-            colors={['#ffffff']}
-            tintColor="#ffffff"
+            colors={['red']}    // Red spinner on Android
+            tintColor="red"     // Red spinner on iOS
           />
         }
         onEndReached={loadMorePosts}
@@ -909,6 +917,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontFamily: 'monospace',
   },
+  // --- New Styles for Red Loaders ---
+  redLoaderContainer: {
+    backgroundColor: 'white', // White background
+    borderRadius: 50,         // Make it circular
+    padding: 10,              // Size of the loader area
+    // Optional shadow for better visibility
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  // -------------------------------
 });
 
 export default HomeScreen;

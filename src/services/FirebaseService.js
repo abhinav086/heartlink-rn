@@ -1,4 +1,4 @@
-// services/FirebaseService.js - Fixed version with proper Android icon handling
+// services/FirebaseService.js - Fixed version with proper field mapping
 import messaging from '@react-native-firebase/messaging';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import notifee, { AndroidStyle } from '@notifee/react-native';
@@ -6,8 +6,7 @@ import { Platform, Alert } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 
 // Import your API config
-import { BASE_URL } from '../config/config';
-
+const BASE_URL = 'https://backendforheartlink.in';
 
 class FirebaseService {
   constructor() {
@@ -64,6 +63,81 @@ class FirebaseService {
       console.error('❌ FirebaseService initialization error:', error);
       return null;
     }
+  }
+
+  async checkFCMTokenValidity(authToken) {
+    try {
+      console.log('🔍 Checking FCM token validity with backend...');
+      
+      const response = await fetch(`${BASE_URL}/api/v1/users/onboarding/my-status`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      console.log('📡 FCM token validity response:', {
+        status: response.status,
+        ok: response.ok
+      });
+
+      // If we get 401/403, it likely means the FCM token is invalid
+      if (response.status === 401 || response.status === 403) {
+        console.log('❌ FCM token appears to be invalid (401/403 response)');
+        return false;
+      }
+
+      if (response.ok) {
+        console.log('✅ FCM token appears to be valid');
+        return true;
+      }
+
+      // For other error codes, assume token might be invalid
+      console.log('⚠️ Uncertain FCM token validity, assuming invalid');
+      return false;
+    } catch (error) {
+      console.error('❌ Error checking FCM token validity:', error);
+      return false;
+    }
+  }
+
+  async refreshFCMTokenIfNeeded(authToken) {
+    try {
+      console.log('🔄 Refreshing FCM token if needed...');
+      
+      // Generate new FCM token
+      const newToken = await this.getFCMToken();
+      if (!newToken) {
+        throw new Error('Failed to generate new FCM token');
+      }
+
+      // Send new token to backend
+      const success = await this.sendTokenToBackend(newToken, authToken);
+      if (!success) {
+        throw new Error('Failed to send new FCM token to backend');
+      }
+
+      console.log('✅ FCM token refreshed and sent to backend successfully');
+      return true;
+    } catch (error) {
+      console.error('❌ Error refreshing FCM token:', error);
+      return false;
+    }
+  }
+
+  showTokenValidPopup() {
+    console.log('📱 Showing Token Valid popup...');
+    
+    // Alert.alert(
+    //   '', 
+    //   'Token valid', 
+    //   [{ text: 'OK', style: 'default' }],
+    //   { 
+    //     cancelable: true,
+    //     userInterfaceStyle: 'dark' // iOS only
+    //   }
+    // );
   }
 
   async sendTokenToBackend(token, authToken) {
@@ -157,7 +231,7 @@ class FirebaseService {
     }
   }
 
-    async getFCMToken() {
+  async getFCMToken() {
     try {
       const token = await messaging().getToken();
       if (token) {
@@ -166,9 +240,6 @@ class FirebaseService {
 
         // Log full token
         console.log('🔑 Full FCM Token:', token);
-
-        // Also show alert for easy copy (optional)
-        // Alert.alert('Your FCM Token', token);
       } else {
         console.warn('⚠️ No FCM token returned');
       }
@@ -187,21 +258,57 @@ class FirebaseService {
         try {
           const { notification, data } = remoteMessage;
 
+          // FIXED: Enhanced sender name extraction with proper field mapping
+          const getSenderName = (data) => {
+            // Check in priority order - most specific to general
+            if (data?.senderName) return data.senderName;
+            if (data?.commenterName) return data.commenterName;
+            if (data?.likerName) return data.likerName;
+            if (data?.impressorName) return data.impressorName;
+            if (data?.followerName) return data.followerName;
+            if (data?.streamerName) return data.streamerName;
+            
+            // Debug log to see what fields are actually available
+            console.log('🔍 Available data fields:', Object.keys(data || {}));
+            return 'Someone';
+          };
+
+          // FIXED: Enhanced sender photo extraction with proper field mapping
+          const getSenderPhoto = (data) => {
+            // Check in priority order
+            if (data?.senderPhoto) return data.senderPhoto;
+            if (data?.commenterPhoto) return data.commenterPhoto;
+            if (data?.likerPhoto) return data.likerPhoto;
+            if (data?.impressorPhoto) return data.impressorPhoto;
+            if (data?.followerPhoto) return data.followerPhoto;
+            if (data?.streamerPhoto) return data.streamerPhoto;
+            
+            return null;
+          };
+
+          const senderName = getSenderName(data);
+          const senderPhoto = getSenderPhoto(data);
+
+          console.log('🔍 FCM Debug - Final extracted info:', {
+            senderName,
+            senderPhoto: senderPhoto ? 'Present' : 'Missing',
+            notificationType: data?.type,
+            allDataFields: Object.keys(data || {})
+          });
+
           // Build Android-specific notification config
           const androidConfig = {
             channelId: 'chat_messages',
             pressAction: { id: 'default' },
-            // Use ic_launcher as fallback, or omit smallIcon to use default
             ...(Platform.OS === 'android' && {
-              smallIcon: 'ic_launcher', // Use the app's launcher icon
-              color: '#BB8FCE', // Your app's accent color
+              smallIcon: 'ic_launcher',
+              color: '#BB8FCE',
             }),
             style: {
               type: AndroidStyle.MESSAGING,
               person: {
-                name: data?.senderName || 'Someone',
-                // Only set icon if we have a valid URL
-                ...(data?.senderPhoto && { icon: data.senderPhoto }),
+                name: senderName,
+                ...(senderPhoto && { icon: senderPhoto }),
               },
               messages: [{
                 text: notification?.body || 'New message',
@@ -221,7 +328,7 @@ class FirebaseService {
             },
           });
 
-          console.log('✅ Foreground notification displayed successfully');
+          console.log('✅ Foreground notification displayed with sender:', senderName);
         } catch (error) {
           console.error('❌ Error displaying foreground notification:', error);
           
@@ -233,7 +340,6 @@ class FirebaseService {
               android: {
                 channelId: 'chat_messages',
                 pressAction: { id: 'default' },
-                // Don't specify smallIcon to use default
               },
             });
             console.log('✅ Fallback notification displayed');

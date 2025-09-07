@@ -13,7 +13,7 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../../context/AuthContext';
-import AsyncStorage from '@react-native-async-storage/async-storage'; // 👈 Add this
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const NotificationsScreen = () => {
   const navigation = useNavigation();
@@ -60,6 +60,42 @@ const NotificationsScreen = () => {
     } catch (error) {
       console.error('Validation error:', error);
       Alert.alert('❌ Error', 'Failed to validate token. Check logs for details.');
+    }
+  };
+
+  // ✅ NEW FUNCTION: Force Register FCM Token
+  const forceRegisterFCMToken = async () => {
+    try {
+      const fcmToken = await AsyncStorage.getItem('fcm_token');
+      if (!fcmToken) {
+        Alert.alert('Error', 'No FCM token found. Please restart the app to generate one.');
+        return;
+      }
+
+      Alert.alert('Force Registering...', 'Please wait while we register your FCM token.');
+
+      const response = await fetch('https://backendforheartlink.in/api/v1/fcm/force-register-token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ fcmToken }),
+      });
+
+      const result = await response.json();
+
+      if (result.statusCode === 200) {
+        Alert.alert(
+          '✅ Force Register Result',
+          `${result.message}\nAction: ${result.data.action}\n\n${result.data.instructions ? Object.values(result.data.instructions).join('\n') : ''}`
+        );
+      } else {
+        Alert.alert('❌ Registration Failed', result.message || 'Unknown error');
+      }
+    } catch (error) {
+      console.error('Force register error:', error);
+      Alert.alert('❌ Error', 'Failed to force register token. Check logs for details.');
     }
   };
 
@@ -216,7 +252,7 @@ const NotificationsScreen = () => {
   const markAsRead = async (notificationId) => {
     try {
       const response = await fetch(
-        `   https://backendforheartlink.in/api/v1/notifications/   ${notificationId}/read`,
+        `https://backendforheartlink.in/api/v1/notifications/${notificationId}/read`,
         {
           method: 'PATCH',
           headers: {
@@ -339,6 +375,10 @@ const NotificationsScreen = () => {
         {/* ✅ ADD VALIDATE TOKEN BUTTON */}
         <TouchableOpacity onPress={validateFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
           <Text style={styles.validateButtonText}>Validate</Text>
+        </TouchableOpacity>
+        {/* ✅ ADD FORCE REGISTER TOKEN BUTTON */}
+        <TouchableOpacity onPress={forceRegisterFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
+          <Text style={styles.validateButtonText}>Force Register</Text>
         </TouchableOpacity>
       </View>
     </View>
