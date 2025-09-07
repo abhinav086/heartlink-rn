@@ -1,10 +1,11 @@
-// src/context/CallManager.js - FIXED: Proper WebRTC connection establishment
+// src/context/CallManager.js - FIXED: Proper WebRTC connection establishment with Ringtone Effects (FULL UPDATED)
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Alert, AppState } from 'react-native';
 import { useAuth } from './AuthContext';
 import { useSocket } from './SocketContext';
 import enhancedGlobalWebRTCService from '../services/EnhancedGlobalWebRTCService';
 import BASE_URL from '../config/config';
+import InCallManager from 'react-native-incall-manager';
 
 const CallContext = createContext();
 
@@ -68,7 +69,8 @@ export const CallProvider = ({ children }) => {
   
   const handleWebRTCIncomingCall = (data) => {
     console.log('📞 WebRTC incoming call received:', data);
-    
+    console.log(`🔔 Starting ringtone for ${data.callType || 'unknown'} call...`); // 👈 ENHANCED LOGGING
+
     if (isInCall) {
       console.log('⚠️ Already in call, auto-declining incoming call');
       enhancedGlobalWebRTCService.declineCall();
@@ -78,6 +80,9 @@ export const CallProvider = ({ children }) => {
     // Set incoming call state
     setIncomingCall(data);
     setShowIncomingCallModal(true);
+    
+    // 🔔 START INCOMING RINGTONE — WORKS FOR BOTH AUDIO & VIDEO
+    InCallManager.startRingtone('_BUNDLE_');
   };
 
   const handleWebRTCStateChange = (type, data) => {
@@ -86,20 +91,29 @@ export const CallProvider = ({ children }) => {
     switch (type) {
       case 'accepted':
         console.log('✅ Call accepted, connection should start automatically');
+        // 🔕 STOP OUTGOING RINGTONE
+        InCallManager.stopRingback();
         break;
       case 'declined':
         console.log('❌ Call declined');
+        // 🔕 STOP OUTGOING RINGTONE
+        InCallManager.stopRingback();
         Alert.alert('Call Declined', 'The user declined your call');
         endCall(currentCall?.callId, 0, 'declined');
         break;
       case 'ended':
         console.log('🔚 Call ended remotely');
+        // 🔕 STOP ALL RINGTONES
+        InCallManager.stopRingtone();
+        InCallManager.stopRingback();
         endCall(currentCall?.callId, data.duration || 0, 'remote_end');
         break;
       case 'connection':
         if (data.state === 'connected') {
           console.log('🎉 WebRTC connection established successfully!');
-          // Connection is now fully established
+          // 🔕 STOP ALL RINGTONES WHEN CONNECTED
+          InCallManager.stopRingtone();
+          InCallManager.stopRingback();
         }
         break;
     }
@@ -109,6 +123,10 @@ export const CallProvider = ({ children }) => {
     console.error('❌ WebRTC error:', error);
     Alert.alert('Call Error', error.message || 'An error occurred during the call');
     
+    // 🔕 STOP ALL RINGTONES ON ERROR — 👈 ENHANCED
+    InCallManager.stopRingtone();
+    InCallManager.stopRingback();
+
     // Clean up on error
     if (currentCall) {
       endCall(currentCall.callId, 0, 'error');
@@ -185,6 +203,9 @@ export const CallProvider = ({ children }) => {
           callData: enhancedCallData,
         });
         console.log('✅ Navigation completed successfully');
+        
+        // 🔔 START OUTGOING RINGTONE
+        InCallManager.startRingback('_BUNDLE_');
 
         // Set call timeout (30 seconds for ringing)
         callTimeoutRef.current = setTimeout(() => {
@@ -196,6 +217,9 @@ export const CallProvider = ({ children }) => {
 
       } catch (webrtcError) {
         console.error('❌ WebRTC call initiation failed:', webrtcError);
+        // 🔕 STOP RINGTONE ON ERROR
+        InCallManager.stopRingtone();
+        InCallManager.stopRingback();
         throw webrtcError;
       }
 
@@ -206,6 +230,9 @@ export const CallProvider = ({ children }) => {
       // Reset state on error
       setIsInCall(false);
       setCurrentCall(null);
+      // 🔕 STOP RINGTONE ON ERROR
+      InCallManager.stopRingtone();
+      InCallManager.stopRingback();
       return false;
     }
   };
@@ -215,6 +242,9 @@ export const CallProvider = ({ children }) => {
    */
   const answerCall = async (callId) => {
     try {
+      // 🔕 STOP RINGTONE
+      InCallManager.stopRingtone();
+      
       console.log('📞 Answering call with enhanced WebRTC:', callId);
 
       if (!incomingCall || incomingCall.callId !== callId) {
@@ -286,6 +316,9 @@ export const CallProvider = ({ children }) => {
    */
   const rejectCall = async (callId) => {
     try {
+      // 🔕 STOP RINGTONE
+      InCallManager.stopRingtone();
+      
       console.log('📞 Rejecting call with enhanced WebRTC:', callId);
 
       // Clear incoming call modal immediately
@@ -309,6 +342,10 @@ export const CallProvider = ({ children }) => {
    */
   const endCall = async (callId, duration = 0, reason = 'user_end') => {
     try {
+      // 🔕 STOP ALL RINGTONES
+      InCallManager.stopRingtone();
+      InCallManager.stopRingback();
+      
       console.log('📞 Ending call with enhanced WebRTC:', { callId, duration, reason });
 
       // Clear timeout
@@ -435,7 +472,9 @@ export const CallProvider = ({ children }) => {
       callTimeoutRef.current = null;
     }
     
-    // Also cleanup WebRTC service
+    // Also cleanup WebRTC service and stop any ringtones
+    InCallManager.stopRingtone();
+    InCallManager.stopRingback(); // 👈 SAFETY STOP
     enhancedGlobalWebRTCService.cleanup();
   };
 
@@ -490,4 +529,3 @@ export const CallProvider = ({ children }) => {
     </CallContext.Provider>
   );
 };
-

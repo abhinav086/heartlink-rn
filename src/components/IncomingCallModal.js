@@ -1,4 +1,4 @@
-// components/IncomingCallModal.js - ENHANCED FOR BETTER INTEGRATION
+// components/IncomingCallModal.js - ENHANCED WITH RINGTONE ON MODAL APPEAR
 import React, { useEffect, useState } from 'react';
 import {
   View,
@@ -12,6 +12,7 @@ import {
   StatusBar
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
+import InCallManager from 'react-native-incall-manager'; // 👈 IMPORTED
 import BASE_URL from '../config/config';
 
 const { width, height } = Dimensions.get('window');
@@ -28,16 +29,23 @@ const IncomingCallModal = ({
   const [slideAnim] = useState(new Animated.Value(height));
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // 👇 START/STOP RINGTONE WHEN MODAL VISIBILITY CHANGES
   useEffect(() => {
     if (visible) {
       console.log('📞 IncomingCallModal showing for:', callerData?.fullName || 'Unknown');
-      
+      console.log('🔔 Starting ringtone from IncomingCallModal...');
+
+      // Start ringing when modal appears
+      InCallManager.startRingtone('_BUNDLE_');
+
+      // Animate modal
       Animated.timing(slideAnim, {
         toValue: 0,
         duration: 300,
         useNativeDriver: true,
       }).start();
 
+      // Pulse animation
       Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
@@ -53,11 +61,19 @@ const IncomingCallModal = ({
         ])
       ).start();
     } else {
+      // Stop ringing when modal disappears
+      console.log('🔕 Stopping ringtone from IncomingCallModal...');
+      InCallManager.stopRingtone();
       slideAnim.setValue(height);
       pulseAnim.setValue(1);
       setIsProcessing(false);
     }
-  }, [visible, pulseAnim, slideAnim]);
+
+    // Cleanup on unmount or visibility change
+    return () => {
+      InCallManager.stopRingtone();
+    };
+  }, [visible, pulseAnim, slideAnim, callerData]);
 
   if (!visible || !callerData) return null;
 
@@ -101,13 +117,14 @@ const IncomingCallModal = ({
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
 
-  // ENHANCED: Handle accept with loading state
+  // ENHANCED: Handle accept with loading state + STOP RINGTONE
   const handleAccept = async () => {
     if (isProcessing) return;
     
     try {
       setIsProcessing(true);
       console.log('✅ User accepting call');
+      InCallManager.stopRingtone(); // 👈 STOP ON ACCEPT
       await onAccept();
     } catch (error) {
       console.error('❌ Error accepting call:', error);
@@ -115,13 +132,14 @@ const IncomingCallModal = ({
     }
   };
 
-  // ENHANCED: Handle decline with loading state
+  // ENHANCED: Handle decline with loading state + STOP RINGTONE
   const handleDecline = async () => {
     if (isProcessing) return;
     
     try {
       setIsProcessing(true);
       console.log('❌ User declining call');
+      InCallManager.stopRingtone(); // 👈 STOP ON DECLINE
       await onDecline();
     } catch (error) {
       console.error('❌ Error declining call:', error);
@@ -235,6 +253,9 @@ const IncomingCallModal = ({
             <TouchableOpacity 
               style={[styles.smallActionButton, isProcessing && styles.disabledButton]}
               disabled={isProcessing}
+              onPress={() => {
+                InCallManager.stopRingtone(); // 👈 Optional: stop if user taps these
+              }}
             >
               <Ionicons name="chatbubble" size={20} color={isProcessing ? "#555" : "#999"} />
               <Text style={[styles.smallActionText, isProcessing && styles.disabledText]}>Message</Text>
@@ -243,6 +264,9 @@ const IncomingCallModal = ({
             <TouchableOpacity 
               style={[styles.smallActionButton, isProcessing && styles.disabledButton]}
               disabled={isProcessing}
+              onPress={() => {
+                InCallManager.stopRingtone(); // 👈 Optional: stop if user taps these
+              }}
             >
               <Ionicons name="person-add" size={20} color={isProcessing ? "#555" : "#999"} />
               <Text style={[styles.smallActionText, isProcessing && styles.disabledText]}>Remind me</Text>

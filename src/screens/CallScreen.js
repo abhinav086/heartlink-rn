@@ -1,4 +1,4 @@
-// screens/CallScreen.js - FIXED: No flickering in local video preview
+// screens/CallScreen.js - FIXED VERSION WITH STABLE STREAM HANDLING
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -35,19 +35,16 @@ const CallScreen = ({ route, navigation }) => {
   const [connectionState, setConnectionState] = useState('new');
   const [isConnected, setIsConnected] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
-  const [localStreamReady, setLocalStreamReady] = useState(false);
   
-  // FIX: Add stream ID tracking to prevent unnecessary updates
-  const [localStreamId, setLocalStreamId] = useState(null);
-  const [remoteStreamId, setRemoteStreamId] = useState(null);
+  // FIX: Use stable stream URLs instead of tracking IDs
+  const [localStreamUrl, setLocalStreamUrl] = useState(null);
+  const [remoteStreamUrl, setRemoteStreamUrl] = useState(null);
 
   // ============ REFS ============
   const callTimer = useRef(null);
   const callStartTime = useRef(null);
   const isComponentMounted = useRef(true);
-  const streamCheckInterval = useRef(null);
-  // FIX: Track if we've already set up the initial stream
-  const initialStreamSetup = useRef(false);
+  const streamUrlsRef = useRef({ local: null, remote: null });
 
   // ============ EFFECTS ============
   
@@ -64,45 +61,6 @@ const CallScreen = ({ route, navigation }) => {
       backHandler.remove();
     };
   }, []);
-
-  // FIX: Improved stream monitoring without dependency array issues
-  useEffect(() => {
-    const checkStreams = () => {
-      if (!isComponentMounted.current) return;
-
-      const currentLocalStream = enhancedGlobalWebRTCService.localStream;
-      const currentRemoteStream = enhancedGlobalWebRTCService.remoteStream;
-
-      // FIX: Only update if stream ID has changed
-      if (currentLocalStream && currentLocalStream.id !== localStreamId) {
-        console.log('📹 New local stream detected:', currentLocalStream.id);
-        handleLocalStream(currentLocalStream);
-      }
-
-      if (currentRemoteStream && currentRemoteStream.id !== remoteStreamId) {
-        console.log('📺 New remote stream detected:', currentRemoteStream.id);
-        handleRemoteStream(currentRemoteStream);
-      }
-    };
-
-    // Check immediately
-    checkStreams();
-
-    // FIX: Clear any existing interval before setting new one
-    if (streamCheckInterval.current) {
-      clearInterval(streamCheckInterval.current);
-    }
-
-    // Set up interval to check periodically
-    streamCheckInterval.current = setInterval(checkStreams, 1000); // FIX: Increased interval to reduce checks
-
-    return () => {
-      if (streamCheckInterval.current) {
-        clearInterval(streamCheckInterval.current);
-        streamCheckInterval.current = null;
-      }
-    };
-  }, []); // FIX: Empty dependency array to prevent re-creating interval
 
   // ============ IN-CALL MANAGER SETUP ============
   
@@ -140,9 +98,8 @@ const CallScreen = ({ route, navigation }) => {
         onError: handleError,
       });
 
-      // FIX: Only get initial stream once
-      if (callType === 'video' && !initialStreamSetup.current) {
-        initialStreamSetup.current = true;
+      // For video calls, request initial stream
+      if (callType === 'video') {
         console.log('🎥 Requesting initial local video stream...');
         try {
           const stream = await enhancedGlobalWebRTCService.getLocalStream();
@@ -155,20 +112,23 @@ const CallScreen = ({ route, navigation }) => {
         }
       }
 
+      // Check for existing streams in service
+      const currentLocalStream = enhancedGlobalWebRTCService.localStream;
+      const currentRemoteStream = enhancedGlobalWebRTCService.remoteStream;
+      
+      if (currentLocalStream && isStreamValid(currentLocalStream)) {
+        console.log('📹 Setting existing local stream');
+        handleLocalStream(currentLocalStream);
+      }
+      
+      if (currentRemoteStream && isStreamValid(currentRemoteStream)) {
+        console.log('📺 Setting existing remote stream');
+        handleRemoteStream(currentRemoteStream);
+      }
+      
       // Get current WebRTC state
       const webrtcState = enhancedGlobalWebRTCService.getCallState();
       console.log('📊 Current WebRTC state:', webrtcState);
-      
-      // Set initial streams if they exist and haven't been set
-      if (webrtcState.hasLocalStream && enhancedGlobalWebRTCService.localStream && !localStreamId) {
-        console.log('📹 Setting existing local stream');
-        handleLocalStream(enhancedGlobalWebRTCService.localStream);
-      }
-      
-      if (webrtcState.hasRemoteStream && enhancedGlobalWebRTCService.remoteStream && !remoteStreamId) {
-        console.log('📺 Setting existing remote stream');
-        handleRemoteStream(enhancedGlobalWebRTCService.remoteStream);
-      }
       
       // Update connection state
       if (webrtcState.peerConnectionState) {
@@ -180,12 +140,12 @@ const CallScreen = ({ route, navigation }) => {
         }
       }
 
-      // Set initializing to false after a short delay
+      // Mark initialization complete
       setTimeout(() => {
         if (isComponentMounted.current) {
           setIsInitializing(false);
         }
-      }, 500); // FIX: Reduced delay
+      }, 300);
       
       console.log('✅ CallScreen initialized');
     } catch (error) {
@@ -196,35 +156,74 @@ const CallScreen = ({ route, navigation }) => {
     }
   };
 
+  // ============ STREAM VALIDATION ============
+  
+  const isStreamValid = (stream) => {
+    if (!stream) return false;
+    
+    try {
+      // Check if stream is active
+      if (!stream.active) {
+        console.log('⚠️ Stream is not active');
+        return false;
+      }
+      
+      // Check if stream has tracks
+      const tracks = stream.getTracks();
+      if (tracks.length === 0) {
+        console.log('⚠️ Stream has no tracks');
+        return false;
+      }
+      
+      // Check if at least one track is not ended
+      const hasLiveTrack = tracks.some(track => track.readyState === 'live');
+      if (!hasLiveTrack) {
+        console.log('⚠️ Stream has no live tracks');
+        return false;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('❌ Error validating stream:', error);
+      return false;
+    }
+  };
+
   // ============ WEBRTC EVENT HANDLERS ============
   
   const handleLocalStream = (stream) => {
     if (!isComponentMounted.current) return;
     
-    // FIX: Prevent duplicate updates for same stream
-    if (stream && stream.id === localStreamId) {
-      console.log('📹 Skipping duplicate local stream update');
+    console.log('📹 Local stream received in CallScreen');
+    
+    // Validate stream before using
+    if (!isStreamValid(stream)) {
+      console.warn('⚠️ Received invalid local stream');
       return;
     }
     
-    console.log('📹 Local stream received in CallScreen:', stream?.id);
-    console.log('📹 Stream tracks:', stream?.getTracks()?.map(t => ({ kind: t.kind, enabled: t.enabled })));
+    // Generate stable URL
+    const newUrl = stream.toURL();
     
-    setLocalStream(stream);
-    setLocalStreamId(stream?.id || null); // FIX: Track stream ID
-    setLocalStreamReady(true);
-    setIsInitializing(false);
-    
-    // Ensure video track is enabled based on current state
-    if (stream && callType === 'video') {
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack && videoTrack.enabled !== isVideoEnabled) {
-        videoTrack.enabled = isVideoEnabled;
-        console.log(`📹 Video track synced to: ${videoTrack.enabled}`);
+    // Only update if URL has actually changed
+    if (newUrl !== streamUrlsRef.current.local) {
+      console.log('📹 Updating local stream URL');
+      streamUrlsRef.current.local = newUrl;
+      setLocalStreamUrl(newUrl);
+      setLocalStream(stream);
+      
+      // Ensure video track state matches UI state
+      if (callType === 'video') {
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack && videoTrack.enabled !== isVideoEnabled) {
+          videoTrack.enabled = isVideoEnabled;
+        }
       }
     }
     
-    // Update call state if we were waiting for media
+    setIsInitializing(false);
+    
+    // Update call state if needed
     if (callState === 'initiating' || callState === 'incoming') {
       setCallState(isIncoming ? 'answering' : 'calling');
     }
@@ -233,19 +232,26 @@ const CallScreen = ({ route, navigation }) => {
   const handleRemoteStream = (stream) => {
     if (!isComponentMounted.current) return;
     
-    // FIX: Prevent duplicate updates for same stream
-    if (stream && stream.id === remoteStreamId) {
-      console.log('📺 Skipping duplicate remote stream update');
+    console.log('📺 Remote stream received in CallScreen - CONNECTION ESTABLISHED!');
+    
+    // Validate stream before using
+    if (!isStreamValid(stream)) {
+      console.warn('⚠️ Received invalid remote stream');
       return;
     }
     
-    console.log('📺 Remote stream received in CallScreen - CONNECTION ESTABLISHED!');
-    console.log('📺 Stream tracks:', stream?.getTracks()?.map(t => ({ kind: t.kind, enabled: t.enabled })));
+    // Generate stable URL
+    const newUrl = stream.toURL();
     
-    setRemoteStream(stream);
-    setRemoteStreamId(stream?.id || null); // FIX: Track stream ID
+    // Only update if URL has actually changed
+    if (newUrl !== streamUrlsRef.current.remote) {
+      console.log('📺 Updating remote stream URL');
+      streamUrlsRef.current.remote = newUrl;
+      setRemoteStreamUrl(newUrl);
+      setRemoteStream(stream);
+    }
     
-    // Call is truly connected when we have remote stream
+    // Call is connected when we have remote stream
     if (!isConnected) {
       console.log('🎉 Call connection established, starting timer');
       setCallState('connected');
@@ -355,9 +361,14 @@ const CallScreen = ({ route, navigation }) => {
     try {
       console.log('🎥 Toggling video, current state:', isVideoEnabled);
       
-      // FIX: Update state after successful toggle
       const enabled = await enhancedGlobalWebRTCService.toggleCamera();
       setIsVideoEnabled(enabled);
+      
+      // Force re-render of local video by updating stream URL
+      if (localStream) {
+        const newUrl = localStream.toURL();
+        setLocalStreamUrl(newUrl);
+      }
       
       console.log('🎥 Video toggled to:', enabled);
       
@@ -382,6 +393,12 @@ const CallScreen = ({ route, navigation }) => {
   const switchCamera = async () => {
     try {
       await enhancedGlobalWebRTCService.switchCamera();
+      
+      // Update local stream URL to force RTCView refresh
+      if (localStream) {
+        const newUrl = localStream.toURL();
+        setLocalStreamUrl(newUrl);
+      }
     } catch (error) {
       console.error('❌ Failed to switch camera:', error);
       Alert.alert('Error', 'Failed to switch camera');
@@ -408,11 +425,6 @@ const CallScreen = ({ route, navigation }) => {
     if (callTimer.current) {
       clearInterval(callTimer.current);
       callTimer.current = null;
-    }
-    
-    if (streamCheckInterval.current) {
-      clearInterval(streamCheckInterval.current);
-      streamCheckInterval.current = null;
     }
     
     try {
@@ -545,17 +557,17 @@ const CallScreen = ({ route, navigation }) => {
       );
     }
 
-    // Video call rendering
+    // Video call rendering with stable URLs
     return (
       <View style={styles.videoContainer}>
         {/* Remote video (full screen) */}
-        {remoteStream ? (
+        {remoteStreamUrl ? (
           <RTCView
-            streamURL={remoteStream.toURL()}
+            streamURL={remoteStreamUrl}
             style={styles.remoteVideo}
             objectFit="cover"
             mirror={false}
-            key={`remote-${remoteStreamId}`} // FIX: Use stream ID instead of dynamic key
+            zOrder={0}
           />
         ) : (
           <View style={styles.waitingForVideoContainer}>
@@ -578,16 +590,15 @@ const CallScreen = ({ route, navigation }) => {
           </View>
         )}
         
-        {/* Local video preview - YOUR CAMERA */}
-        {localStream && isVideoEnabled && localStreamReady ? (
+        {/* Local video preview */}
+        {localStreamUrl && isVideoEnabled ? (
           <View style={styles.localVideoContainer}>
             <RTCView
-              streamURL={localStream.toURL()}
+              streamURL={localStreamUrl}
               style={styles.localVideo}
               objectFit="cover"
               mirror={true}
               zOrder={1}
-              key={`local-${localStreamId}`} // FIX: Use stream ID for stable key
             />
             <TouchableOpacity 
               style={styles.switchCameraButton}
@@ -710,7 +721,7 @@ const CallScreen = ({ route, navigation }) => {
   );
 };
 
-// ============ STYLES ============
+// ============ STYLES (same as before) ============
 
 const styles = StyleSheet.create({
   container: {
