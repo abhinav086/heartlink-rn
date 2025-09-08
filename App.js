@@ -1,7 +1,7 @@
 // src/App.js
 import 'react-native-gesture-handler';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { PermissionsAndroid, Platform, Alert, AppState, BackHandler } from 'react-native'; // Removed TouchableOpacity, Text, Linking
+import { PermissionsAndroid, Platform, Alert, AppState, BackHandler } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
@@ -12,10 +12,7 @@ import SplashScreen from './src/screens/auth/SplashScreen';
 import IncomingCallModal from './src/components/IncomingCallModal';
 import enhancedGlobalWebRTCService from './src/services/EnhancedGlobalWebRTCService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-// Import your Firebase Service - this handles all Firebase Messaging logic
 import FirebaseService from './src/services/FirebaseService';
-// DO NOT import messaging directly here for initialization logic anymore
-// import messaging from '@react-native-firebase/messaging'; // <- Remove direct import for init
 
 const requestPermissions = async () => {
   try {
@@ -43,15 +40,26 @@ const navigationTheme = {
   },
 };
 
+// Define root screens for exit behavior
+const ROOT_SCREENS = [
+  'HomeScreen',
+  'Login', 
+  'Splash',
+  'Gender',
+  'Questions', 
+  'ProfileSetup',
+  'Memberships'
+];
+
 const AppContent = () => {
-  const { user, isLoading, isAuthenticated, checkOnboardingStatus, token } = useAuth(); // Get token directly from AuthContext
+  const { user, isLoading, isAuthenticated, checkOnboardingStatus, token } = useAuth();
   const { socket, isConnected } = useSocket();
   const { setNavigationRef } = useCall();
 
   // ENHANCED: Global call state management
   const [incomingCallData, setIncomingCallData] = useState(null);
   const [showIncomingCall, setShowIncomingCall] = useState(false);
-  const [authToken, setAuthToken] = useState(null); // Will sync with useAuth.token
+  const [authToken, setAuthToken] = useState(null);
   const [webrtcInitialized, setWebrtcInitialized] = useState(false);
   const [callbacksRegistered, setCallbacksRegistered] = useState(false);
 
@@ -67,45 +75,32 @@ const AppContent = () => {
   const appStateRef = useRef(AppState.currentState);
   const incomingCallTimeoutRef = useRef(null);
   const lastBackPressTime = useRef(0);
-  // Ref for the foreground message listener from FirebaseService (if needed for direct management)
   const firebaseForegroundListenerRef = useRef(null);
 
   useEffect(() => {
     const initializeApp = async () => {
       await requestPermissions();
 
-      // --- DELEGATE FIREBASE INIT TO THE SERVICE ---
       console.log('🚀 Initializing Firebase via FirebaseService (no auth token for backend)...');
-      // Pass NO parameters to the service initialize method
-      await FirebaseService.initialize(); // Simplified call
-      // --- END DELEGATION ---
+      await FirebaseService.initialize();
 
-      await new Promise((resolve) => setTimeout(resolve, 2000)); // Keep splash if needed
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       setShowSplash(false);
     };
     initializeApp();
 
-    // Cleanup on unmount
     return () => {
        if (incomingCallTimeoutRef.current) {
          clearTimeout(incomingCallTimeoutRef.current);
        }
-       // If you stored the foreground listener from FirebaseService, unsubscribe here
-       // if (firebaseForegroundListenerRef.current) {
-       //    firebaseForegroundListenerRef.current(); // Call the unsubscribe function
-       //    firebaseForegroundListenerRef.current = null;
-       // }
-       // Note: FirebaseService likely manages its own listener lifecycle via setupMessageHandlers/cleanup
     };
-  }, []); // Remove token dependency if it was there and is no longer used for Firebase init
+  }, []);
 
-  // Monitor app state changes for call handling
   useEffect(() => {
     const handleAppStateChange = (nextAppState) => {
       console.log(`📱 App state changed: ${appStateRef.current} -> ${nextAppState}`);
 
       if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
-        // App came to foreground - ensure WebRTC is active
         if (webrtcInitialized && !callbacksRegistered) {
           console.log('🔄 App became active, re-registering call callbacks');
           registerGlobalCallCallbacks();
@@ -118,14 +113,10 @@ const AppContent = () => {
     return () => subscription?.remove();
   }, [webrtcInitialized, callbacksRegistered]);
 
-  // Sync authToken state with useAuth.token (redundant now, but kept for clarity)
   useEffect(() => {
      setAuthToken(token);
-     // FirebaseService should handle token sending internally when token changes
-     // via its own useEffect or logic within initialize/sendTokenToBackend calls
-  }, [token]); // Depend only on token from useAuth
+  }, [token]);
 
-  // ENHANCED: Initialize WebRTC service with better error handling
   useEffect(() => {
     const initializeWebRTC = async () => {
       if (isAuthenticated && user && authToken && !webrtcInitialized) {
@@ -139,7 +130,6 @@ const AppContent = () => {
           Alert.alert('WebRTC Error', 'Failed to initialize calling service. Calls may not work properly.');
         }
       } else if (!isAuthenticated || !user || !authToken) {
-        // Clean up WebRTC when user logs out
         if (webrtcInitialized) {
           try {
             enhancedGlobalWebRTCService.disconnect();
@@ -156,7 +146,6 @@ const AppContent = () => {
     initializeWebRTC();
   }, [isAuthenticated, user, authToken, webrtcInitialized]);
 
-  // ENHANCED: Register global call callbacks separately for better reliability
   const registerGlobalCallCallbacks = useCallback(() => {
     if (webrtcInitialized && !callbacksRegistered) {
       try {
@@ -174,17 +163,14 @@ const AppContent = () => {
     }
   }, [webrtcInitialized, callbacksRegistered]);
 
-  // Register callbacks when WebRTC is initialized
   useEffect(() => {
     registerGlobalCallCallbacks();
   }, [registerGlobalCallCallbacks]);
 
-  // ENHANCED: Listen for socket call events as backup
   useEffect(() => {
     if (socket && isConnected) {
       console.log('🔗 Setting up socket call event listeners...');
 
-      // Primary incoming call handler via socket
       const handleIncomingCallSocket = (callData) => {
         console.log('📞 Incoming call via SOCKET:', JSON.stringify(callData, null, 2));
         handleIncomingCall(callData);
@@ -210,7 +196,6 @@ const AppContent = () => {
       socket.on('call_declined', handleCallDeclinedSocket);
       socket.on('call_missed', handleCallMissedSocket);
 
-      // Cleanup socket listeners
       return () => {
         socket.off('incoming_call', handleIncomingCallSocket);
         socket.off('call_ended', handleCallEndedSocket);
@@ -220,11 +205,9 @@ const AppContent = () => {
     }
   }, [socket, isConnected]);
 
-  // ENHANCED: Handle incoming call with timeout and better validation
   const handleIncomingCall = useCallback((callData) => {
     console.log('📞 PROCESSING INCOMING CALL:', JSON.stringify(callData, null, 2));
 
-    // Validate incoming call data
     if (!callData) {
       console.error('❌ No call data provided');
       return;
@@ -235,7 +218,6 @@ const AppContent = () => {
       return;
     }
 
-    // Normalize call data structure
     const normalizedCallData = {
       callId: callData.callId || callData.id,
       caller: callData.caller || callData.from,
@@ -245,7 +227,6 @@ const AppContent = () => {
       ...callData
     };
 
-    // Don't show modal if already showing a call
     if (showIncomingCall) {
       console.log('⚠️ Already showing incoming call, ignoring new call');
       return;
@@ -255,7 +236,6 @@ const AppContent = () => {
     setIncomingCallData(normalizedCallData);
     setShowIncomingCall(true);
 
-    // Set timeout to auto-dismiss call after 30 seconds
     if (incomingCallTimeoutRef.current) {
       clearTimeout(incomingCallTimeoutRef.current);
     }
@@ -267,7 +247,6 @@ const AppContent = () => {
 
   }, [showIncomingCall, user]);
 
-  // Handle missed call (timeout)
   const handleMissedCall = useCallback(() => {
     if (incomingCallData) {
       try {
@@ -286,7 +265,6 @@ const AppContent = () => {
     }
   }, [incomingCallData]);
 
-  // Handle WebRTC errors
   const handleWebRTCError = useCallback((error) => {
     console.error('❌ WebRTC error in App.js:', error);
     setShowIncomingCall(false);
@@ -298,7 +276,6 @@ const AppContent = () => {
     }
   }, []);
 
-  // Handle call state changes
   const handleCallStateChange = useCallback((type, data) => {
     console.log('🔄 Call state change in App.js:', type, data);
 
@@ -317,7 +294,6 @@ const AppContent = () => {
         break;
 
       case 'accepted':
-        // Call accepted, modal should already be hidden
         if (incomingCallTimeoutRef.current) {
           clearTimeout(incomingCallTimeoutRef.current);
           incomingCallTimeoutRef.current = null;
@@ -326,24 +302,19 @@ const AppContent = () => {
     }
   }, []);
 
-  // ENHANCED: Handle accept call with better error handling and navigation
   const handleAcceptCall = useCallback(async () => {
     try {
       console.log('✅ Accepting incoming call...');
 
-      // Clear timeout
       if (incomingCallTimeoutRef.current) {
         clearTimeout(incomingCallTimeoutRef.current);
         incomingCallTimeoutRef.current = null;
       }
 
-      // Hide the modal first
       setShowIncomingCall(false);
 
-      // Accept the call through WebRTC service
       await enhancedGlobalWebRTCService.acceptCall();
 
-      // Navigate to call screen with proper params
       if (navigationRef.current && incomingCallData) {
         console.log('🚀 Navigating to CallScreen with data:', {
           callType: incomingCallData.callType,
@@ -372,18 +343,15 @@ const AppContent = () => {
     }
   }, [incomingCallData, user, authToken]);
 
-  // ENHANCED: Handle decline call
   const handleDeclineCall = useCallback(async () => {
     try {
       console.log('❌ Declining incoming call...');
 
-      // Clear timeout
       if (incomingCallTimeoutRef.current) {
         clearTimeout(incomingCallTimeoutRef.current);
         incomingCallTimeoutRef.current = null;
       }
 
-      // Decline the call through WebRTC service
       await enhancedGlobalWebRTCService.declineCall();
 
     } catch (error) {
@@ -394,12 +362,10 @@ const AppContent = () => {
     }
   }, []);
 
-  // Handle dismiss call (same as decline)
   const handleDismissCall = useCallback(() => {
     console.log('🚫 Dismissing incoming call...');
     handleDeclineCall();
   }, [handleDeclineCall]);
-
 
   useEffect(() => {
     const determineInitialRoute = async () => {
@@ -420,17 +386,29 @@ const AppContent = () => {
     determineInitialRoute();
   }, [isLoading, isAuthenticated, user, checkOnboardingStatus]);
 
+  // Helper function to get current route name
+  const getCurrentRouteName = (navigationState) => {
+    if (!navigationState) return null;
+    
+    const route = navigationState.routes[navigationState.index];
+    if (route.state) {
+      return getCurrentRouteName(route.state);
+    }
+    return route.name;
+  };
+
   // ENHANCED NAVIGATION STATE TRACKING
   const handleNavigationStateChange = useCallback((state) => {
     if (state && navigationRef.current) {
       setNavigationState(state);
+      const currentRouteName = getCurrentRouteName(state);
       const canGoBackNow = navigationRef.current.canGoBack();
       setCanGoBack(canGoBackNow);
-      console.log('📍 Navigation state changed, canGoBack:', canGoBackNow);
+      console.log('📍 Navigation state changed, current route:', currentRouteName, 'canGoBack:', canGoBackNow);
     }
   }, []);
 
-  // ENHANCED BACK NAVIGATION HANDLING - Covers both hardware and gesture navigation
+  // FIXED BACK NAVIGATION HANDLING
   const handleBackPress = useCallback(() => {
     console.log('🔙 Back press detected, canGoBack:', canGoBack, 'navigationReady:', navigationReady);
 
@@ -444,64 +422,70 @@ const AppContent = () => {
       if (canGoBack && navigationRef.current.canGoBack()) {
         console.log('📱 Going back in navigation stack');
         navigationRef.current.goBack();
-        return true; // Prevent default behavior (exit app)
+        return true;
       } else {
-        // Double-tap to exit functionality for better UX
-        const currentTime = Date.now();
-        const timeDifference = currentTime - lastBackPressTime.current;
+        // Check if we're on a root screen
+        const currentRoute = navigationRef.current.getCurrentRoute();
+        const isOnRootScreen = ROOT_SCREENS.includes(currentRoute?.name);
+        
+        if (isOnRootScreen) {
+          // Double-tap to exit functionality when on root screen
+          const currentTime = Date.now();
+          const timeDifference = currentTime - lastBackPressTime.current;
 
-        if (timeDifference < 2000) {
-          console.log('🚪 Double tap detected, exiting app');
-          BackHandler.exitApp();
-          return true;
+          if (timeDifference < 2000) {
+            console.log('🚪 Double tap detected, exiting app');
+            BackHandler.exitApp();
+            return true;
+          } else {
+            console.log('⚠️ Single tap detected, showing exit message');
+            lastBackPressTime.current = currentTime;
+
+            Alert.alert(
+              'Exit App',
+              'Press back again to exit',
+              [{ text: 'OK', style: 'cancel' }]
+            );
+
+            return true;
+          }
         } else {
-          console.log('⚠️ Single tap detected, showing toast message');
-          lastBackPressTime.current = currentTime;
-
-          // You can replace this with a toast message
-          Alert.alert(
-            'Exit App',
-            'Press back again to exit',
-            [{ text: 'OK', style: 'cancel' }],
-            { cancelable: true }
-          );
-
-          return true; // Prevent exit
+          // Navigate to home screen if not on root screen
+          console.log('🏠 Navigating to home screen');
+          navigationRef.current.reset({
+            index: 0,
+            routes: [{ name: 'HomeScreen' }],
+          });
+          return true;
         }
       }
     } catch (error) {
       console.error('❌ Error in back press handler:', error);
-      return false; // Allow default behavior
+      return false;
     }
   }, [canGoBack, navigationReady]);
 
-  // ENHANCED: Handle hardware back button AND gesture navigation
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
     return () => backHandler.remove();
   }, [handleBackPress]);
 
-  // Enhanced navigation ready handler - CRUCIAL for FirebaseService
   const onNavigationReady = useCallback(() => {
     console.log('🚀 Navigation container ready');
     setNavigationReady(true);
-    setNavigationRef(navigationRef.current); // Your existing call manager ref
+    setNavigationRef(navigationRef.current);
 
-    // --- SET NAVIGATION REF FOR FIREBASE SERVICE ---
-    // This is essential for FirebaseService to handle notification taps
     if (navigationRef.current) {
       FirebaseService.setNavigationRef(navigationRef.current);
       console.log('🧭 Navigation ref also set for FirebaseService');
     }
-    // --- END SETTING REF ---
 
-    // Initial state update
     if (navigationRef.current) {
       const initialCanGoBack = navigationRef.current.canGoBack();
       setCanGoBack(initialCanGoBack);
       console.log('📍 Initial navigation state - canGoBack:', initialCanGoBack);
     }
-  }, [setNavigationRef]); // Add setNavigationRef to deps if it's stable
+  }, [setNavigationRef]);
 
   if (showSplash || isLoading || !initialRoute) {
     return <SplashScreen />;
@@ -509,36 +493,11 @@ const AppContent = () => {
 
   return (
     <>
-      {/* FCM TOKEN BUTTON REMOVED */}
-      {/* <TouchableOpacity
-        onPress={showFCMToken}
-        style={{
-          position: 'absolute',
-          top: 60,
-          right: 20,
-          backgroundColor: '#007AFF',
-          paddingHorizontal: 12,
-          paddingVertical: 8,
-          borderRadius: 20,
-          zIndex: 9999,
-          elevation: 5,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.25,
-          shadowRadius: 3.84,
-        }}
-      >
-        <Text style={{ color: 'white', fontSize: 12, fontWeight: 'bold' }}>
-          FCM Token
-        </Text>
-      </TouchableOpacity> */}
-
       <NavigationContainer
         ref={navigationRef}
         theme={navigationTheme}
-        onReady={onNavigationReady} // This triggers setting the nav ref for FirebaseService
+        onReady={onNavigationReady}
         onStateChange={handleNavigationStateChange}
-        // Additional navigation options to prevent gesture exit
         screenOptions={{
           gestureEnabled: true,
           gestureDirection: 'horizontal',
@@ -547,7 +506,6 @@ const AppContent = () => {
         <AppNavigator initialRouteName={initialRoute} />
       </NavigationContainer>
 
-      {/* ENHANCED: Global incoming call modal - always rendered for global coverage */}
       <IncomingCallModal
         visible={showIncomingCall}
         callerData={incomingCallData?.caller}
@@ -562,10 +520,7 @@ const AppContent = () => {
 
 const App = () => {
   return (
-    <GestureHandlerRootView
-      style={{ flex: 1 }}
-      // Enhanced gesture handler configuration
-    >
+    <GestureHandlerRootView style={{ flex: 1 }}>
       <AuthProvider>
         <SocketProvider>
           <CallProvider>
