@@ -1,5 +1,5 @@
-// components/IncomingCallModal.js - ENHANCED WITH RINGTONE ON MODAL APPEAR
-import React, { useEffect, useState } from 'react';
+// components/IncomingCallModal.js - BALANCED FIX: Coordinated ringtone control
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,7 +12,7 @@ import {
   StatusBar
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import InCallManager from 'react-native-incall-manager'; // 👈 IMPORTED
+import InCallManager from 'react-native-incall-manager';
 import BASE_URL from '../config/config';
 
 const { width, height } = Dimensions.get('window');
@@ -28,15 +28,34 @@ const IncomingCallModal = ({
   const [pulseAnim] = useState(new Animated.Value(1));
   const [slideAnim] = useState(new Animated.Value(height));
   const [isProcessing, setIsProcessing] = useState(false);
+  const ringtoneStartedRef = useRef(false);
+  const isClosingRef = useRef(false);
 
-  // 👇 START/STOP RINGTONE WHEN MODAL VISIBILITY CHANGES
+  // BALANCED APPROACH: Start ringtone as backup, but coordinate with AudioManager
   useEffect(() => {
-    if (visible) {
+    if (visible && !isClosingRef.current) {
       console.log('📞 IncomingCallModal showing for:', callerData?.fullName || 'Unknown');
-      console.log('🔔 Starting ringtone from IncomingCallModal...');
-
-      // Start ringing when modal appears
-      InCallManager.startRingtone('_BUNDLE_');
+      
+      // Start ringtone only if it hasn't been started yet
+      if (!ringtoneStartedRef.current) {
+        console.log('🔔 Starting ringtone from Modal (backup)...');
+        
+        // Stop any existing ringtone first (cleanup)
+        InCallManager.stopRingtone();
+        
+        // Small delay to ensure cleanup
+        setTimeout(() => {
+          // Start fresh ringtone
+          InCallManager.start({
+            media: 'audio',
+            auto: false,
+            ringback: false
+          });
+          InCallManager.setForceSpeakerphoneOn(true);
+          InCallManager.startRingtone('_BUNDLE_');
+          ringtoneStartedRef.current = true;
+        }, 100);
+      }
 
       // Animate modal
       Animated.timing(slideAnim, {
@@ -60,18 +79,28 @@ const IncomingCallModal = ({
           }),
         ])
       ).start();
-    } else {
-      // Stop ringing when modal disappears
-      console.log('🔕 Stopping ringtone from IncomingCallModal...');
+    } else if (!visible) {
+      // Modal is closing
+      isClosingRef.current = false;
+      ringtoneStartedRef.current = false;
+      
+      // Stop ringtone when modal closes (but AudioManager should handle this too)
+      console.log('🔕 Modal closing, stopping ringtone...');
       InCallManager.stopRingtone();
+      InCallManager.stopRingtone(); // Double stop for safety
+      
+      // Reset animations
       slideAnim.setValue(height);
       pulseAnim.setValue(1);
       setIsProcessing(false);
     }
 
-    // Cleanup on unmount or visibility change
+    // Cleanup on unmount
     return () => {
-      InCallManager.stopRingtone();
+      if (ringtoneStartedRef.current) {
+        InCallManager.stopRingtone();
+        ringtoneStartedRef.current = false;
+      }
     };
   }, [visible, pulseAnim, slideAnim, callerData]);
 
@@ -117,33 +146,55 @@ const IncomingCallModal = ({
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
 
-  // ENHANCED: Handle accept with loading state + STOP RINGTONE
+  // Handle accept - Stop ringtone immediately
   const handleAccept = async () => {
     if (isProcessing) return;
     
     try {
       setIsProcessing(true);
+      isClosingRef.current = true; // Mark as closing
       console.log('✅ User accepting call');
-      InCallManager.stopRingtone(); // 👈 STOP ON ACCEPT
+      
+      // IMMEDIATELY stop ringtone multiple times
+      InCallManager.stopRingtone();
+      InCallManager.stopRingtone();
+      InCallManager.stopRingtone();
+      
+      // Mark ringtone as stopped
+      ringtoneStartedRef.current = false;
+      
+      // Call the accept handler
       await onAccept();
     } catch (error) {
       console.error('❌ Error accepting call:', error);
       setIsProcessing(false);
+      isClosingRef.current = false;
     }
   };
 
-  // ENHANCED: Handle decline with loading state + STOP RINGTONE
+  // Handle decline - Stop ringtone immediately
   const handleDecline = async () => {
     if (isProcessing) return;
     
     try {
       setIsProcessing(true);
+      isClosingRef.current = true; // Mark as closing
       console.log('❌ User declining call');
-      InCallManager.stopRingtone(); // 👈 STOP ON DECLINE
+      
+      // IMMEDIATELY stop ringtone multiple times
+      InCallManager.stopRingtone();
+      InCallManager.stopRingtone();
+      InCallManager.stopRingtone();
+      
+      // Mark ringtone as stopped
+      ringtoneStartedRef.current = false;
+      
+      // Call the decline handler
       await onDecline();
     } catch (error) {
       console.error('❌ Error declining call:', error);
       setIsProcessing(false);
+      isClosingRef.current = false;
     }
   };
 
@@ -253,9 +304,6 @@ const IncomingCallModal = ({
             <TouchableOpacity 
               style={[styles.smallActionButton, isProcessing && styles.disabledButton]}
               disabled={isProcessing}
-              onPress={() => {
-                InCallManager.stopRingtone(); // 👈 Optional: stop if user taps these
-              }}
             >
               <Ionicons name="chatbubble" size={20} color={isProcessing ? "#555" : "#999"} />
               <Text style={[styles.smallActionText, isProcessing && styles.disabledText]}>Message</Text>
@@ -264,9 +312,6 @@ const IncomingCallModal = ({
             <TouchableOpacity 
               style={[styles.smallActionButton, isProcessing && styles.disabledButton]}
               disabled={isProcessing}
-              onPress={() => {
-                InCallManager.stopRingtone(); // 👈 Optional: stop if user taps these
-              }}
             >
               <Ionicons name="person-add" size={20} color={isProcessing ? "#555" : "#999"} />
               <Text style={[styles.smallActionText, isProcessing && styles.disabledText]}>Remind me</Text>

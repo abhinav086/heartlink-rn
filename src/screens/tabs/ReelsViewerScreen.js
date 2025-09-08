@@ -927,38 +927,7 @@ const ReelsViewerScreen = ({ navigation, route }) => {
             {/* --- FIXED: Use displayCommentCount --- */}
             <Text style={styles.actionCount}>{displayCommentCount}</Text>
           </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.actionButton}
-            activeOpacity={0.7}
-          >
-            <Icon
-              name="eye-outline"
-              size={26}
-              color="#fff"
-              style={styles.actionIcon}
-            />
-            {/* --- FIXED: Use displayViewCount --- */}
-            <Text style={[styles.actionCount, styles.viewCount]}>
-              {displayViewCount}
-            </Text>
-            {viewAnimation && (
-              <Animated.View
-                style={[
-                  styles.viewCountAnimation,
-                  {
-                    opacity: viewAnimation.timestamp ? 1 : 0,
-                    transform: [
-                      {
-                        translateY: viewAnimation.timestamp ? 0 : -20,
-                      },
-                    ],
-                  },
-                ]}
-              >
-                <Text style={styles.viewCountText}>+1</Text>
-              </Animated.View>
-            )}
-          </TouchableOpacity>
+          
           {isOwnReel && (
             <View style={styles.menuContainerHorizontal}>
               {isMenuVisible && (

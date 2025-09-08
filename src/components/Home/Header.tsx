@@ -51,7 +51,7 @@ const Header = ({ hasUnreadNotifications = false, onNotificationPress }) => {
           placeholderTextColor="#ef1279"
           editable={false}
         />
-        <Icon name="search" size={20} color="#ef1279" />
+        <Icon name="compass" size={20} color="#ef1279" />
       </TouchableOpacity>
 
       {/* Right side icons container */}

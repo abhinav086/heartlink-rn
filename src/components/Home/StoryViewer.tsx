@@ -1,4 +1,4 @@
-// StoryViewer.js - Complete Single File with All Logic (Updated)
+// StoryViewer.js - Complete Single File with All Logic (Updated - Fixed Keyboard Issue)
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react'; // Added useLayoutEffect
 import {
   View,
@@ -101,6 +101,7 @@ const StoryViewer = () => {
   // Inline Reply States
   const [inlineReplyText, setInlineReplyText] = useState('');
   const [sendingInlineReply, setSendingInlineReply] = useState(false);
+  const [inputFocused, setInputFocused] = useState(false); // NEW: Track input focus state
 
   // Views Tracking States
   const [viewsCount, setViewsCount] = useState(0);
@@ -164,15 +165,15 @@ const StoryViewer = () => {
     // Clear any existing interval
     if (intervalRef.current) clearInterval(intervalRef.current);
 
-    // Only start if not paused and no modals are open
-    if (!paused && !showCommentModal && !showViewersModal) {
+    // Only start if not paused and no modals are open and input is not focused
+    if (!paused && !showCommentModal && !showViewersModal && !inputFocused) {
       console.log("Starting Story Progress");
       progressRef.setValue(0);
       setProgress(0);
       const progressStep = 100 / (storyDuration / 50);
       intervalRef.current = setInterval(() => {
         // Double-check conditions inside the interval tick
-        if (!paused && !mediaError && !showCommentModal && !showViewersModal) {
+        if (!paused && !mediaError && !showCommentModal && !showViewersModal && !inputFocused) {
           setProgress(prev => {
             const newProgress = prev + progressStep;
             if (newProgress >= 100) {
@@ -185,7 +186,7 @@ const StoryViewer = () => {
         }
       }, 50);
     } else {
-        console.log("startStoryProgress: Conditions not met (paused or modal open). Not starting.");
+        console.log("startStoryProgress: Conditions not met (paused or modal open or input focused). Not starting.");
     }
   };
 
@@ -475,6 +476,65 @@ const StoryViewer = () => {
   // --- END NEW DELETE STORY FUNCTION ---
 
   // =============================================
+  // INPUT FOCUS HANDLERS
+  // =============================================
+  const handleInputFocus = () => {
+    console.log("Input focused - Pausing story and setting input focus state");
+    setInputFocused(true);
+    setPaused(true);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  };
+
+  const handleInputBlur = () => {
+    console.log("Input blurred - Removing input focus state");
+    setInputFocused(false);
+    // Resume only if no modals are open
+    if (!showCommentModal && !showViewersModal) {
+       console.log("Input blurred - Resuming Story");
+       resumeStoryProgress();
+    }
+  };
+
+  // =============================================
+  // TOUCH HANDLERS
+  // =============================================
+  const handleContainerPress = (event) => {
+    // Don't handle container press if input is focused
+    if (inputFocused || showCommentModal || showViewersModal) return;
+    
+    const { locationX } = event.nativeEvent;
+    console.log(`Tapped at X: ${locationX}, Screen Width: ${width}`);
+    if (locationX < width / 2) {
+      console.log("Navigating to Previous Story (Left Tap)");
+      handlePreviousStory();
+    } else {
+      console.log("Navigating to Next Story (Right Tap)");
+      handleNextStory();
+    }
+  };
+
+  const handleLongPress = () => {
+    if (inputFocused || showCommentModal || showViewersModal) return;
+    console.log("Long press - Pausing Story");
+    setPaused(true);
+    if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+    }
+  };
+
+  const handlePressOut = () => {
+    // Only resume if no modals are open and input is not focused
+    if (!showCommentModal && !showViewersModal && !inputFocused) {
+        console.log("Press out - Resuming Story");
+        resumeStoryProgress();
+    }
+  };
+
+  // =============================================
   // MODALS
   // =============================================
   const openCommentsModal = () => {
@@ -491,7 +551,9 @@ const StoryViewer = () => {
   const closeCommentsModal = () => {
     console.log("Closing Comments Modal - Resuming Story");
     setShowCommentModal(false);
-    resumeStoryProgress(); // Use the explicit resume function
+    if (!inputFocused) { // Only resume if input is not focused
+      resumeStoryProgress();
+    }
   };
 
   const openViewersModal = () => {
@@ -509,7 +571,9 @@ const StoryViewer = () => {
   const closeViewersModal = () => {
     console.log("Closing Viewers Modal - Resuming Story");
     setShowViewersModal(false);
-    resumeStoryProgress(); // Use the explicit resume function
+    if (!inputFocused) { // Only resume if input is not focused
+      resumeStoryProgress();
+    }
   };
 
   // =============================================
@@ -750,19 +814,6 @@ const StoryViewer = () => {
     );
   };
 
-  const handlePress = (event) => {
-    if (showCommentModal || showViewersModal) return;
-    const { locationX } = event.nativeEvent;
-    console.log(`Tapped at X: ${locationX}, Screen Width: ${width}`); // Debug log
-    if (locationX < width / 2) {
-      console.log("Navigating to Previous Story (Left Tap)");
-      handlePreviousStory();
-    } else {
-      console.log("Navigating to Next Story (Right Tap)");
-      handleNextStory();
-    }
-  };
-
   // =============================================
   // MAIN RENDER
   // =============================================
@@ -777,26 +828,17 @@ const StoryViewer = () => {
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView 
+      style={styles.container} 
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
       <TouchableOpacity
         style={styles.overlay}
-        onPress={handlePress}
-        onLongPress={() => {
-            console.log("Long press - Pausing Story");
-            setPaused(true);
-            if (intervalRef.current) {
-                clearInterval(intervalRef.current);
-                intervalRef.current = null;
-            }
-        }}
-        onPressOut={() => {
-            // Only resume if no modals are open
-            if (!showCommentModal && !showViewersModal) {
-                console.log("Press out - Resuming Story");
-                resumeStoryProgress(); // Use the explicit resume function
-            }
-        }}
+        onPress={handleContainerPress}
+        onLongPress={handleLongPress}
+        onPressOut={handlePressOut}
         activeOpacity={1}
+        disabled={inputFocused} // Disable overlay touch when input is focused
       >
         {renderStoryContent()}
         {loading && (
@@ -804,74 +846,77 @@ const StoryViewer = () => {
             <ActivityIndicator size="large" color="white" />
           </View>
         )}
-        <View style={styles.topOverlay}>
+        <View style={styles.topOverlay} pointerEvents="box-none">
           {renderProgressBar()}
           {renderUserHeader()}
         </View>
-        {/* Bottom Actions - Views indicator beside comment icon */}
-        <View style={styles.bottomActions}>
-          <View style={styles.leftActionsContainer}>
-            {isOwnStory && (
-              <TouchableOpacity onPress={openViewersModal} style={styles.viewsButton}>
-                <Ionicons name="eye" size={24} color="white" />
-                <Text style={styles.viewsCountText}>{viewsCount}</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity onPress={openCommentsModal} style={styles.actionButton}>
-              <Ionicons name="chatbubble-outline" size={26} color="white" />
+      </TouchableOpacity>
+      
+      {/* Bottom Actions - Fixed positioning and pointer events */}
+      <View style={styles.bottomActions} pointerEvents="box-none">
+        <View style={styles.leftActionsContainer} pointerEvents="box-none">
+          {isOwnStory && (
+            <TouchableOpacity onPress={openViewersModal} style={styles.viewsButton}>
+              <Ionicons name="eye" size={24} color="white" />
+              <Text style={styles.viewsCountText}>{viewsCount}</Text>
             </TouchableOpacity>
-          </View>
-          <View style={styles.replyInputContainer}>
-            <TextInput
-              ref={inlineInputRef}
-              style={styles.replyTextInput}
-              placeholder="Comment on this story"
-              placeholderTextColor="rgba(255,255,255,0.6)"
-              value={inlineReplyText}
-              onChangeText={setInlineReplyText}
-              returnKeyType="send"
-              onSubmitEditing={addInlineReply}
-              onFocus={() => {
-                  console.log("Inline input focused - Pausing Story");
-                  setPaused(true);
-                  if (intervalRef.current) {
-                    clearInterval(intervalRef.current);
-                    intervalRef.current = null;
-                  }
-              }} // Pause on input focus
-              onBlur={() => {
-                // Resume only if no modals are open
-                if (!showCommentModal && !showViewersModal) {
-                   console.log("Inline input blurred - Resuming Story");
-                   resumeStoryProgress(); // Use the explicit resume function
-                }
-              }}
-            />
-            {inlineReplyText.trim() && (
-              <TouchableOpacity onPress={addInlineReply} style={styles.inlineSendButton}>
-                {sendingInlineReply ? (
-                  <ActivityIndicator size="small" color="white" />
-                ) : (
-                  <Ionicons name="send" size={18} color="white" />
-                )}
-              </TouchableOpacity>
-            )}
-          </View>
-          {!isOwnStory && (
-            <TouchableOpacity onPress={handleLikeStory} style={styles.actionButton}>
-              {liking ? (
+          )}
+          <TouchableOpacity onPress={openCommentsModal} style={styles.actionButton}>
+            <Ionicons name="chatbubble-outline" size={26} color="white" />
+          </TouchableOpacity>
+        </View>
+        
+        {/* Fixed Reply Input Container */}
+        <TouchableOpacity 
+          style={styles.replyInputContainer}
+          onPress={() => {
+            console.log("Reply input container pressed - focusing input");
+            inlineInputRef.current?.focus();
+          }}
+          activeOpacity={0.8}
+        >
+          <TextInput
+            ref={inlineInputRef}
+            style={styles.replyTextInput}
+            placeholder="Comment on this story"
+            placeholderTextColor="rgba(255,255,255,0.6)"
+            value={inlineReplyText}
+            onChangeText={setInlineReplyText}
+            returnKeyType="send"
+            onSubmitEditing={addInlineReply}
+            onFocus={handleInputFocus}
+            onBlur={handleInputBlur}
+            blurOnSubmit={false}
+            selectTextOnFocus={false}
+            autoFocus={false}
+            multiline={false}
+            maxLength={MAX_COMMENT_LENGTH}
+          />
+          {inlineReplyText.trim() && (
+            <TouchableOpacity onPress={addInlineReply} style={styles.inlineSendButton}>
+              {sendingInlineReply ? (
                 <ActivityIndicator size="small" color="white" />
               ) : (
-                <Ionicons
-                  name={isLiked ? "heart" : "heart-outline"}
-                  size={26}
-                  color={isLiked ? "#ff3040" : "white"}
-                />
+                <Ionicons name="send" size={18} color="white" />
               )}
             </TouchableOpacity>
           )}
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+        
+        {!isOwnStory && (
+          <TouchableOpacity onPress={handleLikeStory} style={styles.actionButton}>
+            {liking ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Ionicons
+                name={isLiked ? "heart" : "heart-outline"}
+                size={26}
+                color={isLiked ? "#ff3040" : "white"}
+              />
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
 
       {/* Comments Modal */}
       <Modal
@@ -1017,7 +1062,7 @@ const StoryViewer = () => {
           />
         </View>
       </Modal>
-    </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -1122,7 +1167,7 @@ const styles = StyleSheet.create({
   closeButton: {
     padding: 5,
   },
-  // Bottom Actions - Updated to group views and comment together
+  // Bottom Actions - Updated to be outside overlay
   bottomActions: {
     position: 'absolute',
     bottom: 0,
@@ -1158,20 +1203,23 @@ const styles = StyleSheet.create({
   replyInputContainer: {
     flex: 1,
     marginHorizontal: 12,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
     borderRadius: 25,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
+    borderColor: 'rgba(255,255,255,0.2)',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 12,
+    minHeight: 44, // Minimum touch target
   },
   replyTextInput: {
     flex: 1,
     color: 'white',
     fontSize: 15,
     paddingRight: 8,
+    paddingVertical: 0, // Remove default padding
+    minHeight: 20,
   },
   inlineSendButton: {
     padding: 6,

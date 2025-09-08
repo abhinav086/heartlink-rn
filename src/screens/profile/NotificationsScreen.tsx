@@ -373,13 +373,13 @@ const NotificationsScreen = () => {
           <Icon name="refresh" size={24} color="white" />
         </TouchableOpacity>
         {/* ✅ ADD VALIDATE TOKEN BUTTON */}
-        <TouchableOpacity onPress={validateFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
+        {/* <TouchableOpacity onPress={validateFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
           <Text style={styles.validateButtonText}>Validate</Text>
-        </TouchableOpacity>
+        </TouchableOpacity> */}
         {/* ✅ ADD FORCE REGISTER TOKEN BUTTON */}
-        <TouchableOpacity onPress={forceRegisterFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
+        {/* <TouchableOpacity onPress={forceRegisterFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
           <Text style={styles.validateButtonText}>Force Register</Text>
-        </TouchableOpacity>
+        </TouchableOpacity> */}
       </View>
     </View>
   );

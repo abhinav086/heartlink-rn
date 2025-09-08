@@ -23,19 +23,19 @@ const { width, height } = Dimensions.get('window');
 
 const CallScreen = ({ route, navigation }) => {
   const { callType, isIncoming, callerData, calleeData, authToken, callData } = route.params;
-  
+
   // ============ STATE ============
   const [callState, setCallState] = useState(isIncoming ? 'incoming' : 'initiating');
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoEnabled, setIsVideoEnabled] = useState(callType === 'video');
-  const [isSpeakerOn, setIsSpeakerOn] = useState(callType === 'video');
+  const [isSpeakerOn, setIsSpeakerOn] = useState(callType === 'video'); // Video default speaker ON, audio OFF
   const [callDuration, setCallDuration] = useState(0);
   const [connectionState, setConnectionState] = useState('new');
   const [isConnected, setIsConnected] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
-  
+
   // FIX: Use stable stream URLs instead of tracking IDs
   const [localStreamUrl, setLocalStreamUrl] = useState(null);
   const [remoteStreamUrl, setRemoteStreamUrl] = useState(null);
@@ -47,13 +47,10 @@ const CallScreen = ({ route, navigation }) => {
   const streamUrlsRef = useRef({ local: null, remote: null });
 
   // ============ EFFECTS ============
-  
   useEffect(() => {
     initializeCallScreen();
     setupInCallManager();
-    
     const backHandler = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
-    
     return () => {
       console.log('🧹 CallScreen cleanup');
       isComponentMounted.current = false;
@@ -63,21 +60,21 @@ const CallScreen = ({ route, navigation }) => {
   }, []);
 
   // ============ IN-CALL MANAGER SETUP ============
-  
   const setupInCallManager = () => {
     try {
       console.log('📞 Setting up InCallManager...');
-      
       if (callType === 'video') {
+        // Start InCallManager for video call
         InCallManager.start({ media: 'video' });
+        // Video calls typically use speaker by default
         InCallManager.setSpeakerphoneOn(true);
       } else {
+        // Start InCallManager for audio call
         InCallManager.start({ media: 'audio' });
-        InCallManager.setSpeakerphoneOn(false);
+        // For audio calls, use speaker based on user preference (initially off based on state)
+        InCallManager.setSpeakerphoneOn(isSpeakerOn); // Use component state
       }
-      
       InCallManager.setKeepScreenOn(true);
-      
       console.log('✅ InCallManager setup complete');
     } catch (error) {
       console.error('❌ InCallManager setup failed:', error);
@@ -85,12 +82,11 @@ const CallScreen = ({ route, navigation }) => {
   };
 
   // ============ INITIALIZATION ============
-  
   const initializeCallScreen = async () => {
     try {
       console.log('📺 Initializing CallScreen...', { callType, isIncoming });
-
-      // Set screen-specific callbacks for WebRTC service
+      
+      // Set screen-specific callbacks FIRST
       enhancedGlobalWebRTCService.setScreenCallbacks({
         onLocalStream: handleLocalStream,
         onRemoteStream: handleRemoteStream,
@@ -98,38 +94,65 @@ const CallScreen = ({ route, navigation }) => {
         onError: handleError,
       });
 
-      // For video calls, request initial stream
-      if (callType === 'video') {
-        console.log('🎥 Requesting initial local video stream...');
+      // CRITICAL FIX: Ensure local stream for outgoing calls
+      if (!isIncoming) {
+        console.log('🎥 Outgoing call - ensuring local stream...');
         try {
-          const stream = await enhancedGlobalWebRTCService.getLocalStream();
-          if (stream) {
-            console.log('✅ Got initial local stream');
+          // Force get a fresh stream
+          const stream = await enhancedGlobalWebRTCService.setupMedia(callType);
+          if (stream && isStreamValid(stream)) {
+            console.log('✅ Got fresh local stream for outgoing call');
             handleLocalStream(stream);
+          } else {
+            // Fallback: try getUserMedia directly
+            console.log('⚠️ Retrying with getUserMedia...');
+            const fallbackStream = await enhancedGlobalWebRTCService.getUserMedia({
+              video: callType === 'video' ? {
+                width: { ideal: 1280, max: 1920 },
+                height: { ideal: 720, max: 1080 },
+                frameRate: { ideal: 30 },
+                facingMode: 'user'
+              } : false,
+              audio: true
+            });
+            if (fallbackStream) {
+              handleLocalStream(fallbackStream);
+            }
           }
         } catch (error) {
-          console.error('❌ Failed to get initial local stream:', error);
+          console.error('❌ Failed to setup media for outgoing call:', error);
+          // Continue anyway - audio might still work
         }
       }
 
-      // Check for existing streams in service
+      // For incoming calls or after outgoing setup
       const currentLocalStream = enhancedGlobalWebRTCService.localStream;
       const currentRemoteStream = enhancedGlobalWebRTCService.remoteStream;
       
+      // Validate and set existing streams
       if (currentLocalStream && isStreamValid(currentLocalStream)) {
         console.log('📹 Setting existing local stream');
         handleLocalStream(currentLocalStream);
+      } else if (!isIncoming) {
+        // For outgoing calls, retry if still no stream
+        console.log('⚠️ No valid local stream, retrying...');
+        setTimeout(async () => {
+          const retryStream = await enhancedGlobalWebRTCService.getLocalStream(true);
+          if (retryStream && isStreamValid(retryStream)) {
+            handleLocalStream(retryStream);
+          }
+        }, 500);
       }
       
       if (currentRemoteStream && isStreamValid(currentRemoteStream)) {
         console.log('📺 Setting existing remote stream');
         handleRemoteStream(currentRemoteStream);
       }
-      
+
       // Get current WebRTC state
       const webrtcState = enhancedGlobalWebRTCService.getCallState();
       console.log('📊 Current WebRTC state:', webrtcState);
-      
+
       // Update connection state
       if (webrtcState.peerConnectionState) {
         setConnectionState(webrtcState.peerConnectionState);
@@ -146,7 +169,7 @@ const CallScreen = ({ route, navigation }) => {
           setIsInitializing(false);
         }
       }, 300);
-      
+
       console.log('✅ CallScreen initialized');
     } catch (error) {
       console.error('❌ CallScreen initialization failed:', error);
@@ -157,31 +180,26 @@ const CallScreen = ({ route, navigation }) => {
   };
 
   // ============ STREAM VALIDATION ============
-  
   const isStreamValid = (stream) => {
     if (!stream) return false;
-    
     try {
       // Check if stream is active
       if (!stream.active) {
         console.log('⚠️ Stream is not active');
         return false;
       }
-      
       // Check if stream has tracks
       const tracks = stream.getTracks();
       if (tracks.length === 0) {
         console.log('⚠️ Stream has no tracks');
         return false;
       }
-      
       // Check if at least one track is not ended
       const hasLiveTrack = tracks.some(track => track.readyState === 'live');
       if (!hasLiveTrack) {
         console.log('⚠️ Stream has no live tracks');
         return false;
       }
-      
       return true;
     } catch (error) {
       console.error('❌ Error validating stream:', error);
@@ -190,23 +208,45 @@ const CallScreen = ({ route, navigation }) => {
   };
 
   // ============ WEBRTC EVENT HANDLERS ============
-  
   const handleLocalStream = (stream) => {
     if (!isComponentMounted.current) return;
-    
     console.log('📹 Local stream received in CallScreen');
     
-    // Validate stream before using
     if (!isStreamValid(stream)) {
       console.warn('⚠️ Received invalid local stream');
+      // Retry after a delay
+      setTimeout(async () => {
+        const retryStream = await enhancedGlobalWebRTCService.getLocalStream();
+        if (retryStream && isStreamValid(retryStream)) {
+          handleLocalStream(retryStream);
+        }
+      }, 1000);
       return;
     }
     
-    // Generate stable URL
-    const newUrl = stream.toURL();
+    // Generate stable URL with retry
+    let newUrl = null;
+    try {
+      newUrl = stream.toURL();
+    } catch (e) {
+      console.error('❌ Failed to generate stream URL:', e);
+      // Retry once
+      setTimeout(() => {
+        try {
+          const retryUrl = stream.toURL();
+          if (retryUrl && retryUrl !== streamUrlsRef.current.local) {
+            streamUrlsRef.current.local = retryUrl;
+            setLocalStreamUrl(retryUrl);
+          }
+        } catch (retryError) {
+          console.error('❌ Retry failed:', retryError);
+        }
+      }, 500);
+      return;
+    }
     
-    // Only update if URL has actually changed
-    if (newUrl !== streamUrlsRef.current.local) {
+    // Only update if URL has actually changed and is valid
+    if (newUrl && newUrl !== streamUrlsRef.current.local) {
       console.log('📹 Updating local stream URL');
       streamUrlsRef.current.local = newUrl;
       setLocalStreamUrl(newUrl);
@@ -222,7 +262,6 @@ const CallScreen = ({ route, navigation }) => {
     }
     
     setIsInitializing(false);
-    
     // Update call state if needed
     if (callState === 'initiating' || callState === 'incoming') {
       setCallState(isIncoming ? 'answering' : 'calling');
@@ -231,20 +270,43 @@ const CallScreen = ({ route, navigation }) => {
 
   const handleRemoteStream = (stream) => {
     if (!isComponentMounted.current) return;
-    
     console.log('📺 Remote stream received in CallScreen - CONNECTION ESTABLISHED!');
     
-    // Validate stream before using
     if (!isStreamValid(stream)) {
       console.warn('⚠️ Received invalid remote stream');
+      // Retry after a delay
+      setTimeout(async () => {
+        const currentRemoteStream = enhancedGlobalWebRTCService.remoteStream;
+        if (currentRemoteStream && isStreamValid(currentRemoteStream)) {
+          handleRemoteStream(currentRemoteStream);
+        }
+      }, 1000);
       return;
     }
     
-    // Generate stable URL
-    const newUrl = stream.toURL();
+    // Generate stable URL with retry
+    let newUrl = null;
+    try {
+      newUrl = stream.toURL();
+    } catch (e) {
+      console.error('❌ Failed to generate remote stream URL:', e);
+      // Retry once
+      setTimeout(() => {
+        try {
+          const retryUrl = stream.toURL();
+          if (retryUrl && retryUrl !== streamUrlsRef.current.remote) {
+            streamUrlsRef.current.remote = retryUrl;
+            setRemoteStreamUrl(retryUrl);
+          }
+        } catch (retryError) {
+          console.error('❌ Remote stream URL retry failed:', retryError);
+        }
+      }, 500);
+      return;
+    }
     
-    // Only update if URL has actually changed
-    if (newUrl !== streamUrlsRef.current.remote) {
+    // Only update if URL has actually changed and is valid
+    if (newUrl && newUrl !== streamUrlsRef.current.remote) {
       console.log('📺 Updating remote stream URL');
       streamUrlsRef.current.remote = newUrl;
       setRemoteStreamUrl(newUrl);
@@ -262,32 +324,26 @@ const CallScreen = ({ route, navigation }) => {
 
   const handleCallStateChange = (type, data) => {
     if (!isComponentMounted.current) return;
-    
     console.log('🔄 Call state change in CallScreen:', type, data);
-    
     switch (type) {
       case 'accepted':
         setCallState('connecting');
         break;
-        
       case 'declined':
         Alert.alert('Call Declined', 'The user declined your call', [
           { text: 'OK', onPress: () => navigation.goBack() }
         ]);
         break;
-        
       case 'ended':
         const duration = data.duration || callDuration;
         Alert.alert(
-          'Call Ended', 
+          'Call Ended',
           `Call duration: ${formatDuration(duration)}`,
           [{ text: 'OK', onPress: () => navigation.goBack() }]
         );
         break;
-        
       case 'connection':
         setConnectionState(data.state);
-        
         if (data.state === 'connected' && !isConnected) {
           setCallState('connected');
           setIsConnected(true);
@@ -301,11 +357,9 @@ const CallScreen = ({ route, navigation }) => {
 
   const handleError = (error) => {
     if (!isComponentMounted.current) return;
-    
     console.error('❌ WebRTC error in CallScreen:', error);
-    
     Alert.alert(
-      'Call Error', 
+      'Call Error',
       error.message || 'An error occurred during the call',
       [
         { text: 'End Call', onPress: endCall, style: 'destructive' },
@@ -315,10 +369,8 @@ const CallScreen = ({ route, navigation }) => {
   };
 
   // ============ CALL CONTROL FUNCTIONS ============
-  
   const startCallTimer = () => {
     if (callTimer.current) return;
-    
     console.log('⏰ Starting call timer');
     callStartTime.current = Date.now();
     callTimer.current = setInterval(() => {
@@ -332,14 +384,10 @@ const CallScreen = ({ route, navigation }) => {
   const endCall = async () => {
     try {
       console.log('🔚 User ending call');
-      
-      const duration = callStartTime.current ? 
+      const duration = callStartTime.current ?
         Math.floor((Date.now() - callStartTime.current) / 1000) : 0;
-      
       InCallManager.stop();
-      
       await enhancedGlobalWebRTCService.endCall(duration);
-      
       navigation.goBack();
     } catch (error) {
       console.error('❌ Failed to end call:', error);
@@ -360,18 +408,14 @@ const CallScreen = ({ route, navigation }) => {
   const toggleVideo = async () => {
     try {
       console.log('🎥 Toggling video, current state:', isVideoEnabled);
-      
       const enabled = await enhancedGlobalWebRTCService.toggleCamera();
       setIsVideoEnabled(enabled);
-      
       // Force re-render of local video by updating stream URL
       if (localStream) {
         const newUrl = localStream.toURL();
         setLocalStreamUrl(newUrl);
       }
-      
       console.log('🎥 Video toggled to:', enabled);
-      
     } catch (error) {
       console.error('❌ Failed to toggle camera:', error);
       Alert.alert('Error', 'Failed to toggle camera');
@@ -381,6 +425,7 @@ const CallScreen = ({ route, navigation }) => {
   const toggleSpeaker = () => {
     try {
       const newSpeakerState = !isSpeakerOn;
+      // Toggle speakerphone via InCallManager
       InCallManager.setSpeakerphoneOn(newSpeakerState);
       setIsSpeakerOn(newSpeakerState);
       console.log(`🔊 Speaker ${newSpeakerState ? 'ON' : 'OFF'}`);
@@ -393,7 +438,6 @@ const CallScreen = ({ route, navigation }) => {
   const switchCamera = async () => {
     try {
       await enhancedGlobalWebRTCService.switchCamera();
-      
       // Update local stream URL to force RTCView refresh
       if (localStream) {
         const newUrl = localStream.toURL();
@@ -406,7 +450,6 @@ const CallScreen = ({ route, navigation }) => {
   };
 
   // ============ UTILITY FUNCTIONS ============
-  
   const handleBackPress = () => {
     Alert.alert(
       'End Call',
@@ -421,18 +464,17 @@ const CallScreen = ({ route, navigation }) => {
 
   const cleanup = () => {
     console.log('🧹 Cleaning up CallScreen');
-    
     if (callTimer.current) {
       clearInterval(callTimer.current);
       callTimer.current = null;
     }
-    
     try {
+      // Stop InCallManager session
       InCallManager.stop();
     } catch (error) {
       console.error('❌ Error stopping InCallManager:', error);
     }
-    
+    // Clear screen-specific callbacks
     enhancedGlobalWebRTCService.clearScreenCallbacks();
   };
 
@@ -444,15 +486,12 @@ const CallScreen = ({ route, navigation }) => {
 
   const getProfileImageUrl = (user) => {
     if (!user) return null;
-    
     if (user.photoUrl && typeof user.photoUrl === 'string') {
       return user.photoUrl;
     }
-    
     if (user.profilePicture && typeof user.profilePicture === 'string') {
       return user.profilePicture;
     }
-    
     if (user.profilePic && typeof user.profilePic === 'string') {
       if (user.profilePic.startsWith('http://') || user.profilePic.startsWith('https://')) {
         return user.profilePic;
@@ -460,7 +499,6 @@ const CallScreen = ({ route, navigation }) => {
       const cleanPath = user.profilePic.startsWith('/') ? user.profilePic.substring(1) : user.profilePic;
       return `${BASE_URL}/${cleanPath}`;
     }
-    
     return null;
   };
 
@@ -474,14 +512,11 @@ const CallScreen = ({ route, navigation }) => {
   };
 
   // ============ RENDER FUNCTIONS ============
-  
   const renderCallStatus = () => {
     const participant = isIncoming ? callerData : calleeData;
     const participantName = participant?.fullName || participant?.name || 'Unknown';
-    
     let statusText = '';
     let statusColor = '#ffffff';
-    
     switch (callState) {
       case 'incoming':
         statusText = 'Incoming call...';
@@ -512,17 +547,16 @@ const CallScreen = ({ route, navigation }) => {
         statusText = 'Loading...';
         statusColor = '#999';
     }
-
     return (
       <View style={styles.statusContainer}>
         <Text style={styles.participantName}>{participantName}</Text>
         <View style={styles.statusRow}>
           <Text style={[styles.statusText, { color: statusColor }]}>{statusText}</Text>
           {(callState === 'connecting' || callState === 'reconnecting') && (
-            <ActivityIndicator 
-              size="small" 
-              color={statusColor} 
-              style={styles.statusIndicator} 
+            <ActivityIndicator
+              size="small"
+              color={statusColor}
+              style={styles.statusIndicator}
             />
           )}
         </View>
@@ -534,14 +568,13 @@ const CallScreen = ({ route, navigation }) => {
     const participant = isIncoming ? callerData : calleeData;
     const participantName = participant?.fullName || participant?.name || 'Unknown';
     const profileImageUrl = getProfileImageUrl(participant);
-
     if (callType === 'audio') {
       return (
         <View style={styles.audioCallContainer}>
           <View style={styles.avatarContainer}>
             {profileImageUrl ? (
-              <Image 
-                source={{ uri: profileImageUrl }} 
+              <Image
+                source={{ uri: profileImageUrl }}
                 style={styles.avatarImage}
                 onError={() => console.log('Failed to load participant image')}
               />
@@ -556,7 +589,6 @@ const CallScreen = ({ route, navigation }) => {
         </View>
       );
     }
-
     // Video call rendering with stable URLs
     return (
       <View style={styles.videoContainer}>
@@ -572,8 +604,8 @@ const CallScreen = ({ route, navigation }) => {
         ) : (
           <View style={styles.waitingForVideoContainer}>
             {profileImageUrl ? (
-              <Image 
-                source={{ uri: profileImageUrl }} 
+              <Image
+                source={{ uri: profileImageUrl }}
                 style={styles.waitingAvatar}
                 onError={() => console.log('Failed to load participant image')}
               />
@@ -589,7 +621,6 @@ const CallScreen = ({ route, navigation }) => {
             </Text>
           </View>
         )}
-        
         {/* Local video preview */}
         {localStreamUrl && isVideoEnabled ? (
           <View style={styles.localVideoContainer}>
@@ -600,7 +631,7 @@ const CallScreen = ({ route, navigation }) => {
               mirror={true}
               zOrder={1}
             />
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.switchCameraButton}
               onPress={switchCamera}
             >
@@ -609,10 +640,10 @@ const CallScreen = ({ route, navigation }) => {
           </View>
         ) : (
           <View style={styles.localVideoOffContainer}>
-            <Ionicons 
-              name={!isVideoEnabled ? "videocam-off" : "videocam"} 
-              size={24} 
-              color={!isVideoEnabled ? "#ff9800" : "#ccc"} 
+            <Ionicons
+              name={!isVideoEnabled ? "videocam-off" : "videocam"}
+              size={24}
+              color={!isVideoEnabled ? "#ff9800" : "#ccc"}
             />
             <Text style={styles.localVideoOffText}>
               {!isVideoEnabled ? 'Camera Off' : 'Starting...'}
@@ -633,26 +664,24 @@ const CallScreen = ({ route, navigation }) => {
             onPress={toggleMute}
             activeOpacity={0.7}
           >
-            <Ionicons 
-              name={isMuted ? "mic-off" : "mic"} 
-              size={24} 
+            <Ionicons
+              name={isMuted ? "mic-off" : "mic"}
+              size={24}
               color="white"
             />
           </TouchableOpacity>
-
           {/* Speaker button */}
           <TouchableOpacity
             style={[styles.controlButton, isSpeakerOn && styles.speakerOnButton]}
             onPress={toggleSpeaker}
             activeOpacity={0.7}
           >
-            <Ionicons 
-              name={isSpeakerOn ? "volume-high" : "volume-low"} 
-              size={24} 
+            <Ionicons
+              name={isSpeakerOn ? "volume-high" : "volume-low"}
+              size={24}
               color="white"
             />
           </TouchableOpacity>
-
           {/* Video toggle button (only for video calls) */}
           {callType === 'video' && (
             <TouchableOpacity
@@ -660,25 +689,24 @@ const CallScreen = ({ route, navigation }) => {
               onPress={toggleVideo}
               activeOpacity={0.7}
             >
-              <Ionicons 
-                name={isVideoEnabled ? "videocam" : "videocam-off"} 
-                size={24} 
+              <Ionicons
+                name={isVideoEnabled ? "videocam" : "videocam-off"}
+                size={24}
                 color="white"
               />
             </TouchableOpacity>
           )}
-
           {/* End call button */}
-          <TouchableOpacity 
-            style={styles.endCallButton} 
+          <TouchableOpacity
+            style={styles.endCallButton}
             onPress={endCall}
             activeOpacity={0.7}
           >
-            <Ionicons 
-              name="call" 
-              size={28} 
-              color="white" 
-              style={{ transform: [{ rotate: '135deg' }] }} 
+            <Ionicons
+              name="call"
+              size={28}
+              color="white"
+              style={{ transform: [{ rotate: '135deg' }] }}
             />
           </TouchableOpacity>
         </View>
@@ -687,7 +715,6 @@ const CallScreen = ({ route, navigation }) => {
   };
 
   // ============ LOADING STATE ============
-  
   if (isInitializing && callType === 'video') {
     return (
       <SafeAreaView style={styles.container}>
@@ -702,19 +729,15 @@ const CallScreen = ({ route, navigation }) => {
   }
 
   // ============ MAIN RENDER ============
-  
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor="#000" barStyle="light-content" />
-      
       {/* Video/Audio views */}
       {renderVideoViews()}
-      
       {/* Call status overlay */}
       <View style={styles.overlay}>
         {renderCallStatus()}
       </View>
-      
       {/* Call controls */}
       {renderCallControls()}
     </SafeAreaView>
@@ -722,7 +745,6 @@ const CallScreen = ({ route, navigation }) => {
 };
 
 // ============ STYLES (same as before) ============
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -907,7 +929,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     textAlign: 'center',
     textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: {width: -1, height: 1},
+    textShadowOffset: { width: -1, height: 1 },
     textShadowRadius: 10
   },
   statusRow: {
@@ -918,7 +940,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: {width: -1, height: 1},
+    textShadowOffset: { width: -1, height: 1 },
     textShadowRadius: 10
   },
   statusIndicator: {

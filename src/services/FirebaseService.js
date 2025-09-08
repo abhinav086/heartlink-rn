@@ -1,11 +1,10 @@
-// services/FirebaseService.js - Fixed version with proper field mapping
+// services/FirebaseService.js - Full updated version with rich media support
 import messaging from '@react-native-firebase/messaging';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import notifee, { AndroidStyle } from '@notifee/react-native';
+import notifee, { AndroidStyle, EventType } from '@notifee/react-native';
 import { Platform, Alert } from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 
-// Import your API config
 const BASE_URL = 'https://backendforheartlink.in';
 
 class FirebaseService {
@@ -20,9 +19,8 @@ class FirebaseService {
 
   async initialize(authToken) {
     try {
-      console.log('🔥 Initializing Firebase messaging with backend integration...');
+      console.log('🔥 Initializing Firebase messaging with rich media support...');
 
-      // Notifee initialization
       await notifee.requestPermission();
       if (Platform.OS === 'android') {
         await notifee.createChannel({
@@ -51,6 +49,7 @@ class FirebaseService {
 
       if (!this.isInitialized) {
         this.setupMessageHandlers(authToken);
+        await this.setupNotificationActionHandlers(); // NEW
         this.isInitialized = true;
       }
 
@@ -82,7 +81,6 @@ class FirebaseService {
         ok: response.ok
       });
 
-      // If we get 401/403, it likely means the FCM token is invalid
       if (response.status === 401 || response.status === 403) {
         console.log('❌ FCM token appears to be invalid (401/403 response)');
         return false;
@@ -93,8 +91,7 @@ class FirebaseService {
         return true;
       }
 
-      // For other error codes, assume token might be invalid
-      console.log('⚠️ Uncertain FCM token validity, assuming invalid');
+      console.log('⚠ Uncertain FCM token validity, assuming invalid');
       return false;
     } catch (error) {
       console.error('❌ Error checking FCM token validity:', error);
@@ -106,13 +103,11 @@ class FirebaseService {
     try {
       console.log('🔄 Refreshing FCM token if needed...');
       
-      // Generate new FCM token
       const newToken = await this.getFCMToken();
       if (!newToken) {
         throw new Error('Failed to generate new FCM token');
       }
 
-      // Send new token to backend
       const success = await this.sendTokenToBackend(newToken, authToken);
       if (!success) {
         throw new Error('Failed to send new FCM token to backend');
@@ -128,16 +123,6 @@ class FirebaseService {
 
   showTokenValidPopup() {
     console.log('📱 Showing Token Valid popup...');
-    
-    // Alert.alert(
-    //   '', 
-    //   'Token valid', 
-    //   [{ text: 'OK', style: 'default' }],
-    //   { 
-    //     cancelable: true,
-    //     userInterfaceStyle: 'dark' // iOS only
-    //   }
-    // );
   }
 
   async sendTokenToBackend(token, authToken) {
@@ -237,11 +222,9 @@ class FirebaseService {
       if (token) {
         await AsyncStorage.setItem('fcm_token', token);
         this.currentToken = token;
-
-        // Log full token
         console.log('🔑 Full FCM Token:', token);
       } else {
-        console.warn('⚠️ No FCM token returned');
+        console.warn('⚠ No FCM token returned');
       }
       return token;
     } catch (error) {
@@ -258,94 +241,62 @@ class FirebaseService {
         try {
           const { notification, data } = remoteMessage;
 
-          // FIXED: Enhanced sender name extraction with proper field mapping
           const getSenderName = (data) => {
-            // Check in priority order - most specific to general
             if (data?.senderName) return data.senderName;
             if (data?.commenterName) return data.commenterName;
             if (data?.likerName) return data.likerName;
             if (data?.impressorName) return data.impressorName;
             if (data?.followerName) return data.followerName;
             if (data?.streamerName) return data.streamerName;
-            
-            // Debug log to see what fields are actually available
-            console.log('🔍 Available data fields:', Object.keys(data || {}));
             return 'Someone';
           };
 
-          // FIXED: Enhanced sender photo extraction with proper field mapping
           const getSenderPhoto = (data) => {
-            // Check in priority order
             if (data?.senderPhoto) return data.senderPhoto;
             if (data?.commenterPhoto) return data.commenterPhoto;
             if (data?.likerPhoto) return data.likerPhoto;
             if (data?.impressorPhoto) return data.impressorPhoto;
             if (data?.followerPhoto) return data.followerPhoto;
             if (data?.streamerPhoto) return data.streamerPhoto;
-            
+            return null;
+          };
+
+          const getPreviewImage = (notification, data) => {
+            if (notification?.imageUrl) return notification.imageUrl;
+            if (data?.previewImageUrl) return data.previewImageUrl;
+            if (data?.postImageUrl) return data.postImageUrl;
+            if (data?.postThumbnailUrl) return data.postThumbnailUrl;
+            if (data?.reelThumbnail) return data.reelThumbnail;
+            if (data?.streamThumbnail) return data.streamThumbnail;
             return null;
           };
 
           const senderName = getSenderName(data);
           const senderPhoto = getSenderPhoto(data);
+          const previewImage = getPreviewImage(notification, data);
 
-          console.log('🔍 FCM Debug - Final extracted info:', {
+          console.log('🔍 FCM Debug - Extracted info:', {
             senderName,
             senderPhoto: senderPhoto ? 'Present' : 'Missing',
+            previewImage: previewImage ? 'Present' : 'Missing',
             notificationType: data?.type,
-            allDataFields: Object.keys(data || {})
+            postType: data?.postType || data?.contentType
           });
 
-          // Build Android-specific notification config
-          const androidConfig = {
-            channelId: 'chat_messages',
-            pressAction: { id: 'default' },
-            ...(Platform.OS === 'android' && {
-              smallIcon: 'ic_launcher',
-              color: '#BB8FCE',
-            }),
-            style: {
-              type: AndroidStyle.MESSAGING,
-              person: {
-                name: senderName,
-                ...(senderPhoto && { icon: senderPhoto }),
-              },
-              messages: [{
-                text: notification?.body || 'New message',
-                timestamp: Date.now(),
-              }],
-            },
-          };
-
-          await notifee.displayNotification({
+          await this.displayRichNotification({
             title: notification?.title || 'New Message',
             body: notification?.body || 'You have a new message',
+            senderName,
+            senderPhoto,
+            previewImage,
             data: data || {},
-            android: androidConfig,
-            ios: {
-              sound: 'default',
-              badgeCount: 1,
-            },
+            notificationType: data?.type
           });
 
-          console.log('✅ Foreground notification displayed with sender:', senderName);
+          console.log('✅ Rich notification displayed');
         } catch (error) {
           console.error('❌ Error displaying foreground notification:', error);
-          
-          // Fallback: try with minimal notification
-          try {
-            await notifee.displayNotification({
-              title: remoteMessage.notification?.title || 'New Message',
-              body: remoteMessage.notification?.body || 'You have a new message',
-              android: {
-                channelId: 'chat_messages',
-                pressAction: { id: 'default' },
-              },
-            });
-            console.log('✅ Fallback notification displayed');
-          } catch (fallbackError) {
-            console.error('❌ Fallback notification also failed:', fallbackError);
-          }
+          await this.displaySimpleNotification(remoteMessage);
         }
       });
     }
@@ -363,6 +314,149 @@ class FirebaseService {
     }
   }
 
+  async displayRichNotification({ title, body, senderName, senderPhoto, previewImage, data, notificationType }) {
+    try {
+      const hasPreviewImage = !!previewImage;
+      const hasSenderPhoto = !!senderPhoto;
+
+      console.log('🎨 Building rich notification:', {
+        hasPreviewImage,
+        hasSenderPhoto,
+        notificationType
+      });
+
+      let androidStyle;
+
+      if (hasPreviewImage && (notificationType === 'post_like' || notificationType === 'post_comment')) {
+        androidStyle = {
+          type: AndroidStyle.BIGPICTURE,
+          picture: previewImage,
+          title: title,
+          summary: body,
+          ...(hasSenderPhoto && {
+            largeIcon: senderPhoto
+          })
+        };
+      } else if (hasSenderPhoto) {
+        androidStyle = {
+          type: AndroidStyle.MESSAGING,
+          person: {
+            name: senderName,
+            icon: senderPhoto,
+          },
+          messages: [{
+            text: body,
+            timestamp: Date.now(),
+          }],
+        };
+      } else {
+        androidStyle = {
+          type: AndroidStyle.BIGTEXT,
+          text: body,
+        };
+      }
+
+      const notificationConfig = {
+        title,
+        body,
+        data,
+        android: {
+          channelId: 'chat_messages',
+          pressAction: { id: 'default' },
+          smallIcon: 'ic_launcher',
+          color: '#BB8FCE',
+          style: androidStyle,
+          ...(notificationType === 'post_like' || notificationType === 'post_comment') && {
+            actions: [
+              {
+                title: 'View Post',
+                pressAction: { id: 'view_post' },
+                icon: 'https://my-cdn.com/icons/view.png',
+              },
+              {
+                title: 'Reply',
+                pressAction: { id: 'reply' },
+                icon: 'https://my-cdn.com/icons/reply.png',
+              }
+            ]
+          }
+        },
+        ios: {
+          sound: 'default',
+          badgeCount: 1,
+          ...(hasPreviewImage && {
+            attachments: [{
+              url: previewImage,
+              typeHint: 'public.jpeg'
+            }]
+          })
+        },
+      };
+
+      await notifee.displayNotification(notificationConfig);
+    } catch (error) {
+      console.error('❌ Error in displayRichNotification:', error);
+      throw error;
+    }
+  }
+
+  async displaySimpleNotification(remoteMessage) {
+    try {
+      await notifee.displayNotification({
+        title: remoteMessage.notification?.title || 'New Message',
+        body: remoteMessage.notification?.body || 'You have a new message',
+        android: {
+          channelId: 'chat_messages',
+          pressAction: { id: 'default' },
+          smallIcon: 'ic_launcher',
+          color: '#BB8FCE',
+        },
+        ios: {
+          sound: 'default',
+          badgeCount: 1,
+        }
+      });
+      console.log('✅ Fallback notification displayed');
+    } catch (fallbackError) {
+      console.error('❌ Fallback notification failed:', fallbackError);
+    }
+  }
+
+  async setupNotificationActionHandlers() {
+    notifee.onForegroundEvent(({ type, detail }) => {
+      switch (type) {
+        case EventType.ACTION_PRESS:
+          if (detail.pressAction.id === 'view_post') {
+            const data = detail.notification.data;
+            this.navigateBasedOnNotification(data);
+          } else if (detail.pressAction.id === 'reply') {
+            const data = detail.notification.data;
+            if (data.postId) {
+              this.navigationRef.navigate('PostDetail', { 
+                postId: data.postId,
+                openComments: true,
+                autoFocusReply: true
+              });
+            }
+          }
+          break;
+        case EventType.PRESS:
+          const data = detail.notification.data;
+          this.navigateBasedOnNotification(data);
+          break;
+      }
+    });
+
+    notifee.onBackgroundEvent(async ({ type, detail }) => {
+      if (type === EventType.ACTION_PRESS) {
+        await AsyncStorage.setItem('pending_notification_action', JSON.stringify({
+          action: detail.pressAction.id,
+          data: detail.notification.data
+        }));
+      }
+    });
+  }
+
   handleNotificationOpen(remoteMessage) {
     const { data } = remoteMessage;
 
@@ -373,7 +467,7 @@ class FirebaseService {
   }
 
   navigateBasedOnNotification(data) {
-    const { type, conversationId, senderId, messageId } = data;
+    const { type, conversationId, senderId, messageId, postId, postType } = data;
 
     if (!this.navigationRef) {
       AsyncStorage.setItem('pending_notification', JSON.stringify(data));
@@ -393,9 +487,22 @@ class FirebaseService {
           }
           break;
 
-        case 'story_reply':
-          if (senderId) {
-            this.navigationRef.navigate('ChatDetail', { userId: senderId });
+        case 'post_like':
+        case 'post_comment':
+          if (postId) {
+            if (postType === 'reel') {
+              this.navigationRef.navigate('ReelDetail', { 
+                reelId: postId,
+                openComments: type === 'post_comment'
+              });
+            } else {
+              this.navigationRef.navigate('PostDetail', { 
+                postId: postId,
+                openComments: type === 'post_comment'
+              });
+            }
+          } else if (senderId) {
+            this.navigationRef.navigate('UserProfile', { userId: senderId });
           }
           break;
 
@@ -406,9 +513,18 @@ class FirebaseService {
           }
           break;
 
+        case 'live_stream':
+          if (data.streamId && data.streamerId) {
+            this.navigationRef.navigate('LiveStream', { 
+              streamId: data.streamId,
+              streamerId: data.streamerId 
+            });
+          }
+          break;
+
         default:
           console.log(`Unknown notification type: ${type}`);
-          this.navigationRef.navigate('Chat');
+          this.navigationRef.navigate('Home');
       }
     } catch (error) {
       console.error('❌ Navigation error:', error);

@@ -933,7 +933,7 @@ const ReelsScreen = ({ navigation }: any) => {
               <Icon name="chatbubble-outline" size={26} color="#fff" style={styles.actionIcon} />
               <Text style={styles.actionCount}>{commentCount}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionButton} activeOpacity={0.7}>
+            {/* <TouchableOpacity style={styles.actionButton} activeOpacity={0.7}>
               <Icon name="eye-outline" size={26} color="#fff" style={styles.actionIcon} />
               <Text style={styles.actionCount}>{displayViewCount}</Text>
               {viewAnimation && (
@@ -953,7 +953,7 @@ const ReelsScreen = ({ navigation }: any) => {
                   <Text style={styles.viewCountText}>+1</Text>
                 </Animated.View>
               )}
-            </TouchableOpacity>
+            </TouchableOpacity> */}
             <TouchableOpacity
               style={styles.authorAvatar}
               onPress={() => handleProfilePress(item.author)}

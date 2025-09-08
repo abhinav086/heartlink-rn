@@ -1,3 +1,4 @@
+// src/screens/auth/LoginScreen.tsx
 import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
@@ -17,6 +18,7 @@ import LinearGradient from 'react-native-linear-gradient';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { CommonActions } from '@react-navigation/native'; // Import CommonActions
 import { RootStackParamList } from '../../types/navigation';
 import { icons, images } from '../../constants';
 import { useAuth } from '../../context/AuthContext';
@@ -116,6 +118,7 @@ const LoginScreen = ({ navigation }: Props) => {
     });
   }, []);
 
+  // MODIFIED: handleNavigation now uses CommonActions.reset
   const handleNavigation = async () => {
     setSuccessModalVisible(false);
     try {
@@ -126,11 +129,28 @@ const LoginScreen = ({ navigation }: Props) => {
 
       const onboardingStatus = await checkOnboardingStatus();
       
+      let targetScreen;
+      let targetParams = {};
+
       if (onboardingStatus.completed) {
-        navigation.navigate('HomeScreen');
+        targetScreen = 'HomeScreen';
       } else {
-        navigation.navigate('Gender', { userId: user._id });
+        targetScreen = 'Gender';
+        targetParams = { userId: user._id };
       }
+
+      // Reset the navigation stack to the target screen
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 0,
+          routes: [
+            {
+              name: targetScreen,
+              params: targetParams,
+            },
+          ],
+        })
+      );
     } catch (error) {
       console.error('Navigation Error:', error);
       Alert.alert('Error', 'Failed to retrieve onboarding status. Please try again.');
@@ -253,6 +273,7 @@ const LoginScreen = ({ navigation }: Props) => {
           onChangeText={setEmail}
           accessible
           accessibilityLabel="Email input"
+          autoCapitalize="none" // Added for better UX
         />
         <View style={styles.passwordContainer}>
           <TextInput
@@ -264,6 +285,7 @@ const LoginScreen = ({ navigation }: Props) => {
             onChangeText={setPassword}
             accessible
             accessibilityLabel="Password input"
+            autoCapitalize="none" // Added for better UX
           />
           <TouchableOpacity
             onPress={() => setShowPassword(!showPassword)}

@@ -19,6 +19,7 @@ import WalletScreen from '../screens/profile/WalletScreen';
 import AboutScreen from '../screens/profile/AboutScreen.tsx';
 import PrivacySettingsScreen from '../screens/profile/PrivacySettingsScreen.js';
 import BlockedUsersScreen from '../screens/BlockedUsersScreen.js';
+import SearchUsersList from '../screens/tabs/SearchUsersList.jsx';
 
 // Live Stream Components
 import CreateLiveStream from '../components/Home/CreateLiveStream.jsx';
@@ -545,6 +546,7 @@ const AppNavigator = ({ initialRouteName }) => {
         component={TakeOnDate} 
         options={getScreenOptions('PrivateTakeOnDate')} 
       />
+       <Stack.Screen name="SearchUsersList" component={SearchUsersList} />
 
       {/* ========== CALL SCREENS (Maximum Protection) ========== */}
       <Stack.Screen

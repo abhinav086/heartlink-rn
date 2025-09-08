@@ -1,3 +1,4 @@
+// ExploreScreen.jsx
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   View,
@@ -11,22 +12,28 @@ import {
   Modal,
   Dimensions,
   PanResponder,
-  Animated
+  Animated,
+  TextInput
 } from "react-native";
 import Video from 'react-native-video';
-import ExploreHeader from "../../components/Explore/ExploreHeader";
+import { useNavigation } from '@react-navigation/native';
 import { useAuth } from "../../context/AuthContext";
 import BASE_URL from "../../config/config";
+import Icon from 'react-native-vector-icons/Ionicons';
 
 const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
 
 const ExploreScreen = () => {
+  const navigation = useNavigation();
   const { token } = useAuth();
   const [allImages, setAllImages] = useState([]);
   const [displayedImages, setDisplayedImages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [hasInitialLoad, setHasInitialLoad] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
   
   // Video modal states
   const [videoModalVisible, setVideoModalVisible] = useState(false);
@@ -267,6 +274,47 @@ const ExploreScreen = () => {
     }
   }, [token, hasInitialLoad]);
 
+  // Search users function
+  const searchUsers = async (query) => {
+    if (!query.trim() || !token) return;
+    
+    setSearching(true);
+    try {
+      const response = await fetch(
+        `${BASE_URL}/api/v1/users/users/search?q=${encodeURIComponent(query)}&limit=10`,
+        {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      
+      const result = await response.json();
+      if (response.ok && result.success) {
+        setSearchResults(result.data.results);
+      }
+    } catch (err) {
+      console.error('Search error:', err);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  // Debounce search
+  useEffect(() => {
+    const delayDebounce = setTimeout(() => {
+      if (searchQuery.trim()) {
+        searchUsers(searchQuery);
+      } else {
+        setSearchResults([]);
+      }
+    }, 500);
+
+    return () => clearTimeout(delayDebounce);
+  }, [searchQuery]);
+
   // Initial load when component mounts
   useEffect(() => {
     if (token && !hasInitialLoad) {
@@ -320,6 +368,13 @@ const ExploreScreen = () => {
       translateX.setValue(0);
       translateY.setValue(0);
     }
+  };
+
+  // Handle user press from search
+  const handleUserPress = (userId) => {
+    setSearchQuery('');
+    setSearchResults([]);
+    navigation.navigate('UserProfile', { userId });
   };
 
   // Pan responder for zoom functionality
@@ -438,6 +493,23 @@ const ExploreScreen = () => {
     );
   }, []);
 
+  // Render search result item
+  const renderSearchResult = ({ item }) => (
+    <TouchableOpacity
+      style={styles.searchResultItem}
+      onPress={() => handleUserPress(item._id)}
+    >
+      <Image
+        source={{ uri: item.photoUrl?.trim() || 'https://via.placeholder.com/40  ' }}
+        style={styles.searchResultAvatar}
+      />
+      <View style={styles.searchResultText}>
+        <Text style={styles.searchResultName}>{item.fullName}</Text>
+        <Text style={styles.searchResultUsername}>@{item.username}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+
   // Show full-screen loader for initial load
   if (loading && !hasInitialLoad) {
     return (
@@ -464,7 +536,20 @@ const ExploreScreen = () => {
   if (!loading && displayedImages.length === 0 && !error) {
     return (
       <View style={styles.container}>
-        <ExploreHeader />
+        <View style={styles.searchContainer}>
+          <View style={styles.searchBar}>
+            <Text style={styles.exploreText}>EXPLORE</Text>
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search users..."
+              placeholderTextColor="#aaa"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCapitalize="none"
+            />
+            <Icon name="search" size={20} color="#ed167e" style={styles.searchIcon} />
+          </View>
+        </View>
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyText}>No explore content available at the moment.</Text>
           <Text style={styles.emptySubText}>Check back later for fresh content!</Text>
@@ -479,7 +564,42 @@ const ExploreScreen = () => {
   // Main content display
   return (
     <View style={styles.container}>
-      <ExploreHeader />
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <View style={styles.searchBar}>
+          <Text style={styles.exploreText}>EXPLORE</Text>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search users..."
+            placeholderTextColor="#aaa"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCapitalize="none"
+          />
+          <Icon name="search" size={20} color="#ed167e" style={styles.searchIcon} />
+        </View>
+        
+        {/* Search Results Dropdown */}
+        {searchQuery.length > 0 && (
+          <View style={styles.searchResultsContainer}>
+            {searching ? (
+              <View style={styles.searchLoading}>
+                <ActivityIndicator size="small" color="#ed167e" />
+              </View>
+            ) : (
+              <FlatList
+                data={searchResults}
+                renderItem={renderSearchResult}
+                keyExtractor={(item) => item._id}
+                style={styles.searchResultsList}
+                keyboardShouldPersistTaps="always"
+              />
+            )}
+          </View>
+        )}
+      </View>
+
+      {/* Content Grid */}
       <FlatList
         data={displayedImages}
         keyExtractor={(item, index) => `${item.id}-${index}`}
@@ -497,6 +617,7 @@ const ExploreScreen = () => {
         windowSize={5}
         initialNumToRender={10}
         contentContainerStyle={styles.contentContainer}
+        ListHeaderComponent={<View style={{ height: 16 }} />} // Spacer for search bar
       />
 
       {/* Show shuffle indicator */}
@@ -607,6 +728,72 @@ const styles = StyleSheet.create({
   center: {
     justifyContent: "center",
     alignItems: "center",
+  },
+  searchContainer: {
+    backgroundColor: '#000',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    zIndex: 100,
+  },
+  searchBar: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 24,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  exploreText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginRight: 10,
+  },
+  searchInput: {
+    color: 'white',
+    fontSize: 16,
+    flex: 1,
+  },
+  searchIcon: {
+    marginLeft: 10,
+  },
+  searchResultsContainer: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 8,
+    marginTop: 8,
+    maxHeight: 300,
+  },
+  searchResultsList: {
+    maxHeight: 300,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#333',
+  },
+  searchResultAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    marginRight: 12,
+  },
+  searchResultText: {
+    flex: 1,
+  },
+  searchResultName: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  searchResultUsername: {
+    color: '#aaa',
+    fontSize: 14,
+  },
+  searchLoading: {
+    padding: 16,
+    alignItems: 'center',
   },
   contentContainer: {
     paddingBottom: 60,
