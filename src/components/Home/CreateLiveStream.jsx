@@ -1,4 +1,4 @@
-// src/components/CreateLiveStream.jsx - FULL UPDATED VERSION WITH FULLSCREEN PREVIEW
+// src/components/CreateLiveStream.jsx - CLEANED VERSION
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
@@ -56,7 +56,7 @@ const CreateLiveStream = ({ navigation }) => {
   const [endingAll, setEndingAll] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(false);
   const [audioEnabled, setAudioEnabled] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false); // New state for fullscreen mode
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const displayError = apiError || webRTCError;
   const hasActiveStreams = useMemo(() => currentStreams.length > 0, [currentStreams]);
@@ -65,13 +65,11 @@ const CreateLiveStream = ({ navigation }) => {
   useEffect(() => {
     const initializeService = async () => {
       try {
-        // CRITICAL: Check socket connection first
         if (!socket || !isConnected) {
           setWebRTCError('Connecting to server...');
           return;
         }
         
-        console.log('🚀 Initializing WebRTC service with external socket');
         enhancedGlobalWebRTCService.setExternalSocket(socket);
         await enhancedGlobalWebRTCService.initialize(token);
         
@@ -83,9 +81,7 @@ const CreateLiveStream = ({ navigation }) => {
         });
         
         setWebRTCError('');
-        console.log('✅ WebRTC service initialized successfully');
       } catch (error) {
-        console.error('❌ Service initialization failed:', error);
         setWebRTCError(`Service initialization failed: ${error.message}`);
       }
     };
@@ -97,10 +93,8 @@ const CreateLiveStream = ({ navigation }) => {
 
   // ============ WEBRTC CALLBACKS ============
   const handleLocalStream = (stream) => {
-    console.log('📹 Local stream received in component');
     setLocalStream(stream);
     
-    // Check stream tracks
     if (stream) {
       const videoTracks = stream.getVideoTracks();
       const audioTracks = stream.getAudioTracks();
@@ -112,7 +106,6 @@ const CreateLiveStream = ({ navigation }) => {
   };
 
   const handleStreamStateChange = (state, data) => {
-    console.log('🔄 Stream state changed:', state, data);
     switch (state) {
       case 'created':
         setStreamStatus('WAITING');
@@ -125,7 +118,6 @@ const CreateLiveStream = ({ navigation }) => {
         setIsWebRTCConnected(true);
         enhancedGlobalWebRTCService.streamState = 'broadcasting';
         enhancedGlobalWebRTCService.isBroadcasting = true;
-        // Enter fullscreen when broadcasting starts
         setIsFullscreen(true);
         break;
       case 'ended':
@@ -136,19 +128,16 @@ const CreateLiveStream = ({ navigation }) => {
         setConnectedViewers(new Set());
         setVideoEnabled(false);
         setAudioEnabled(false);
-        // Exit fullscreen when stream ends
         setIsFullscreen(false);
         break;
     }
   };
 
   const handleWebRTCError = (errorData) => {
-    console.error('❌ WebRTC error:', errorData);
     setWebRTCError(errorData.message || 'WebRTC error occurred');
   };
 
   const handleViewerCount = (data) => {
-    console.log('👥 Viewer count update:', data);
     setConnectedViewers(new Set(Array.from({ length: data.count || 0 }, (_, i) => `viewer_${i}`)));
   };
 
@@ -161,51 +150,33 @@ const CreateLiveStream = ({ navigation }) => {
     }
   }, [isConnected]);
 
-  // ============ VIEWER JOIN HANDLING WITH VIDEO VERIFICATION ============
+  // ============ VIEWER JOIN HANDLING ============
   useEffect(() => {
     if (socket && isConnected && streamStatus === 'LIVE' && streamId) {
       const handleViewerJoin = async (data) => {
         const { streamId: eventStreamId, viewer, currentViewerCount } = data;
         
         if (eventStreamId === streamId) {
-          console.log('👁 New viewer joined:', viewer);
-          
-          // Update viewer count
           setConnectedViewers(new Set(Array.from({ length: currentViewerCount || 0 }, (_, i) => `viewer_${i}`)));
           
-          // Verify local stream has video
           if (localStream) {
             const videoTracks = localStream.getVideoTracks();
             const audioTracks = localStream.getAudioTracks();
             
-            console.log('📡 Broadcaster stream status:', {
-              hasVideo: videoTracks.length > 0,
-              hasAudio: audioTracks.length > 0,
-              videoEnabled: videoTracks[0]?.enabled,
-              audioEnabled: audioTracks[0]?.enabled
-            });
-            
-            // Ensure tracks are enabled
             videoTracks.forEach(track => {
               track.enabled = true;
-              console.log('📹 Ensuring video track enabled:', track.id);
             });
             audioTracks.forEach(track => {
               track.enabled = true;
-              console.log('🎵 Ensuring audio track enabled:', track.id);
             });
             
-            // Update state
             setVideoEnabled(videoTracks.length > 0 && videoTracks[0].enabled);
             setAudioEnabled(audioTracks.length > 0 && audioTracks[0].enabled);
           }
           
-          // Verify WebRTC service state
           const serviceState = enhancedGlobalWebRTCService.getStreamState();
-          console.log('🔍 WebRTC service state:', serviceState);
           
           if (!serviceState.hasLocalStream) {
-            console.error('❌ WebRTC service missing local stream!');
             enhancedGlobalWebRTCService.localStream = localStream;
           }
         }
@@ -275,7 +246,7 @@ const CreateLiveStream = ({ navigation }) => {
     });
   }, [fetchCurrentStreams]);
 
-  // End all active streams using REST API
+  // End all active streams
   const endAllStreams = async () => {
     if (currentStreams.length === 0) {
       Alert.alert('Info', 'No active streams to end.');
@@ -313,7 +284,6 @@ const CreateLiveStream = ({ navigation }) => {
       });
       await Promise.allSettled(endPromises);
 
-      // Cleanup local state if current stream was ended
       if (streamId) {
         enhancedGlobalWebRTCService.cleanupStreaming();
         setStreamStatus('IDLE');
@@ -322,7 +292,6 @@ const CreateLiveStream = ({ navigation }) => {
         setDescription('');
         setVideoEnabled(false);
         setAudioEnabled(false);
-        // Exit fullscreen
         setIsFullscreen(false);
       }
       Alert.alert('Streams Ended', 'All your active streams have been ended. You can now create a new one.');
@@ -336,7 +305,7 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  // Create stream using backend API
+  // Create stream
   const createStream = async () => {
     if (hasActiveStreams) {
       Alert.alert(
@@ -357,7 +326,7 @@ const CreateLiveStream = ({ navigation }) => {
     setApiError('');
     try {
       const requestBody = {
-        title: "Live", // Fixed title
+        title: "Live",
         description: description.trim(),
         visibility: 'PUBLIC',
         category: 'OTHER',
@@ -393,7 +362,7 @@ const CreateLiveStream = ({ navigation }) => {
         enhancedGlobalWebRTCService.streamId = newStreamId;
         enhancedGlobalWebRTCService.streamRole = 'broadcaster';
         enhancedGlobalWebRTCService.streamState = 'waiting';
-        Alert.alert('Success', 'Stream created! Initializing camera...');
+        Alert.alert('Success', 'Stream created! Ready to start broadcasting.');
         await initializeCamera();
       } else {
         let errorMessage = 'Failed to create stream.';
@@ -412,12 +381,9 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  // ✅ ENHANCED CAMERA INITIALIZATION WITH VIDEO VERIFICATION
+  // Initialize camera
   const initializeCamera = async () => {
     try {
-      console.log('📹 Starting camera initialization...');
-      
-      // Ensure we request both audio and video explicitly
       const mediaConstraints = {
         audio: {
           echoCancellation: true,
@@ -432,49 +398,28 @@ const CreateLiveStream = ({ navigation }) => {
         }
       };
       
-      // Get stream with explicit constraints
       const stream = await enhancedGlobalWebRTCService.getUserMedia(mediaConstraints);
       
       if (stream) {
         const audioTracks = stream.getAudioTracks();
         const videoTracks = stream.getVideoTracks();
         
-        console.log('🎵 Audio tracks:', audioTracks.length);
-        console.log('📹 Video tracks:', videoTracks.length);
-        
-        // ✅ CRITICAL: Verify and enable video tracks
         if (videoTracks.length === 0) {
           throw new Error('No video tracks available - camera access denied or not available');
         }
         
-        // Enable all tracks explicitly
         videoTracks.forEach((track, index) => {
           track.enabled = true;
-          console.log(`📹 Video track ${index}:`, {
-            id: track.id,
-            enabled: track.enabled,
-            muted: track.muted,
-            readyState: track.readyState,
-            label: track.label
-          });
         });
         
         if (audioTracks.length === 0) {
-          console.warn('⚠️ No audio tracks found!');
           Alert.alert('Audio Warning', 'No microphone detected. Audio will not be available.');
         } else {
           audioTracks.forEach((track, index) => {
             track.enabled = true;
-            console.log(`🎵 Audio track ${index}:`, {
-              id: track.id,
-              enabled: track.enabled,
-              muted: track.muted,
-              readyState: track.readyState
-            });
           });
         }
         
-        // ✅ CRITICAL: Set the local stream in the WebRTC service
         enhancedGlobalWebRTCService.localStream = stream;
         
         setLocalStream(stream);
@@ -482,13 +427,11 @@ const CreateLiveStream = ({ navigation }) => {
         setAudioEnabled(audioTracks.length > 0 && audioTracks[0].enabled);
         setStreamStatus('WAITING');
         
-        console.log('✅ Camera initialized successfully with video and audio');
         return true;
       } else {
         throw new Error('Failed to get local stream');
       }
     } catch (error) {
-      console.error('❌ Camera/Audio initialization error:', error);
       setStreamStatus('ERROR');
       setWebRTCError(`Camera initialization failed: ${error.message}`);
       Alert.alert('Media Error', `Failed to access camera/microphone: ${error.message}`);
@@ -496,7 +439,7 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  // ✅ ENHANCED START STREAM WITH VIDEO VERIFICATION
+  // Start stream
   const startStream = async () => {
     if (streamStatus !== 'WAITING' || !streamId || !token) {
       Alert.alert('Error', 'Stream is not ready to start.');
@@ -508,7 +451,6 @@ const CreateLiveStream = ({ navigation }) => {
       return;
     }
     
-    // ✅ CRITICAL: Verify video tracks before starting
     const videoTracks = localStream.getVideoTracks();
     const audioTracks = localStream.getAudioTracks();
     
@@ -516,13 +458,6 @@ const CreateLiveStream = ({ navigation }) => {
       Alert.alert('Error', 'No video available. Please check camera permissions.');
       return;
     }
-    
-    console.log('📡 Starting stream with:', {
-      videoTracks: videoTracks.length,
-      audioTracks: audioTracks.length,
-      videoEnabled: videoTracks[0]?.enabled,
-      audioEnabled: audioTracks[0]?.enabled
-    });
     
     if (!socket || !isConnected) {
       Alert.alert('Error', 'Socket connection not ready. Please check your internet.');
@@ -532,10 +467,8 @@ const CreateLiveStream = ({ navigation }) => {
     setStreamStatus('STARTING');
     
     try {
-      // First, ensure the local stream is set in the service
       enhancedGlobalWebRTCService.localStream = localStream;
       
-      // Start the broadcast via API
       const response = await fetch(`${BASE_URL}/api/v1/live/${streamId}/start`, {
         method: 'POST',
         headers: {
@@ -551,13 +484,11 @@ const CreateLiveStream = ({ navigation }) => {
       
       await response.json();
       
-      // Set proper state in WebRTC service
       enhancedGlobalWebRTCService.streamId = streamId;
       enhancedGlobalWebRTCService.streamRole = 'broadcaster';
       enhancedGlobalWebRTCService.streamState = 'broadcasting';
       enhancedGlobalWebRTCService.isBroadcasting = true;
       
-      // ✅ CRITICAL: Emit broadcaster_ready with video confirmation
       socket.emit('broadcaster_ready', {
         streamId: streamId,
         hasLocalStream: true,
@@ -568,17 +499,7 @@ const CreateLiveStream = ({ navigation }) => {
       
       setStreamStatus('LIVE');
       setIsWebRTCConnected(true);
-      Alert.alert('Broadcasting', 'Your stream is now live with video and audio!');
-      
-      // Log stream details for debugging
-      console.log('✅ Stream started successfully:', {
-        streamId,
-        videoTracks: videoTracks.length,
-        audioTracks: audioTracks.length,
-        videoEnabled: videoTracks[0]?.enabled,
-        audioEnabled: audioTracks[0]?.enabled,
-        serviceState: enhancedGlobalWebRTCService.getStreamState()
-      });
+      Alert.alert('Broadcasting', 'Your stream is now live!');
       
     } catch (err) {
       setStreamStatus('WAITING');
@@ -587,7 +508,7 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  // End a single stream using REST API
+  // End stream
   const endStream = async (id) => {
     if (!id) {
       Alert.alert('Error', 'Invalid stream ID.');
@@ -619,7 +540,6 @@ const CreateLiveStream = ({ navigation }) => {
         socket.emit('stream_end', { streamId: id });
       }
 
-      // Cleanup local state if it was our stream
       if (id === streamId) {
         enhancedGlobalWebRTCService.cleanupStreaming();
         setStreamStatus('IDLE');
@@ -628,7 +548,6 @@ const CreateLiveStream = ({ navigation }) => {
         setDescription('');
         setVideoEnabled(false);
         setAudioEnabled(false);
-        // Exit fullscreen
         setIsFullscreen(false);
         Alert.alert('Stream Ended', 'Your live stream has finished.');
       } else {
@@ -644,30 +563,13 @@ const CreateLiveStream = ({ navigation }) => {
     }
   };
 
-  const retryCamera = async () => {
-    if (!streamId) {
-      Alert.alert('Error', 'No active stream to retry camera for.');
-      return;
-    }
-    setStreamStatus('WAITING');
-    setApiError('');
-    setWebRTCError('');
-    const success = await initializeCamera();
-    if (success) {
-      Alert.alert('Success', 'Camera is now ready!');
-    } else {
-      setStreamStatus('ERROR');
-      Alert.alert('Camera Error', 'Still unable to access camera. Please check permissions.');
-    }
-  };
-
   const handleStartBroadcast = () => {
     if (streamStatus === 'WAITING') {
       startStream();
     } else if (streamStatus === 'LIVE') {
       Alert.alert('Already Live', 'The stream is currently broadcasting.');
     } else {
-      Alert.alert('Not Ready', 'Please create a stream and wait for camera.');
+      Alert.alert('Not Ready', 'Please create a stream first.');
     }
   };
 
@@ -679,9 +581,7 @@ const CreateLiveStream = ({ navigation }) => {
     }
     Alert.alert(
       'End Stream',
-      id === streamId
-        ? 'Are you sure you want to end this live stream?'
-        : 'Are you sure you want to end this stream?',
+      'Are you sure you want to end this live stream?',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'End Stream', onPress: () => endStream(streamIdToUse), style: 'destructive' },
@@ -689,7 +589,6 @@ const CreateLiveStream = ({ navigation }) => {
     );
   };
 
-  // Function to exit fullscreen mode
   const exitFullscreen = () => {
     setIsFullscreen(false);
   };
@@ -697,7 +596,7 @@ const CreateLiveStream = ({ navigation }) => {
   if (checkingStreams) {
     return (
       <View style={styles.centeredContainer}>
-        <ActivityIndicator size="large" color="#ff0000" />
+        <ActivityIndicator size="large" color="#FF6B6B" />
         <Text style={styles.loadingText}>Checking for active streams...</Text>
       </View>
     );
@@ -717,7 +616,6 @@ const CreateLiveStream = ({ navigation }) => {
           zOrder={0}
         />
         
-        {/* Top bar with Live button and viewer count */}
         <View style={styles.fullscreenTopBar}>
           <TouchableOpacity 
             style={styles.liveButton}
@@ -731,7 +629,6 @@ const CreateLiveStream = ({ navigation }) => {
           </Text>
         </View>
         
-        {/* End stream button */}
         <TouchableOpacity 
           style={styles.fullscreenEndButton}
           onPress={() => handleEndStream(streamId)}
@@ -739,7 +636,6 @@ const CreateLiveStream = ({ navigation }) => {
           <Text style={styles.fullscreenEndButtonText}>End Stream</Text>
         </TouchableOpacity>
         
-        {/* Exit fullscreen button */}
         <TouchableOpacity 
           style={styles.exitFullscreenButton}
           onPress={exitFullscreen}
@@ -757,209 +653,71 @@ const CreateLiveStream = ({ navigation }) => {
         <RefreshControl
           refreshing={refreshing}
           onRefresh={onRefresh}
-          tintColor="#ff0000"
-          colors={['#ff0000']}
+          tintColor="#FF6B6B"
+          colors={['#FF6B6B']}
         />
       }
     >
       <Text style={styles.header}>Go Live</Text>
-      {displayError ? <Text style={styles.errorText}>{displayError}</Text> : null}
-
-      {/* Active Streams Section */}
-      {/* <View style={styles.currentStreamsContainer}>
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Your Active Streams</Text>
-          <TouchableOpacity onPress={() => fetchCurrentStreams("manual_refresh_button")}>
-            <Text style={styles.refreshText}>Refresh</Text>
-          </TouchableOpacity>
-        </View>
-        {currentStreams.length === 0 ? (
-          <Text style={styles.noStreamsText}>No active streams found.</Text>
-        ) : (
-          <>
-            {currentStreams.map((stream) => (
-              <View key={stream.streamId} style={styles.streamItem}>
-                <View style={styles.streamInfo}>
-                  <Text style={styles.streamTitle} numberOfLines={1}>{stream.title}</Text>
-                  <Text style={styles.streamId}>ID: {stream.streamId}</Text>
-                  <Text style={styles.streamStatus}>Status: {stream.status || 'LIVE'}</Text>
-                  {connectedViewers.size > 0 && stream.streamId === streamId && (
-                    <Text style={styles.streamViewers}>Connected Viewers: {connectedViewers.size}</Text>
-                  )}
-                </View>
-                <TouchableOpacity
-                  style={styles.endStreamButton}
-                  onPress={() => handleEndStream(stream.streamId)}
-                >
-                  <Text style={styles.endStreamButtonText}>End</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-            <TouchableOpacity
-              style={[styles.button, styles.buttonEndAll, endingAll && styles.buttonDisabled]}
-              onPress={endAllStreams}
-              disabled={endingAll}
-            >
-              {endingAll ? (
-                <>
-                  <ActivityIndicator size="small" color="#fff" />
-                  <Text style={styles.buttonText}> Ending...</Text>
-                </>
-              ) : (
-                <Text style={styles.buttonText}>End All & Create New</Text>
-              )}
-            </TouchableOpacity>
-          </>
-        )}
-      </View> */}
-
       
-      <View style={hasActiveStreams ? styles.disabledForm : null}>
-        <View style={styles.formGroup}>
-          <Text style={styles.label}>Description (Optional)</Text>
-          <TextInput
-            style={[styles.input, styles.textArea]}
-            value={description}
-            onChangeText={setDescription}
-            placeholder="Add a description..."
-            placeholderTextColor="#666"
-            multiline
-            editable={!hasActiveStreams && streamStatus === 'IDLE'}
-          />
+      {displayError ? (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{displayError}</Text>
         </View>
+      ) : null}
 
-        {streamId && (
-          <View style={styles.statusContainer}>
-            <Text style={styles.statusText}>Stream ID: {streamId}</Text>
-            <Text style={styles.statusText}>Status: {streamStatus}</Text>
-            <Text style={styles.statusText}>
-              Camera: {localStream ? '✅ Ready' : '❌ Not Ready'}
-            </Text>
-            <Text style={styles.statusText}>
-              Video: {videoEnabled ? '✅ Enabled' : '❌ Disabled'}
-            </Text>
-            <Text style={styles.statusText}>
-              Audio: {audioEnabled ? '✅ Enabled' : '❌ Disabled'}
-            </Text>
-            <Text style={styles.statusText}>
-              Socket: {isConnected ? '✅ Connected' : '❌ Disconnected'}
-            </Text>
-            {isWebRTCConnected && <Text style={styles.statusText}>WebRTC: ✅ Broadcasting</Text>}
-            {connectedViewers.size > 0 && (
-              <Text style={styles.statusText}>Connected Viewers: {connectedViewers.size}</Text>
-            )}
-          </View>
-        )}
+      <View style={styles.formContainer}>
+       
 
         <View style={styles.buttonContainer}>
-          <TouchableOpacity
-            style={[
-              styles.button,
-              styles.buttonCreate,
-              isCreateButtonDisabled && styles.buttonDisabled,
-              hasActiveStreams && styles.buttonCreateDisabledWithStreams
-            ]}
-            onPress={createStream}
-            disabled={isCreateButtonDisabled}
-          >
-            <Text style={styles.buttonText}>Create Stream</Text>
-          </TouchableOpacity>
-
-          {(streamStatus === 'WAITING' || streamStatus === 'LIVE') && (
+          {streamStatus === 'IDLE' && (
             <TouchableOpacity
               style={[
                 styles.button,
-                streamStatus === 'WAITING' ? styles.buttonStart : styles.buttonLive,
-                streamStatus === 'STARTING' && styles.buttonDisabled
+                styles.createButton,
+                isCreateButtonDisabled && styles.buttonDisabled
               ]}
+              onPress={createStream}
+              disabled={isCreateButtonDisabled}
+            >
+              <Text style={styles.buttonText}>Create Stream</Text>
+            </TouchableOpacity>
+          )}
+
+          {streamStatus === 'WAITING' && (
+            <TouchableOpacity
+              style={[styles.button, styles.startButton]}
               onPress={handleStartBroadcast}
-              disabled={!isConnected || !localStream || streamStatus === 'STARTING'}
+              disabled={!isConnected || !localStream}
             >
-              <Text style={styles.buttonText}>
-                {streamStatus === 'WAITING' ? 'Start Broadcasting' :
-                  streamStatus === 'STARTING' ? 'Starting...' : 'Live - Broadcasting'}
-              </Text>
+              <Text style={styles.buttonText}>Start Broadcasting</Text>
             </TouchableOpacity>
           )}
 
-          {streamStatus === 'ERROR' && (
+          {streamStatus === 'LIVE' && (
             <TouchableOpacity
-              style={[styles.button, styles.buttonStart]}
-              onPress={retryCamera}
+              style={[styles.button, styles.liveStatusButton]}
+              onPress={() => Alert.alert('Broadcasting', 'Your stream is live!')}
             >
-              <Text style={styles.buttonText}>Retry Camera</Text>
-            </TouchableOpacity>
-          )}
-
-          {(streamStatus === 'WAITING' || streamStatus === 'LIVE') && !localStream && (
-            <TouchableOpacity
-              style={[styles.button, styles.buttonStart]}
-              onPress={retryCamera}
-            >
-              <Text style={styles.buttonText}>Retry Camera</Text>
+              <Text style={styles.buttonText}>● LIVE</Text>
             </TouchableOpacity>
           )}
 
           {(streamStatus === 'WAITING' || streamStatus === 'LIVE') && (
             <TouchableOpacity
-              style={[styles.button, styles.buttonEnd]}
+              style={[styles.button, styles.endButton]}
               onPress={() => handleEndStream(streamId)}
             >
               <Text style={styles.buttonText}>End Stream</Text>
             </TouchableOpacity>
           )}
 
-          {(streamStatus === 'CREATING' || streamStatus === 'STARTING') && (
+          {(streamStatus === 'CREATING' || streamStatus === 'STARTING' || streamStatus === 'ENDING') && (
             <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#ff0000" />
+              <ActivityIndicator size="large" color="#FF6B6B" />
               <Text style={styles.loadingText}>
-                {streamStatus === 'CREATING' ? 'Creating stream...' : 'Starting stream...'}
-              </Text>
-            </View>
-          )}
-
-          {streamStatus === 'ENDING' && (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#ff0000" />
-              <Text style={styles.loadingText}>Ending stream...</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Enhanced Preview Container */}
-        <View style={styles.previewContainer}>
-          {localStream ? (
-            <>
-              <RTCView 
-                streamURL={localStream.toURL()} 
-                style={styles.rtcView} 
-                objectFit="cover"
-                mirror={true}
-                zOrder={0}
-              />
-              <View style={styles.previewOverlay}>
-                <Text style={styles.previewText}>Your Camera Preview</Text>
-                <View style={styles.streamStats}>
-                  <Text style={styles.statsText}>
-                    📹 {videoEnabled ? '✅' : '❌'}
-                  </Text>
-                  <Text style={styles.statsText}>
-                    🎵 {audioEnabled ? '✅' : '❌'}
-                  </Text>
-                </View>
-              </View>
-              {streamStatus === 'LIVE' && (
-                <View style={styles.liveIndicator}>
-                  <Text style={styles.liveText}>● LIVE</Text>
-                </View>
-              )}
-            </>
-          ) : (
-            <View style={styles.previewPlaceholder}>
-              <Text style={styles.previewText}>
-                {streamStatus === 'WAITING' ? 'Initializing Camera...' :
-                  streamStatus === 'ERROR' ? 'Camera Error - Tap "Retry Camera"' :
-                    'Preview will appear here'}
+                {streamStatus === 'CREATING' ? 'Creating stream...' : 
+                 streamStatus === 'STARTING' ? 'Starting stream...' : 'Ending stream...'}
               </Text>
             </View>
           )}
@@ -969,296 +727,131 @@ const CreateLiveStream = ({ navigation }) => {
   );
 };
 
-// Responsive Styles
 const styles = StyleSheet.create({
   container: {
-    padding: isSmallScreen ? 12 : 20,
-    backgroundColor: '#000',
+    padding: 20,
+    backgroundColor: '#0A0A0A',
     minHeight: height,
-  },
-  header: {
-    fontSize: isSmallScreen ? 20 : 24,
-    fontWeight: 'bold',
-    marginBottom: isSmallScreen ? 15 : 20,
-    textAlign: 'center',
-    color: '#fff',
-    marginTop: isSmallScreen ? 10 : 20,
-  },
-  errorText: {
-    color: '#ff4444',
-    marginBottom: 10,
-    textAlign: 'center',
-    backgroundColor: 'rgba(255, 68, 68, 0.1)',
-    padding: isSmallScreen ? 8 : 10,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#ff4444',
-    fontSize: isSmallScreen ? 14 : 16,
-  },
-  formGroup: {
-    marginBottom: isSmallScreen ? 10 : 15,
-  },
-  label: {
-    fontSize: isSmallScreen ? 14 : 16,
-    fontWeight: '600',
-    marginBottom: 5,
-    color: '#fff',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#333',
-    borderRadius: 5,
-    padding: isSmallScreen ? 8 : 10,
-    fontSize: isSmallScreen ? 14 : 16,
-    backgroundColor: '#111',
-    color: '#fff',
-  },
-  textArea: {
-    height: isSmallScreen ? 60 : 80,
-    textAlignVertical: 'top',
-  },
-  statusContainer: {
-    padding: isSmallScreen ? 8 : 10,
-    backgroundColor: '#111',
-    borderRadius: 5,
-    marginBottom: isSmallScreen ? 10 : 15,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  statusText: {
-    fontSize: isSmallScreen ? 12 : 14,
-    color: '#fff',
-    marginBottom: 2,
-  },
-  buttonContainer: {
-    flexDirection: isTablet ? 'row' : 'column',
-    justifyContent: 'space-between',
-    marginVertical: isSmallScreen ? 10 : 20,
-    gap: isSmallScreen ? 8 : 10,
-  },
-  button: {
-    padding: isSmallScreen ? 12 : 15,
-    borderRadius: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: '#333',
-    flexDirection: 'row',
-    minHeight: isSmallScreen ? 40 : 50,
-    width: isTablet ? 'auto' : '100%',
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: isSmallScreen ? 14 : 16,
-    fontWeight: 'bold',
-  },
-  buttonCreate: {
-    backgroundColor: '#007700',
-    borderColor: '#00aa00',
-  },
-  buttonCreateDisabledWithStreams: {
-    backgroundColor: '#555',
-    borderColor: '#444',
-  },
-  buttonStart: {
-    backgroundColor: '#007700',
-    borderColor: '#00aa00',
-  },
-  buttonLive: {
-    backgroundColor: '#cc0000',
-    borderColor: '#ff0000',
-  },
-  buttonEnd: {
-    backgroundColor: '#333',
-    borderColor: '#ff0000',
-  },
-  buttonEndAll: {
-    backgroundColor: '#8B0000',
-    borderColor: '#A52A2A',
-    padding: isSmallScreen ? 12 : 15,
-    borderRadius: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    width: '100%',
-    marginTop: 10,
-  },
-  loadingContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: isSmallScreen ? 15 : 20,
-    width: '100%',
-  },
-  loadingText: {
-    color: '#fff',
-    marginTop: 10,
-    fontSize: isSmallScreen ? 14 : 16,
-  },
-  previewContainer: {
-    height: isSmallScreen ? 200 : 300,
-    backgroundColor: '#000',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 5,
-    overflow: 'hidden',
-    marginTop: isSmallScreen ? 15 : 20,
-    borderWidth: 1,
-    borderColor: '#333',
-    position: 'relative',
-  },
-  rtcView: {
-    width: '100%',
-    height: '100%',
-  },
-  previewOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    padding: 10,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  previewPlaceholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  previewText: {
-    color: '#fff',
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    padding: isSmallScreen ? 4 : 5,
-    borderRadius: 3,
-    fontSize: isSmallScreen ? 12 : 14,
-  },
-  streamStats: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  statsText: {
-    color: '#fff',
-    fontSize: 12,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    padding: 4,
-    borderRadius: 4,
-  },
-  liveIndicator: {
-    position: 'absolute',
-    bottom: 10,
-    left: 10,
-    backgroundColor: 'rgba(255,0,0,0.9)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
-  },
-  liveText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
-  },
-  currentStreamsContainer: {
-    marginTop: isSmallScreen ? 8 : 10,
-    paddingTop: isSmallScreen ? 8 : 10,
-    paddingBottom: isSmallScreen ? 15 : 20,
-    borderBottomWidth: 1,
-    borderBottomColor: '#333',
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: isSmallScreen ? 10 : 15,
-  },
-  sectionTitle: {
-    fontSize: isSmallScreen ? 16 : 20,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  refreshText: {
-    color: '#ff0000',
-    fontWeight: '600',
-    fontSize: isSmallScreen ? 14 : 16,
-  },
-  noStreamsText: {
-    color: '#888',
-    textAlign: 'center',
-    padding: isSmallScreen ? 15 : 20,
-    fontSize: isSmallScreen ? 14 : 16,
-  },
-  streamItem: {
-    flexDirection: isSmallScreen ? 'column' : 'row',
-    justifyContent: 'space-between',
-    alignItems: isSmallScreen ? 'flex-start' : 'center',
-    padding: isSmallScreen ? 10 : 15,
-    backgroundColor: '#111',
-    borderRadius: 5,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  streamInfo: {
-    flex: 1,
-    marginRight: isSmallScreen ? 0 : 10,
-    marginBottom: isSmallScreen ? 10 : 0,
-    width: '100%',
-  },
-  streamTitle: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: isSmallScreen ? 14 : 16,
-    marginBottom: isSmallScreen ? 2 : 0,
-  },
-  streamId: {
-    color: '#888',
-    fontSize: isSmallScreen ? 10 : 12,
-    marginTop: isSmallScreen ? 2 : 2,
-  },
-  streamStatus: {
-    color: '#aaa',
-    fontSize: isSmallScreen ? 10 : 12,
-    marginTop: isSmallScreen ? 2 : 2,
-  },
-  streamViewers: {
-    color: '#00ff00',
-    fontSize: isSmallScreen ? 10 : 12,
-    marginTop: isSmallScreen ? 2 : 2,
-  },
-  endStreamButton: {
-    backgroundColor: '#cc0000',
-    paddingHorizontal: isSmallScreen ? 12 : 15,
-    paddingVertical: isSmallScreen ? 6 : 8,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#ff0000',
-    alignSelf: isSmallScreen ? 'flex-end' : 'auto',
-  },
-  endStreamButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
-    fontSize: isSmallScreen ? 12 : 14,
   },
   centeredContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#000',
-    padding: isSmallScreen ? 15 : 20,
+    backgroundColor: '#0A0A0A',
+    padding: 20,
   },
-  disabledForm: {
-    opacity: 0.5,
+  header: {
+    fontSize: 28,
+    fontWeight: '700',
+    marginBottom: 30,
+    textAlign: 'center',
+    color: '#FFFFFF',
+    marginTop: 20,
+  },
+  errorContainer: {
+    backgroundColor: 'rgba(255, 107, 107, 0.1)',
+    borderWidth: 1,
+    borderColor: '#FF6B6B',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+  },
+  errorText: {
+    color: '#FF6B6B',
+    textAlign: 'center',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  formContainer: {
+    flex: 1,
+    marginTop: 20,
+  },
+  formGroup: {
+    marginBottom: 24,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
+    marginBottom: 8,
+    color: '#FFFFFF',
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#333333',
+    borderRadius: 12,
+    padding: 16,
+    fontSize: 16,
+    backgroundColor: '#1A1A1A',
+    color: '#FFFFFF',
+    minHeight: 100,
+    textAlignVertical: 'top',
+  },
+  buttonContainer: {
+    marginVertical: 30,
+    gap: 16,
+  },
+  button: {
+    padding: 18,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 56,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
+  },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+  },
+  createButton: {
+    backgroundColor: '#4CAF50',
+    borderWidth: 1,
+    borderColor: '#66BB6A',
+  },
+  startButton: {
+    backgroundColor: '#FF6B6B',
+    borderWidth: 1,
+    borderColor: '#FF8A80',
+  },
+  liveStatusButton: {
+    backgroundColor: '#E53E3E',
+    borderWidth: 1,
+    borderColor: '#FC8181',
+  },
+  endButton: {
+    backgroundColor: '#2D3748',
+    borderWidth: 1,
+    borderColor: '#4A5568',
   },
   buttonDisabled: {
-    backgroundColor: '#555',
-    borderColor: '#444',
-    opacity: 0.7,
+    backgroundColor: '#4A5568',
+    borderColor: '#2D3748',
+    opacity: 0.6,
+  },
+  loadingContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 30,
+  },
+  loadingText: {
+    color: '#FFFFFF',
+    marginTop: 16,
+    fontSize: 16,
+    fontWeight: '500',
   },
   
   // Fullscreen styles
   fullscreenContainer: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     position: 'relative',
   },
   fullscreenVideo: {
@@ -1267,57 +860,57 @@ const styles = StyleSheet.create({
   },
   fullscreenTopBar: {
     position: 'absolute',
-    top: 40, // Lowered from 0 to 40
+    top: 50,
     left: 0,
     right: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 15,
-    paddingVertical: 10, // Reduced padding
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    backgroundColor: 'rgba(0,0,0,0.6)',
     zIndex: 10,
   },
   liveButton: {
-    backgroundColor: '#cc0000',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 4,
+    backgroundColor: '#E53E3E',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
   liveButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
+    color: '#FFFFFF',
+    fontWeight: '700',
     fontSize: 16,
   },
   viewerCount: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: 'bold',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 4,
+    fontWeight: '600',
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
   },
   fullscreenEndButton: {
     position: 'absolute',
-    top: 40,
-    right: 15,
-    backgroundColor: '#cc0000',
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    borderRadius: 5,
+    bottom: 100,
+    alignSelf: 'center',
+    backgroundColor: '#E53E3E',
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
     zIndex: 10,
   },
   fullscreenEndButtonText: {
-    color: '#fff',
-    fontWeight: 'bold',
+    color: '#FFFFFF',
+    fontWeight: '600',
     fontSize: 16,
   },
   exitFullscreenButton: {
     position: 'absolute',
     bottom: 30,
     alignSelf: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     width: 50,
     height: 50,
     borderRadius: 25,
@@ -1326,9 +919,9 @@ const styles = StyleSheet.create({
     zIndex: 10,
   },
   exitFullscreenText: {
-    color: '#fff',
+    color: '#FFFFFF',
     fontSize: 30,
-    fontWeight: 'bold',
+    fontWeight: '300',
   },
 });
 

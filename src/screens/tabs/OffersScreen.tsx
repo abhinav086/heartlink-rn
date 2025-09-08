@@ -334,7 +334,7 @@ const OffersScreen = () => {
           </View>
 
           {/* Date Requests Card */}
-          <TouchableOpacity
+          {/* <TouchableOpacity
             style={styles.card}
             onPress={handleDateRequestsPress}
           >
@@ -347,10 +347,10 @@ const OffersScreen = () => {
                 </View>
               </View>
             </View>
-          </TouchableOpacity>
+          </TouchableOpacity> */}
 
           {/* Pending Requests Card */}
-          <TouchableOpacity
+          {/* <TouchableOpacity
             style={styles.card}
             onPress={handlePendingRequestsPress}
           >
@@ -365,7 +365,7 @@ const OffersScreen = () => {
                 </View>
               </View>
             </View>
-          </TouchableOpacity>
+          </TouchableOpacity> */}
 
           {/* Private Messages Card */}
           <TouchableOpacity

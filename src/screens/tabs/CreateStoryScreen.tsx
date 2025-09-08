@@ -30,6 +30,7 @@ import {
 } from 'react-native-vision-camera';
 import { useFocusEffect } from '@react-navigation/native';
 import Video from 'react-native-video';
+import { captureRef } from 'react-native-view-shot';
 
 const { width, height } = Dimensions.get('window');
 
@@ -44,6 +45,8 @@ const COLORS = {
   red: '#ff0000',
   black: '#000000',
   yellow: '#FFD700',
+  blue: '#007AFF',
+  green: '#34C759',
 };
 
 const CreateStoryScreen = () => {
@@ -62,9 +65,12 @@ const CreateStoryScreen = () => {
   
   // Text overlay states
   const [showTextOverlay, setShowTextOverlay] = useState(false);
-  const [textPosition, setTextPosition] = useState({ x: 100, y: 100 });
+  const [isEditingText, setIsEditingText] = useState(false);
+  const [textPosition, setTextPosition] = useState({ x: width/2 - 100, y: height/2 - 100 });
   const [textColor, setTextColor] = useState(COLORS.lightText);
-  const [fontSize, setFontSize] = useState(24);
+  const [fontSize, setFontSize] = useState(28);
+  const [textAlign, setTextAlign] = useState('center');
+  const [isProcessingImage, setIsProcessingImage] = useState(false);
   
   // Capture mode state (photo or video)
   const [captureMode, setCaptureMode] = useState('photo'); // 'photo' or 'video'
@@ -76,8 +82,10 @@ const CreateStoryScreen = () => {
   const recordingTimer = useRef(null);
   const recordingProgress = useRef(new Animated.Value(0)).current;
   const shutterScale = useRef(new Animated.Value(1)).current;
-  const pan = useRef(new Animated.ValueXY()).current;
+  const pan = useRef(new Animated.ValueXY({ x: width/2 - 100, y: height/2 - 100 })).current;
   const videoRef = useRef(null);
+  const textInputRef = useRef(null);
+  const previewContainerRef = useRef(null);
 
   useFocusEffect(
     React.useCallback(() => {
@@ -109,18 +117,28 @@ const CreateStoryScreen = () => {
   }, [selectedMedia, fadeAnim]);
 
   // PanResponder for dragging text
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onPanResponderMove: Animated.event(
-        [null, { dx: pan.x, dy: pan.y }],
-        { useNativeDriver: false }
-      ),
-      onPanResponderRelease: () => {
-        pan.flattenOffset();
-      },
-    })
-  ).current;
+  const panResponder = PanResponder.create({
+    onStartShouldSetPanResponder: () => showTextOverlay && !isEditingText,
+    onMoveShouldSetPanResponder: () => showTextOverlay && !isEditingText,
+    onPanResponderGrant: (evt, gestureState) => {
+      pan.setOffset({
+        x: pan.x._value,
+        y: pan.y._value,
+      });
+    },
+    onPanResponderMove: Animated.event(
+      [null, { dx: pan.x, dy: pan.y }],
+      { useNativeDriver: false }
+    ),
+    onPanResponderRelease: (evt, gestureState) => {
+      pan.flattenOffset();
+      // Update text position state for consistency
+      setTextPosition({
+        x: pan.x._value,
+        y: pan.y._value,
+      });
+    },
+  });
 
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
@@ -128,6 +146,7 @@ const CreateStoryScreen = () => {
         const permissionsToRequest = [
           PermissionsAndroid.PERMISSIONS.CAMERA,
           PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
         ];
 
         if (Platform.Version >= 33) {
@@ -352,6 +371,33 @@ const CreateStoryScreen = () => {
     }
   };
 
+  // Create composite image with text embedded
+  const createCompositeImage = async () => {
+    if (!previewContainerRef.current || !selectedMedia) {
+      throw new Error('Preview container not ready');
+    }
+
+    try {
+      setIsProcessingImage(true);
+      
+      // Capture the entire preview container as an image
+      const imageUri = await captureRef(previewContainerRef.current, {
+        format: 'jpg',
+        quality: 0.9,
+        width: width,
+        height: height,
+      });
+
+      console.log('Composite image created:', imageUri);
+      return imageUri;
+    } catch (error) {
+      console.error('Error creating composite image:', error);
+      throw error;
+    } finally {
+      setIsProcessingImage(false);
+    }
+  };
+
   const uploadStory = async () => {
     if (!selectedMedia) {
       Alert.alert('Error', 'Please select an image or video for your story');
@@ -368,16 +414,35 @@ const CreateStoryScreen = () => {
         return;
       }
 
+      let finalMediaUri = selectedMedia.uri;
+      let finalMediaType = selectedMedia.type;
+      let finalFileName = selectedMedia.fileName;
+
+      // If it's an image with text overlay, create composite image
+      if (selectedMedia.mediaType === 'photo' && showTextOverlay && storyText.trim()) {
+        console.log('Creating composite image with embedded text...');
+        finalMediaUri = await createCompositeImage();
+        finalMediaType = 'image/jpeg';
+        finalFileName = `story_composite_${Date.now()}.jpg`;
+      }
+
       const formData = new FormData();
       formData.append('media', {
-        uri: selectedMedia.uri,
-        type: selectedMedia.type || (selectedMedia.mediaType === 'video' ? 'video/mp4' : 'image/jpeg'),
-        name: selectedMedia.fileName || `story_${Date.now()}.${selectedMedia.mediaType === 'video' ? 'mp4' : 'jpg'}`,
+        uri: finalMediaUri,
+        type: finalMediaType,
+        name: finalFileName,
       });
 
-      // Send text content for videos (since we can't embed text in videos)
+      // For videos, still send text content separately since we can't embed in video
       if (selectedMedia.mediaType === 'video' && storyText.trim()) {
         formData.append('content', storyText.trim());
+        formData.append('textOverlay', JSON.stringify({
+          text: storyText.trim(),
+          position: textPosition,
+          color: textColor,
+          fontSize: fontSize,
+          textAlign: textAlign,
+        }));
       }
 
       // Add media type to help backend processing
@@ -420,10 +485,13 @@ const CreateStoryScreen = () => {
     setStoryText('');
     resetRecording();
     setShowTextOverlay(false);
-    setTextPosition({ x: 100, y: 100 });
+    setIsEditingText(false);
+    setIsProcessingImage(false);
+    setTextPosition({ x: width/2 - 100, y: height/2 - 100 });
     setTextColor(COLORS.lightText);
-    setFontSize(24);
-    pan.setValue({ x: 0, y: 0 });
+    setFontSize(28);
+    setTextAlign('center');
+    pan.setValue({ x: width/2 - 100, y: height/2 - 100 });
   };
 
   const handleCreateAnother = () => {
@@ -438,30 +506,45 @@ const CreateStoryScreen = () => {
   // Text overlay functions
   const addTextToStory = () => {
     setShowTextOverlay(true);
-    pan.setOffset({
-      x: textPosition.x,
-      y: textPosition.y,
-    });
-    pan.setValue({ x: 0, y: 0 });
+    setIsEditingText(true);
+    // Reset text position to center
+    const centerPosition = { x: width/2 - 100, y: height/2 - 100 };
+    setTextPosition(centerPosition);
+    pan.setValue(centerPosition);
+    
+    // Auto focus text input after a small delay
+    setTimeout(() => {
+      if (textInputRef.current) {
+        textInputRef.current.focus();
+      }
+    }, 100);
   };
 
-  const updateTextPosition = () => {
-    pan.addListener(value => {
-      setTextPosition({
-        x: value.x,
-        y: value.y,
-      });
-    });
-    return () => {
-      pan.removeAllListeners();
-    };
-  };
-
-  useEffect(() => {
-    if (showTextOverlay) {
-      updateTextPosition();
+  const finishEditingText = () => {
+    if (!storyText.trim()) {
+      // If no text entered, remove text overlay
+      removeTextFromStory();
+    } else {
+      setIsEditingText(false);
     }
-  }, [showTextOverlay]);
+  };
+
+  const removeTextFromStory = () => {
+    setShowTextOverlay(false);
+    setIsEditingText(false);
+    setStoryText('');
+    pan.setValue({ x: width/2 - 100, y: height/2 - 100 });
+  };
+
+  const handleTextAlign = () => {
+    if (textAlign === 'center') {
+      setTextAlign('left');
+    } else if (textAlign === 'left') {
+      setTextAlign('right');
+    } else {
+      setTextAlign('center');
+    }
+  };
 
   if (showSuccessOptions) {
     return (
@@ -470,7 +553,7 @@ const CreateStoryScreen = () => {
         <View style={styles.successContent}>
           <MaterialIcon name="check-circle" size={60} color={COLORS.primary} style={styles.successIcon} />
           <Text style={styles.successTitle}>Story Posted!</Text>
-          <Text style={styles.successSubtitle}>Your story has been shared successfully.</Text>
+          <Text style={styles.successSubtitle}>Your story has been shared successfully with embedded text.</Text>
           <View style={styles.successButtons}>
             <TouchableOpacity
               style={styles.createAnotherButton}
@@ -496,143 +579,229 @@ const CreateStoryScreen = () => {
       <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
         <StatusBar barStyle="light-content" backgroundColor={COLORS.black} />
         
-        {selectedMedia.mediaType === 'video' ? (
-          <View style={styles.videoContainer}>
+        {/* Preview Container - This will be captured as composite image */}
+        <View 
+          ref={previewContainerRef}
+          style={styles.previewContainer}
+          collapsable={false}
+        >
+          {selectedMedia.mediaType === 'video' ? (
             <Video
               ref={videoRef}
               source={{ uri: selectedMedia.uri }}
-              style={styles.previewVideoBackground}
+              style={styles.previewMediaBackground}
               resizeMode="cover"
               repeat
               muted
             />
-            {/* Text Overlay for videos */}
-            {showTextOverlay && (
-              <Animated.View
+          ) : (
+            <ImageBackground 
+              source={{ uri: selectedMedia.uri }} 
+              style={styles.previewMediaBackground}
+              resizeMode="cover"
+            />
+          )}
+
+          {/* Text Overlay for both images and videos */}
+          {showTextOverlay && storyText.trim() && (
+            <Animated.View
+              style={[
+                styles.textOverlay,
+                {
+                  transform: [
+                    { translateX: pan.x },
+                    { translateY: pan.y }
+                  ],
+                },
+              ]}
+              {...panResponder.panHandlers}
+            >
+              <Text
                 style={[
-                  styles.textOverlay,
+                  styles.storyText,
                   {
-                    transform: [{ translateX: pan.x }, { translateY: pan.y }],
+                    color: textColor,
+                    fontSize: fontSize,
+                    textAlign: textAlign,
                   },
                 ]}
-                {...panResponder.panHandlers}
               >
-                <Text
-                  style={[
-                    styles.storyText,
-                    {
-                      color: textColor,
-                      fontSize: fontSize,
-                    },
-                  ]}
-                >
-                  {storyText || 'Your text here'}
-                </Text>
-              </Animated.View>
-            )}
-          </View>
-        ) : (
-          <ImageBackground source={{ uri: selectedMedia.uri }} style={styles.previewImageBackground}>
-          </ImageBackground>
-        )}
+                {storyText}
+              </Text>
+              {!isEditingText && (
+                <View style={styles.dragIndicator}>
+                  <Icon name="move" size={16} color={COLORS.lightText} />
+                </View>
+              )}
+            </Animated.View>
+          )}
+        </View>
         
         <View style={styles.previewOverlay}>
           <View style={styles.previewHeader}>
             <TouchableOpacity style={styles.headerIconContainer} onPress={resetStory}>
               <Icon name="arrow-back" size={28} color={COLORS.lightText} />
             </TouchableOpacity>
-            {selectedMedia.mediaType === 'video' && (
-              <View style={styles.mediaTypeIndicator}>
-                <Icon name="videocam" size={20} color={COLORS.lightText} />
-                <Text style={styles.mediaTypeText}>Video</Text>
-              </View>
+            
+            <View style={styles.headerCenter}>
+              {selectedMedia.mediaType === 'video' && (
+                <View style={styles.mediaTypeIndicator}>
+                  <Icon name="videocam" size={20} color={COLORS.lightText} />
+                  <Text style={styles.mediaTypeText}>Video</Text>
+                </View>
+              )}
+              {selectedMedia.mediaType === 'photo' && showTextOverlay && (
+                <View style={styles.mediaTypeIndicator}>
+                  <Icon name="text" size={20} color={COLORS.lightText} />
+                  <Text style={styles.mediaTypeText}>Text Embedded</Text>
+                </View>
+              )}
+            </View>
+
+            {showTextOverlay && (
+              <TouchableOpacity style={styles.headerIconContainer} onPress={removeTextFromStory}>
+                <Icon name="trash-outline" size={24} color={COLORS.red} />
+              </TouchableOpacity>
             )}
           </View>
 
-          {/* Text Input and Controls */}
-          <View style={styles.textInputContainer}>
-            <TextInput
-              style={styles.textInput}
-              placeholder="Add text to your story..."
-              placeholderTextColor={COLORS.mediumText}
-              value={storyText}
-              onChangeText={setStoryText}
-              multiline
-            />
-            <View style={styles.textControls}>
-              <TouchableOpacity
-                style={styles.colorButton}
-                onPress={() => setTextColor(COLORS.lightText)}
-              >
-                <View
-                  style={[
-                    styles.colorPreview,
-                    { backgroundColor: COLORS.lightText },
-                    textColor === COLORS.lightText && styles.selectedColor,
-                  ]}
+          {/* Text Editing Panel */}
+          {isEditingText && (
+            <View style={styles.textEditingPanel}>
+              <View style={styles.panelHeader}>
+                <Icon name="text" size={24} color={COLORS.primary} />
+                <Text style={styles.panelTitle}>Add Text to Story</Text>
+              </View>
+              
+              <View style={styles.textInputWrapper}>
+                <TextInput
+                  ref={textInputRef}
+                  style={styles.textInput}
+                  placeholder="Type your text here..."
+                  placeholderTextColor={COLORS.mediumText}
+                  value={storyText}
+                  onChangeText={setStoryText}
+                  multiline
+                  maxLength={100}
+                  onBlur={finishEditingText}
                 />
-              </TouchableOpacity>
+                <Text style={styles.characterCount}>{storyText.length}/100</Text>
+              </View>
+              
+              <View style={styles.textControls}>
+                <Text style={styles.controlLabel}>Colors</Text>
+                <View style={styles.colorControls}>
+                  {[COLORS.lightText, COLORS.red, COLORS.yellow, COLORS.blue, COLORS.green, COLORS.primary].map((color, index) => (
+                    <TouchableOpacity
+                      key={index}
+                      style={styles.colorButton}
+                      onPress={() => setTextColor(color)}
+                    >
+                      <View
+                        style={[
+                          styles.colorPreview,
+                          { backgroundColor: color },
+                          textColor === color && styles.selectedColor,
+                        ]}
+                      />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                
+                <Text style={styles.controlLabel}>Style</Text>
+                <View style={styles.textOptions}>
+                  <TouchableOpacity
+                    style={[styles.textOptionButton, fontSize <= 20 && styles.disabledOption]}
+                    onPress={() => setFontSize(prev => Math.max(20, prev - 4))}
+                    disabled={fontSize <= 20}
+                  >
+                    <Text style={styles.textOptionText}>A-</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[styles.textOptionButton, fontSize >= 40 && styles.disabledOption]}
+                    onPress={() => setFontSize(prev => Math.min(40, prev + 4))}
+                    disabled={fontSize >= 40}
+                  >
+                    <Text style={styles.textOptionText}>A+</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={styles.textOptionButton}
+                    onPress={handleTextAlign}
+                  >
+                    <Icon 
+                      name={
+                        textAlign === 'center' ? 'text-outline' : 
+                        textAlign === 'left' ? 'chevron-back-outline' : 
+                        'chevron-forward-outline'
+                      } 
+                      size={20} 
+                      color={COLORS.lightText} 
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+              
               <TouchableOpacity
-                style={styles.colorButton}
-                onPress={() => setTextColor(COLORS.red)}
+                style={styles.doneEditingButton}
+                onPress={finishEditingText}
               >
-                <View
-                  style={[
-                    styles.colorPreview,
-                    { backgroundColor: COLORS.red },
-                    textColor === COLORS.red && styles.selectedColor,
-                  ]}
-                />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.colorButton}
-                onPress={() => setTextColor(COLORS.yellow)}
-              >
-                <View
-                  style={[
-                    styles.colorPreview,
-                    { backgroundColor: COLORS.yellow },
-                    textColor === COLORS.yellow && styles.selectedColor,
-                  ]}
-                />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.fontSizeButton}
-                onPress={() => setFontSize(prev => (prev > 16 ? prev - 4 : prev))}
-              >
-                <Text style={styles.fontSizeText}>A-</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.fontSizeButton}
-                onPress={() => setFontSize(prev => (prev < 32 ? prev + 4 : prev))}
-              >
-                <Text style={styles.fontSizeText}>A+</Text>
+                <Icon name="checkmark" size={20} color={COLORS.lightText} />
+                <Text style={styles.doneEditingText}>Apply Text</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          )}
 
           <View style={styles.previewFooter}>
             {!showTextOverlay ? (
+              <View style={styles.footerActions}>
+                <TouchableOpacity
+                  style={styles.addTextButton}
+                  onPress={addTextToStory}
+                >
+                  <View style={styles.addTextIcon}>
+                    <Icon name="text" size={20} color={COLORS.primary} />
+                  </View>
+                  <Text style={styles.addTextButtonText}>Add Text</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.postButton, (uploading || isProcessingImage) && styles.disabledButton]}
+                  onPress={uploadStory}
+                  disabled={uploading || isProcessingImage}
+                >
+                  {uploading || isProcessingImage ? (
+                    <ActivityIndicator size="small" color={COLORS.lightText} />
+                  ) : (
+                    <>
+                      <Icon name="paper-plane" size={20} color={COLORS.lightText} />
+                      <Text style={styles.postButtonText}>Share Story</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            ) : !isEditingText ? (
               <TouchableOpacity
-                style={styles.addTextButton}
-                onPress={addTextToStory}
-              >
-                <Icon name="text" size={24} color={COLORS.lightText} />
-                <Text style={styles.addTextButtonText}>Add Text</Text>
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[styles.postButton, uploading && styles.disabledButton]}
+                style={[styles.postButton, (uploading || isProcessingImage) && styles.disabledButton]}
                 onPress={uploadStory}
-                disabled={uploading}
+                disabled={uploading || isProcessingImage}
               >
                 {uploading ? (
-                  <ActivityIndicator size="small" color={COLORS.lightText} />
+                  <View style={styles.uploadingContainer}>
+                    <ActivityIndicator size="small" color={COLORS.lightText} />
+                    <Text style={styles.uploadingText}>
+                      {isProcessingImage ? 'Embedding text...' : 'Uploading...'}
+                    </Text>
+                  </View>
                 ) : (
-                  <Text style={styles.postButtonText}>Post Story</Text>
+                  <>
+                    <Icon name="paper-plane" size={20} color={COLORS.lightText} />
+                    <Text style={styles.postButtonText}>Share with Text</Text>
+                  </>
                 )}
               </TouchableOpacity>
-            )}
+            ) : null}
           </View>
         </View>
       </Animated.View>
@@ -825,9 +994,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.black,
   },
-  videoContainer: {
+  previewContainer: {
     flex: 1,
-    position: 'relative',
+    width: width,
+    height: height,
   },
   // --- Creator Screen Styles ---
   creatorHeader: {
@@ -1059,12 +1229,7 @@ const styles = StyleSheet.create({
     marginBottom: 15,
   },
   // --- Preview Screen Styles ---
-  previewImageBackground: {
-    flex: 1,
-    width: width,
-    height: height,
-  },
-  previewVideoBackground: {
+  previewMediaBackground: {
     flex: 1,
     width: width,
     height: height,
@@ -1084,13 +1249,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingTop: Platform.OS === 'ios' ? 80 : 50,
   },
+  headerCenter: {
+    flex: 1,
+    alignItems: 'center',
+  },
   headerIconContainer: {
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    padding: 8,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    padding: 10,
     borderRadius: 50,
   },
   mediaTypeIndicator: {
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 15,
@@ -1106,94 +1275,187 @@ const styles = StyleSheet.create({
   // Text Overlay Styles
   textOverlay: {
     position: 'absolute',
-    zIndex: 10,
-    top: 100,
-    left: 100,
+    maxWidth: width - 80,
+    minWidth: 120,
+    zIndex: 20,
   },
   storyText: {
-    fontWeight: 'bold',
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 2,
+    fontWeight: '800',
+    textShadowColor: 'rgba(0, 0, 0, 0.9)',
+    textShadowOffset: { width: 2, height: 2 },
+    textShadowRadius: 6,
+    lineHeight: 36,
+    padding: 8,
   },
-  // Text Input and Controls
-  textInputContainer: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 10,
-    marginHorizontal: 20,
+  dragIndicator: {
+    position: 'absolute',
+    top: -15,
+    right: -15,
+    backgroundColor: 'rgba(255,255,255,0.9)',
+    borderRadius: 15,
+    padding: 6,
+  },
+  // Text Editing Panel
+  textEditingPanel: {
+    backgroundColor: 'rgba(0,0,0,0.95)',
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
+    paddingHorizontal: 25,
+    paddingTop: 25,
+    paddingBottom: 15,
+    marginTop: 'auto',
+  },
+  panelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+    gap: 10,
+  },
+  panelTitle: {
+    color: COLORS.lightText,
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  textInputWrapper: {
+    marginBottom: 25,
   },
   textInput: {
     color: COLORS.lightText,
-    fontSize: 16,
-    padding: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.mediumText,
-    marginBottom: 10,
+    fontSize: 18,
+    padding: 18,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    minHeight: 70,
+    maxHeight: 140,
+    textAlignVertical: 'top',
+  },
+  characterCount: {
+    color: COLORS.mediumText,
+    fontSize: 12,
+    textAlign: 'right',
+    marginTop: 8,
   },
   textControls: {
+    marginBottom: 25,
+  },
+  controlLabel: {
+    color: COLORS.lightText,
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 10,
+  },
+  colorControls: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 10,
+    justifyContent: 'space-around',
+    marginBottom: 20,
   },
   colorButton: {
-    padding: 5,
+    padding: 6,
   },
   colorPreview: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 2,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 3,
     borderColor: 'transparent',
   },
   selectedColor: {
     borderColor: COLORS.lightText,
   },
-  fontSizeButton: {
-    backgroundColor: COLORS.darkSecondary,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 6,
+  textOptions: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
   },
-  fontSizeText: {
+  textOptionButton: {
+    backgroundColor: COLORS.darkSecondary,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderRadius: 10,
+    minWidth: 60,
+    alignItems: 'center',
+  },
+  disabledOption: {
+    opacity: 0.5,
+  },
+  textOptionText: {
     color: COLORS.lightText,
+    fontSize: 16,
     fontWeight: 'bold',
+  },
+  doneEditingButton: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: 15,
+    borderRadius: 12,
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  doneEditingText: {
+    color: COLORS.lightText,
+    fontSize: 16,
+    fontWeight: '600',
   },
   // Preview Footer
   previewFooter: {
     paddingHorizontal: 20,
     paddingBottom: Platform.OS === 'ios' ? 40 : 20,
   },
+  footerActions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
   addTextButton: {
-    backgroundColor: COLORS.darkSecondary,
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 2,
+    borderColor: COLORS.primary,
     paddingVertical: 16,
     borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
+  },
+  addTextIcon: {
+    backgroundColor: COLORS.lightText,
+    borderRadius: 15,
+    padding: 6,
   },
   addTextButtonText: {
     color: COLORS.lightText,
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 16,
+    fontWeight: '600',
   },
   postButton: {
+    flex: 1,
     backgroundColor: COLORS.primary,
     paddingVertical: 16,
     borderRadius: 30,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
   },
   postButtonText: {
     color: COLORS.lightText,
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: 16,
+    fontWeight: '600',
   },
   disabledButton: {
     opacity: 0.6,
+  },
+  uploadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  uploadingText: {
+    color: COLORS.lightText,
+    fontSize: 14,
+    fontWeight: '600',
   },
   // --- Success Modal Styles ---
   successContainer: {
@@ -1257,4 +1519,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
 export default CreateStoryScreen;
