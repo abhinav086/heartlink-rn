@@ -1,4 +1,4 @@
-// CommentScreen.js - Enhanced Modal Version with React Navigation support
+// CommentScreen.js - Complete Fixed Version with Proper Delete Permissions
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import Modal from 'react-native-modal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation, useRoute } from '@react-navigation/native'; // Corrected import
+import { useNavigation, useRoute } from '@react-navigation/native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const CommentScreen = () => {
@@ -40,7 +40,6 @@ const CommentScreen = () => {
   const [submitting, setSubmitting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
-  // ✅ IMPROVED: Better initialization of comments count
   const [commentsCount, setCommentsCount] = useState(() => {
     return actualData?.commentsCount || actualData?.commentCount || actualData?.comments || 0;
   });
@@ -53,6 +52,14 @@ const CommentScreen = () => {
     commentsOnPage: 0
   });
 
+  // DELETE COMMENT STATE
+  const [deletingCommentId, setDeletingCommentId] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [commentToDelete, setCommentToDelete] = useState(null);
+
+  // ENHANCED: Store content author info separately for better permission checking
+  const [contentAuthor, setContentAuthor] = useState(null);
+
   // Refs
   const textInputRef = useRef(null);
   const scrollViewRef = useRef(null);
@@ -60,13 +67,12 @@ const CommentScreen = () => {
   // Character limit for comments
   const MAX_COMMENT_LENGTH = 500;
 
-  // API Base URL - Fixed trailing space
+  // API Base URL
   const BASE_URL = 'https://backendforheartlink.in';
 
-  // ✅ ENHANCED: Better modal close handling
+  // Enhanced modal close handling
   const handleClose = () => {
     setIsVisible(false);
-    // Small delay to let the animation complete before going back
     setTimeout(() => {
       navigation.goBack();
     }, 300);
@@ -79,7 +85,6 @@ const CommentScreen = () => {
       if (!token) {
         throw new Error('No authentication token available');
       }
-
       return {
         'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json',
@@ -91,22 +96,7 @@ const CommentScreen = () => {
     }
   };
 
-  // Get auth token (legacy support)
-  const getAuthToken = async () => {
-    try {
-      const token = await AsyncStorage.getItem('token');
-      if (!token) {
-        console.warn('No auth token found in AsyncStorage');
-        return null;
-      }
-      console.log('Retrieved token:', token.substring(0, 20) + '...');
-      return token;
-    } catch (error) {
-      console.error('Error getting auth token:', error);
-      return null;
-    }
-  };
-
+  // Get current user
   const getCurrentUser = async () => {
     try {
       const userJson = await AsyncStorage.getItem('user');
@@ -121,7 +111,6 @@ const CommentScreen = () => {
         return user;
       } else {
         console.warn('No user data found in AsyncStorage');
-        // Try alternative storage keys
         const altUserJson = await AsyncStorage.getItem('userData') ||
           await AsyncStorage.getItem('currentUser') ||
           await AsyncStorage.getItem('userInfo');
@@ -136,6 +125,35 @@ const CommentScreen = () => {
       console.error('Error getting current user:', error);
     }
     return null;
+  };
+
+  // ENHANCED: Extract content author info properly
+  const extractContentAuthor = () => {
+    console.log('=== EXTRACTING CONTENT AUTHOR ===');
+    console.log('Actual Data:', JSON.stringify(actualData, null, 2));
+    
+    let author = null;
+    
+    // Try multiple ways to get author info
+    if (actualData?.author) {
+      if (typeof actualData.author === 'object') {
+        author = actualData.author;
+      } else if (typeof actualData.author === 'string') {
+        // If author is just an ID string, create minimal author object
+        author = { _id: actualData.author, id: actualData.author };
+      }
+    } else if (actualData?.authorId) {
+      author = { _id: actualData.authorId, id: actualData.authorId };
+    } else if (actualData?.user) {
+      // Sometimes author might be stored as 'user'
+      author = actualData.user;
+    }
+
+    console.log('Extracted author:', author);
+    console.log('=== END EXTRACTING CONTENT AUTHOR ===');
+    
+    setContentAuthor(author);
+    return author;
   };
 
   // Safe property access
@@ -157,62 +175,54 @@ const CommentScreen = () => {
 
   const initializeScreen = async () => {
     await getCurrentUser();
+    extractContentAuthor(); // Extract author info
     await loadComments();
-    // Initialize with existing comment count from data
     const initialCount = actualData?.commentsCount || actualData?.commentCount || actualData?.comments || 0;
     setCommentsCount(initialCount);
     console.log(`CommentScreen initialized for ${isReel ? 'reel' : 'post'}Id:`, actualId, 'with', initialCount, 'comments');
   };
 
-  // Enhanced debugging and error handling for loadComments function
+  // Load comments function
   const loadComments = async (page = 1, limit = 10) => {
     try {
       setLoading(page === 1);
-
-      // Enhanced debugging
       console.log('=== LOADING COMMENTS DEBUG ===');
       console.log('Content Type:', contentType);
       console.log('PostId:', postId);
       console.log('ReelId:', reelId);
-      console.log('PostData:', postData);
-      console.log('ReelData:', reelData);
       console.log('Is Reel:', isReel);
       console.log('Actual ID:', actualId);
       console.log('Page:', page, 'Limit:', limit);
 
-      // Validate required data
       if (!actualId) {
-        console.error('❌ No actualId found');
+        console.error('No actualId found');
         Alert.alert('Error', 'Content ID is missing');
         return;
       }
 
       const headers = await getAuthHeaders();
-      console.log('✅ Auth headers prepared');
+      console.log('Auth headers prepared');
 
       const apiUrl = isReel
         ? `${BASE_URL}/api/v1/posts/reels/${actualId}/comments?page=${page}&limit=${limit}`
         : `${BASE_URL}/api/v1/posts/${actualId}/comments?page=${page}&limit=${limit}`;
 
-      console.log('🔗 API URL:', apiUrl);
-      console.log('📋 Request headers:', JSON.stringify(headers, null, 2));
+      console.log('API URL:', apiUrl);
 
       const response = await fetch(apiUrl, {
         method: 'GET',
         headers,
       });
 
-      console.log('📡 Response status:', response.status);
-      console.log('📡 Response headers:', JSON.stringify([...response.headers.entries()], null, 2));
+      console.log('Response status:', response.status);
 
       if (response.ok) {
         const result = await response.json();
-        console.log('✅ Full API response:', JSON.stringify(result, null, 2));
+        console.log('Full API response:', JSON.stringify(result, null, 2));
 
         if (result.success && result.data) {
           const commentsData = result.data.comments || [];
-          console.log('📝 Comments data:', commentsData.length, 'comments found');
-          console.log('📊 Pagination data:', result.data.pagination);
+          console.log('Comments data:', commentsData.length, 'comments found');
 
           if (page === 1) {
             setComments(commentsData);
@@ -223,45 +233,47 @@ const CommentScreen = () => {
           if (result.data.pagination) {
             setPagination(result.data.pagination);
             setCommentsCount(result.data.pagination.totalComments);
-            console.log('📊 Set comments count to:', result.data.pagination.totalComments);
+            console.log('Set comments count to:', result.data.pagination.totalComments);
           } else {
             setCommentsCount(commentsData.length);
-            console.log('📊 Set comments count to (fallback):', commentsData.length);
+            console.log('Set comments count to (fallback):', commentsData.length);
           }
 
-          // ✅ ENHANCED: Better parent component update with more robust callback
+          // ENHANCED: Also extract content author from API response if not already set
+          if (!contentAuthor && result.data[isReel ? 'reel' : 'post']) {
+            const contentData = result.data[isReel ? 'reel' : 'post'];
+            if (contentData.author) {
+              console.log('Setting content author from API response:', contentData.author);
+              setContentAuthor(contentData.author);
+            }
+          }
+
           if (onCommentUpdate && result.data[isReel ? 'reel' : 'post']) {
             const contentData = result.data[isReel ? 'reel' : 'post'];
-            console.log('🔄 Updating parent with content data:', contentData);
+            console.log('Updating parent with content data:', contentData);
             const finalCommentCount = contentData.commentCount || result.data.pagination?.totalComments || commentsData.length;
             const realTimeComments = contentData.realTimeComments || finalCommentCount;
-            console.log('🔄 Calling onCommentUpdate with:', { finalCommentCount, realTimeComments });
+            console.log('Calling onCommentUpdate with:', { finalCommentCount, realTimeComments });
             onCommentUpdate(finalCommentCount, realTimeComments);
           } else {
-            console.log('⚠️ No onCommentUpdate callback or content data missing');
-            console.log('onCommentUpdate exists:', !!onCommentUpdate);
-            console.log('Content data exists:', !!result.data[isReel ? 'reel' : 'post']);
-
-            // ✅ FALLBACK: Still try to update parent with available data
+            console.log('No onCommentUpdate callback or content data missing');
             if (onCommentUpdate) {
               const fallbackCount = result.data.pagination?.totalComments || commentsData.length;
-              console.log('🔄 Calling onCommentUpdate with fallback count:', fallbackCount);
+              console.log('Calling onCommentUpdate with fallback count:', fallbackCount);
               onCommentUpdate(fallbackCount, fallbackCount);
             }
           }
         } else {
-          console.log('❌ Response not successful or no data:', result);
+          console.log('Response not successful or no data:', result);
           setComments([]);
           setCommentsCount(0);
-          // ✅ UPDATE: Still call parent callback even when no comments
           if (onCommentUpdate) {
             onCommentUpdate(0, 0);
           }
         }
       } else {
         const errorText = await response.text();
-        console.error('❌ API Error Response:', errorText);
-
+        console.error('API Error Response:', errorText);
         let errorData;
         try {
           errorData = JSON.parse(errorText);
@@ -270,28 +282,23 @@ const CommentScreen = () => {
         }
 
         if (response.status === 404) {
-          console.log('📭 Content not found or no comments');
+          console.log('Content not found or no comments');
           setComments([]);
           setCommentsCount(0);
-          // ✅ UPDATE: Call parent callback even when content not found
           if (onCommentUpdate) {
             onCommentUpdate(0, 0);
           }
         } else if (response.status === 401 || response.status === 403) {
-          console.error('🔒 Authentication/Authorization error');
+          console.error('Authentication/Authorization error');
           Alert.alert('Authentication Error', 'Please log in again to view comments');
         } else {
-          console.error('💥 API Error:', errorData);
+          console.error('API Error:', errorData);
           Alert.alert('Error', errorData.message || `Failed to load comments (${response.status})`);
         }
       }
-
     } catch (error) {
-      console.error('💥 Load comments error:', error);
-      console.error('Error stack:', error.stack);
-
+      console.error('Load comments error:', error);
       let errorMessage = 'Failed to load comments. Please try again.';
-
       if (error.message.includes('Network request failed')) {
         errorMessage = 'Please check your internet connection and try again';
       } else if (error.message.includes('No authentication token')) {
@@ -299,7 +306,6 @@ const CommentScreen = () => {
       } else if (error.message) {
         errorMessage = error.message;
       }
-
       Alert.alert('Error', errorMessage);
       setComments([]);
     } finally {
@@ -315,26 +321,21 @@ const CommentScreen = () => {
     loadComments(1, 10);
   };
 
-  // ✅ ENHANCED: Better comment submission with improved error handling
+  // Add comment function
   const addComment = async () => {
     const trimmedComment = commentText.trim();
-
-    // Validation
     if (!trimmedComment) {
       Alert.alert('Error', 'Comment cannot be empty');
       return;
     }
-
     if (trimmedComment.length > MAX_COMMENT_LENGTH) {
       Alert.alert('Error', `Comment cannot be longer than ${MAX_COMMENT_LENGTH} characters`);
       return;
     }
-
     if (!actualId) {
       Alert.alert('Error', `${isReel ? 'Reel' : 'Post'} ID is missing`);
       return;
     }
-
     if (!currentUser) {
       Alert.alert('Error', 'User information not available. Please log in again.');
       return;
@@ -345,16 +346,10 @@ const CommentScreen = () => {
       console.log('=== COMMENT SUBMISSION DEBUG ===');
       console.log(`${isReel ? 'Reel' : 'Post'} ID:`, actualId);
       console.log('Comment text:', trimmedComment);
-      console.log('Current user:', {
-        id: currentUser._id || currentUser.id,
-        username: currentUser.username || currentUser.name,
-        email: currentUser.email
-      });
 
       const headers = await getAuthHeaders();
       console.log('Using headers with token');
 
-      // Use consistent /api/v1/posts base URL for both posts and reels
       const apiUrl = isReel
         ? `${BASE_URL}/api/v1/posts/reels/${actualId}/comment`
         : `${BASE_URL}/api/v1/posts/${actualId}/comment`;
@@ -364,7 +359,6 @@ const CommentScreen = () => {
       const requestBody = {
         content: trimmedComment,
       };
-      console.log('Request body:', requestBody);
 
       const response = await fetch(apiUrl, {
         method: 'POST',
@@ -383,18 +377,11 @@ const CommentScreen = () => {
       console.log('Response data:', result);
 
       if (result.success) {
-        // SUCCESS: Handle response following API guide format
         console.log('Comment created successfully!');
-
-        // Get the new comment from the response
         const newComment = result.data?.comment;
         const updatedCommentCount = result.data?.commentCount || commentsCount + 1;
         const realTimeComments = result.data?.realTimeComments || updatedCommentCount;
 
-        console.log('New comment from API:', newComment);
-        console.log('Updated comment count:', updatedCommentCount);
-
-        // Create proper comment object with API response data
         const commentToAdd = newComment || {
           _id: Date.now().toString(),
           content: trimmedComment,
@@ -412,47 +399,33 @@ const CommentScreen = () => {
           canDelete: true
         };
 
-        console.log('Comment to add to UI:', commentToAdd);
-
-        // Add new comment to the top of the list (like social media apps)
         setComments(prevComments => [commentToAdd, ...prevComments]);
         setCommentsCount(updatedCommentCount);
-
-        // Update pagination
         setPagination(prev => ({
           ...prev,
           totalComments: updatedCommentCount,
           commentsOnPage: prev.commentsOnPage + 1
         }));
 
-        // Clear input
         setCommentText('');
-
-        // ✅ ENHANCED: Better parent component update
         if (onCommentUpdate) {
-          console.log('🔄 Updating parent component with:', { updatedCommentCount, realTimeComments });
+          console.log('Updating parent component with:', { updatedCommentCount, realTimeComments });
           onCommentUpdate(updatedCommentCount, realTimeComments);
         }
 
-        // Scroll to top to show new comment
         setTimeout(() => {
           scrollViewRef.current?.scrollTo({ y: 0, animated: true });
         }, 100);
 
-        // Blur text input
         textInputRef.current?.blur();
 
-        // Show success message from API or default
         console.log(result.message || 'Comment posted successfully!');
-
       } else {
         throw new Error(result.message || 'Failed to post comment');
       }
     } catch (error) {
       console.error('Error adding comment:', error);
-
       let errorMessage = 'Failed to post comment. Please try again.';
-
       if (error.message.includes('401') || error.message.includes('authentication')) {
         errorMessage = 'Please log in again to comment';
       } else if (error.message.includes('404')) {
@@ -466,14 +439,158 @@ const CommentScreen = () => {
       } else if (error.message) {
         errorMessage = error.message;
       }
-
       Alert.alert('Error', errorMessage);
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Enhanced render individual comment with proper user data handling
+  // DELETE COMMENT FUNCTIONALITY
+  const handleDeleteComment = (comment) => {
+    setCommentToDelete(comment);
+    setShowDeleteModal(true);
+  };
+
+  const confirmDeleteComment = async () => {
+    if (!commentToDelete) return;
+
+    try {
+      setDeletingCommentId(commentToDelete._id);
+      setShowDeleteModal(false);
+
+      console.log('=== DELETE COMMENT DEBUG ===');
+      console.log('Deleting comment:', commentToDelete._id);
+      console.log('From:', isReel ? 'reel' : 'post', actualId);
+
+      const headers = await getAuthHeaders();
+
+      // Use the correct API endpoints from backend
+      const apiUrl = isReel
+        ? `${BASE_URL}/api/v1/posts/reels/${actualId}/comments/${commentToDelete._id}`
+        : `${BASE_URL}/api/v1/posts/${actualId}/comments/${commentToDelete._id}`;
+
+      console.log('Delete API URL:', apiUrl);
+
+      const response = await fetch(apiUrl, {
+        method: 'DELETE',
+        headers,
+      });
+
+      console.log('Delete response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to delete comment: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+      console.log('Delete response data:', result);
+
+      if (result.success) {
+        console.log('Comment deleted successfully!');
+        // Get updated counts from response
+        const updatedCommentCount = result.data?.commentCount || Math.max(0, commentsCount - 1);
+        const realTimeComments = result.data?.realTimeComments || updatedCommentCount;
+
+        // Remove comment from local state
+        setComments(prevComments =>
+          prevComments.filter(comment => comment._id !== commentToDelete._id)
+        );
+
+        setCommentsCount(updatedCommentCount);
+
+        // Update pagination
+        setPagination(prev => ({
+          ...prev,
+          totalComments: updatedCommentCount,
+          commentsOnPage: Math.max(0, prev.commentsOnPage - 1)
+        }));
+
+        // Update parent component
+        if (onCommentUpdate) {
+          console.log('Updating parent after deletion:', { updatedCommentCount, realTimeComments });
+          onCommentUpdate(updatedCommentCount, realTimeComments);
+        }
+
+        // Show success message
+        Alert.alert('Success', 'Comment deleted successfully');
+      } else {
+        throw new Error(result.message || 'Failed to delete comment');
+      }
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+      let errorMessage = 'Failed to delete comment. Please try again.';
+      if (error.message.includes('401') || error.message.includes('403')) {
+        errorMessage = 'You do not have permission to delete this comment';
+      } else if (error.message.includes('404')) {
+        errorMessage = 'Comment not found or already deleted';
+      } else if (error.message.includes('Network request failed')) {
+        errorMessage = 'Please check your internet connection and try again';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      Alert.alert('Error', errorMessage);
+    } finally {
+      setDeletingCommentId(null);
+      setCommentToDelete(null);
+    }
+  };
+
+  const cancelDeleteComment = () => {
+    setShowDeleteModal(false);
+    setCommentToDelete(null);
+  };
+
+  // ENHANCED: Improved permission checking
+  const canDeleteComment = (comment) => {
+    if (!currentUser || !comment?.user) {
+      console.log('❌ Delete check failed: Missing user data');
+      return false;
+    }
+
+    const currentUserId = currentUser._id || currentUser.id;
+    const commentUserId = comment.user._id || comment.user.id;
+
+    // Check if user is the comment author
+    const isCommentAuthor = commentUserId === currentUserId;
+
+    // Check if user is the content owner
+    let isContentOwner = false;
+    
+    if (contentAuthor) {
+      const contentAuthorId = contentAuthor._id || contentAuthor.id;
+      isContentOwner = contentAuthorId === currentUserId;
+    } else {
+      // Fallback: try to get author from actualData
+      let contentAuthorId = null;
+      if (actualData?.author?._id) {
+        contentAuthorId = actualData.author._id;
+      } else if (actualData?.author?.id) {
+        contentAuthorId = actualData.author.id;
+      } else if (actualData?.author && typeof actualData.author === 'string') {
+        contentAuthorId = actualData.author;
+      } else if (actualData?.authorId) {
+        contentAuthorId = actualData.authorId;
+      }
+      
+      if (contentAuthorId) {
+        isContentOwner = contentAuthorId === currentUserId;
+      }
+    }
+
+    console.log('=== DELETE PERMISSION CHECK ===');
+    console.log('Current User ID:', currentUserId);
+    console.log('Comment User ID:', commentUserId);
+    console.log('Content Author:', contentAuthor);
+    console.log('Is Comment Author:', isCommentAuthor);
+    console.log('Is Content Owner:', isContentOwner);
+    console.log('Can Delete:', isCommentAuthor || isContentOwner);
+    console.log('=== END DELETE PERMISSION CHECK ===');
+
+    return isCommentAuthor || isContentOwner;
+  };
+
+  // Enhanced render individual comment with delete functionality
   const renderComment = (comment, index) => {
     const user = comment.user || comment.author || {};
     const username = safeGet(user, 'fullName', safeGet(user, 'username', safeGet(user, 'name', 'Unknown User')));
@@ -484,7 +601,7 @@ const CommentScreen = () => {
     const commentContent = safeGet(comment, 'content', safeGet(comment, 'text', ''));
     const isVerified = safeGet(user, 'isVerified', false);
 
-    // Format time - prioritize timeAgo from API
+    // Format time
     let timeAgo = '';
     if (comment.timeAgo) {
       timeAgo = comment.timeAgo;
@@ -514,6 +631,10 @@ const CommentScreen = () => {
       user._id === currentUser.id ||
       user.id === currentUser._id
     ));
+
+    // Check delete permissions
+    const canDelete = canDeleteComment(comment);
+    const isDeleting = deletingCommentId === comment._id;
 
     return (
       <View key={comment._id || comment.id || index} style={styles.commentItem}>
@@ -550,11 +671,26 @@ const CommentScreen = () => {
           )}
         </View>
 
-        {isOwnComment && (
-          <View style={styles.commentActions}>
+        <View style={styles.commentActions}>
+          {isOwnComment && (
             <Text style={styles.ownCommentIndicator}>•</Text>
-          </View>
-        )}
+          )}
+          
+          {/* DELETE BUTTON - Only show if user can delete */}
+          {canDelete && (
+            <TouchableOpacity
+              style={styles.deleteButton}
+              onPress={() => handleDeleteComment(comment)}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <ActivityIndicator size="small" color="#FF6B6B" />
+              ) : (
+                <Ionicons name="trash-outline" size={16} color="#FF6B6B" />
+              )}
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
     );
   };
@@ -572,13 +708,12 @@ const CommentScreen = () => {
     </View>
   );
 
-  // --- ENHANCED ScrollView Props for Better Scrolling ---
   // Comments List
   const renderCommentsList = () => (
     <ScrollView
       ref={scrollViewRef}
       style={styles.commentsContainer}
-      contentContainerStyle={styles.commentsContentContainer} // Add this style
+      contentContainerStyle={styles.commentsContentContainer}
       showsVerticalScrollIndicator={false}
       refreshControl={
         <RefreshControl
@@ -587,11 +722,10 @@ const CommentScreen = () => {
           tintColor="#fff"
         />
       }
-      // --- KEY SCROLL IMPROVEMENTS ---
-      scrollEnabled={true} // Explicitly enable scrolling
-      bounces={true}       // Enable bouncing for better UX
-      nestedScrollEnabled={true} // Allow nested scrolling if needed
-      keyboardShouldPersistTaps="handled" // Prevent keyboard from interfering with scroll taps
+      scrollEnabled={true}
+      bounces={true}
+      nestedScrollEnabled={true}
+      keyboardShouldPersistTaps="handled"
     >
       {loading ? (
         <View style={styles.loadingContainer}>
@@ -612,7 +746,40 @@ const CommentScreen = () => {
     </ScrollView>
   );
 
-  // Modal content - Updated to use the new renderCommentsList function
+  // Delete confirmation modal
+  const renderDeleteModal = () => (
+    <Modal
+      isVisible={showDeleteModal}
+      onBackdropPress={cancelDeleteComment}
+      onBackButtonPress={cancelDeleteComment}
+      style={styles.deleteModal}
+      animationIn="slideInUp"
+      animationOut="slideOutDown"
+    >
+      <View style={styles.deleteModalContent}>
+        <Text style={styles.deleteModalTitle}>Delete Comment</Text>
+        <Text style={styles.deleteModalText}>
+          Are you sure you want to delete this comment? This action cannot be undone.
+        </Text>
+        <View style={styles.deleteModalButtons}>
+          <TouchableOpacity
+            style={styles.deleteModalCancelButton}
+            onPress={cancelDeleteComment}
+          >
+            <Text style={styles.deleteModalCancelText}>Cancel</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.deleteModalConfirmButton}
+            onPress={confirmDeleteComment}
+          >
+            <Text style={styles.deleteModalConfirmText}>Delete</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Modal content
   const renderModalContent = () => (
     <SafeAreaView style={styles.modalContainer}>
       <KeyboardAvoidingView
@@ -623,7 +790,7 @@ const CommentScreen = () => {
         {/* Header */}
         {renderHeader()}
 
-        {/* Comments List - Updated */}
+        {/* Comments List */}
         {renderCommentsList()}
 
         {/* Comment Input */}
@@ -704,11 +871,14 @@ const CommentScreen = () => {
       >
         {renderModalContent()}
       </Modal>
+      
+      {/* Delete Confirmation Modal */}
+      {renderDeleteModal()}
     </View>
   );
 };
 
-// Enhanced styles for modal
+// Complete styles for the enhanced comment screen
 const styles = StyleSheet.create({
   screenContainer: {
     flex: 1,
@@ -722,11 +892,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    // Removed maxHeight/minHeight here, rely on flex
-    flex: 1, // Take up available space within the modal
+    flex: 1,
   },
   keyboardContainer: {
-    flex: 1, // Ensure it takes full height
+    flex: 1,
   },
   header: {
     flexDirection: 'row',
@@ -748,16 +917,13 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   headerRight: {
-    width: 34, // Same as close button to center title
+    width: 34,
   },
   commentsContainer: {
-    // paddingHorizontal: 15, // Move padding inside contentContainer if needed
-    flex: 1, // Crucial: Take up remaining space
+    flex: 1,
   },
-  // Add this new style for content container padding
   commentsContentContainer: {
-    paddingHorizontal: 15, // Apply horizontal padding here
-    // paddingVertical can also go here if needed
+    paddingHorizontal: 15,
   },
   loadingContainer: {
     flex: 1,
@@ -797,7 +963,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
   },
   commentAvatar: {
-    marginRight: 5,
+    marginRight: 10,
   },
   avatar: {
     width: 32,
@@ -852,11 +1018,18 @@ const styles = StyleSheet.create({
   commentActions: {
     marginLeft: 10,
     justifyContent: 'center',
+    alignItems: 'center',
   },
   ownCommentIndicator: {
     color: '#1DA1F2',
     fontSize: 16,
     fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  deleteButton: {
+    padding: 8,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255, 107, 107, 0.1)',
   },
   inputContainer: {
     flexDirection: 'row',
@@ -906,6 +1079,63 @@ const styles = StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: '#333',
+  },
+  // DELETE MODAL STYLES
+  deleteModal: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    margin: 20,
+  },
+  deleteModalContent: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 15,
+    padding: 20,
+    width: '100%',
+    maxWidth: 300,
+  },
+  deleteModalTitle: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  deleteModalText: {
+    color: '#ccc',
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  deleteModalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  deleteModalCancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    marginRight: 10,
+    backgroundColor: '#333',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  deleteModalCancelText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  deleteModalConfirmButton: {
+    flex: 1,
+    paddingVertical: 12,
+    marginLeft: 10,
+    backgroundColor: '#FF6B6B',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  deleteModalConfirmText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 

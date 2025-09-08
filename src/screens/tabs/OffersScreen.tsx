@@ -1,4 +1,3 @@
-// OffersScreen.js
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   SafeAreaView,
@@ -11,75 +10,32 @@ import {
   RefreshControl,
   Modal,
   TextInput,
-  Pressable,
   ActivityIndicator
 } from 'react-native';
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import Icon from 'react-native-vector-icons/Ionicons';
 
-// Define interfaces for type safety
-interface DateStats {
-  pending?: number;
-  accepted?: number;
-  completed?: number;
-  total?: number;
-}
-
-interface DateStatsResponse {
-  success: boolean;
-  data: {
-    stats: DateStats;
-    recentRequests: any[];
-    userProfile: any;
-  };
-}
-
-interface PendingResponse {
-  success: boolean;
-  data: {
-    requests: any[];
-    count: number;
-  };
-}
-
-interface PinStatusResponse {
-  success: boolean;
-  data: {
-    hasPrivatePin: boolean;
-  };
-}
-
-interface PinSetResponse {
-  success: boolean;
-  message: string;
-}
-
-interface PinVerifyResponse {
-  success: boolean;
-  message: string;
-}
-
 const OffersScreen = () => {
   const navigation = useNavigation();
-  const [dateStats, setDateStats] = useState<DateStats | null>(null);
+  const [dateStats, setDateStats] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // PIN Management State
-  const [userHasPin, setUserHasPin] = useState(false); // Does user have a PIN set?
-  const [isPinModalVisible, setIsPinModalVisible] = useState(false); // Is PIN modal visible?
-  const [pinMode, setPinMode] = useState<'enter' | 'set'>('enter'); // Modal mode: 'enter' or 'set'
-  const [enteredPin, setEnteredPin] = useState(''); // Current PIN input (for enter or first set)
-  const [confirmPin, setConfirmPin] = useState(''); // Confirm PIN input (only for set mode)
-  const [pinError, setPinError] = useState(''); // Error message for PIN
-  const [isProcessing, setIsProcessing] = useState(false); // Loading state for PIN actions
-  const pinInputRef = useRef<TextInput>(null); // Ref for first PIN input field
-  const confirmPinInputRef = useRef<TextInput>(null); // Ref for confirm PIN input field
+  const [userHasPin, setUserHasPin] = useState(false);
+  const [isPinModalVisible, setIsPinModalVisible] = useState(false);
+  const [pinMode, setPinMode] = useState('enter'); // Will be set dynamically
+  const [enteredPin, setEnteredPin] = useState('');
+  const [confirmPin, setConfirmPin] = useState('');
+  const [pinError, setPinError] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const pinInputRef = useRef(null);
+  const confirmPinInputRef = useRef(null);
 
-  // Get auth token (Replace with your actual auth context)
-  // const { token, user } = useAuth();
-  const token = "YOUR_JWT_TOKEN_HERE"; // Replace with actual token from context/storage
+  // --- IMPORTANT: Replace with your actual token retrieval logic ---
+  // const { token } = useAuth(); // Example using context
+  const token = "YOUR_JWT_TOKEN_HERE"; // Placeholder - Replace with actual token
 
   // Fetch dating statistics
   const fetchDateStats = async () => {
@@ -109,16 +65,16 @@ const OffersScreen = () => {
     }
   };
 
-  // Check if user has a private PIN set
+  // --- NEW: Check if user has a private PIN set using the dedicated endpoint ---
   const checkUserPinStatus = async () => {
     try {
       if (!token) {
+        console.warn("No token available for PIN check");
         setUserHasPin(false);
         return;
       }
 
-      // API call to check if user has a PIN
-      const response = await fetch(`https://backendforheartlink.in/api/v1/users/profile`, {
+      const response = await fetch(`https://backendforheartlink.in/api/v1/private-pin/status`, {
         method: 'GET',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -126,21 +82,22 @@ const OffersScreen = () => {
         },
       });
 
-      const result: PinStatusResponse = await response.json();
+      const result = await response.json();
 
       if (response.ok && result.success) {
-        setUserHasPin(result.data.hasPrivatePin || false);
-        setPinMode(result.data.hasPrivatePin ? 'enter' : 'set');
+        const hasPin = result.data.hasPrivatePin || false;
+        setUserHasPin(hasPin);
+        console.log("PIN Status Check (via /status) - Has PIN:", hasPin);
       } else {
+        console.error("Failed to fetch user PIN status (/status):", result.message || response.status);
         setUserHasPin(false);
-        setPinMode('set');
       }
     } catch (error) {
-      console.error('Error checking user PIN status:', error);
+      console.error('Error checking user PIN status (/status):', error);
       setUserHasPin(false);
-      setPinMode('set');
     }
   };
+
 
   // Set a new private PIN
   const setPrivatePin = async () => {
@@ -148,11 +105,11 @@ const OffersScreen = () => {
       setPinError('Please enter a PIN.');
       return;
     }
-    if (!confirmPin.trim()) {
+    if (pinMode === 'set' && !confirmPin.trim()) {
       setPinError('Please confirm your PIN.');
       return;
     }
-    if (enteredPin !== confirmPin) {
+    if (pinMode === 'set' && enteredPin !== confirmPin) {
       setPinError('PINs do not match. Please try again.');
       setConfirmPin('');
       if (confirmPinInputRef.current) {
@@ -160,8 +117,8 @@ const OffersScreen = () => {
       }
       return;
     }
-    if (enteredPin.length < 4) {
-      setPinError('PIN must be at least 4 digits.');
+    if (enteredPin.length < 4 || enteredPin.length > 8 || !/^\d+$/.test(enteredPin)) {
+      setPinError('PIN must be 4-8 digits.');
       return;
     }
 
@@ -169,25 +126,25 @@ const OffersScreen = () => {
     setPinError('');
 
     try {
+      const pinToSet = enteredPin.trim();
       const response = await fetch(`https://backendforheartlink.in/api/v1/private-pin/set`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ pin: enteredPin.trim() })
+        body: JSON.stringify({ pin: pinToSet })
       });
 
-      const result: PinSetResponse = await response.json();
+      const result = await response.json();
 
       if (response.ok && result.success) {
-        // PIN is set successfully
         setUserHasPin(true);
-        setPinMode('enter');
+        setIsPinModalVisible(false);
         setEnteredPin('');
         setConfirmPin('');
         Alert.alert('Success', 'Your Private PIN has been set successfully!', [
-          { text: 'OK', onPress: () => setIsPinModalVisible(false) }
+          { text: 'OK' }
         ]);
       } else {
         setPinError(result.message || 'Failed to set PIN. Please try again.');
@@ -220,19 +177,15 @@ const OffersScreen = () => {
         body: JSON.stringify({ pin: enteredPin.trim() })
       });
 
-      const result: PinVerifyResponse = await response.json();
+      const result = await response.json();
 
       if (response.ok && result.success) {
-        // PIN is correct, close modal and navigate
         setIsPinModalVisible(false);
         setEnteredPin('');
-        Alert.alert('Success', 'PIN verified!', [
-          { text: 'OK', onPress: () => navigation.navigate('PrivateChat') }
-        ]);
+        navigation.navigate('PrivateChat'); // Make sure 'PrivateChat' is a valid route name
       } else {
-        // Invalid PIN
         setPinError(result.message || 'Invalid PIN. Please try again.');
-        setEnteredPin(''); // Clear input for retry
+        setEnteredPin('');
         if (pinInputRef.current) {
           pinInputRef.current.focus();
         }
@@ -245,22 +198,47 @@ const OffersScreen = () => {
     }
   };
 
-  // Handle pressing the "Private Messages" button
+  // --- UPDATED: Handle pressing the "Private Messages" button ---
   const handlePrivateMessagePress = async () => {
-    setIsPinModalVisible(true);
-    setTimeout(() => {
-      if (pinInputRef.current) {
-        pinInputRef.current.focus();
-      }
-    }, 100); // Small delay to ensure modal is fully rendered
+    setLoading(true);
+    try {
+      await checkUserPinStatus(); // Ensure the latest PIN status is fetched
+
+      // Determine the mode based on the fetched userHasPin state
+      const mode = userHasPin ? 'enter' : 'set';
+      console.log("Setting PIN mode to:", mode, "based on userHasPin:", userHasPin);
+      setPinMode(mode);
+      setIsPinModalVisible(true);
+      setPinError('');
+      setEnteredPin('');
+      setConfirmPin('');
+
+      // Delay focus slightly to ensure modal is fully rendered
+      setTimeout(() => {
+        if (mode === 'set' && pinInputRef.current) {
+          pinInputRef.current.focus();
+        } else if (mode === 'enter' && pinInputRef.current) {
+          pinInputRef.current.focus();
+        }
+      }, 300);
+
+    } catch (err) {
+      console.error("Error in handlePrivateMessagePress:", err);
+      Alert.alert("Error", "Could not process PIN check. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Refresh data when screen comes into focus
   useFocusEffect(
     useCallback(() => {
-      fetchDateStats();
-      fetchPendingCount();
-      checkUserPinStatus();
+      const fetchData = async () => {
+        await fetchDateStats();
+        await fetchPendingCount();
+        await checkUserPinStatus(); // Check PIN status on focus
+      };
+      fetchData();
     }, [token])
   );
 
@@ -269,7 +247,7 @@ const OffersScreen = () => {
     setRefreshing(true);
     await fetchDateStats();
     await fetchPendingCount();
-    await checkUserPinStatus();
+    await checkUserPinStatus(); // Check PIN status on refresh
     setRefreshing(false);
   }, [token]);
 
@@ -302,7 +280,7 @@ const OffersScreen = () => {
     }
   };
 
-  const renderBadge = (count: number, type: 'urgent' | 'success' | 'info' = 'info') => {
+  const renderBadge = (count, type = 'info') => {
     if (count === 0) return null;
 
     const getBadgeStyle = () => {
@@ -333,15 +311,19 @@ const OffersScreen = () => {
           <Icon name="arrow-back" size={24} color="white" />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Offers & Dating</Text>
-        <TouchableOpacity onPress={onRefresh} style={styles.refreshButton}>
-          <Icon name="refresh" size={24} color="#ed167e" />
+        <TouchableOpacity onPress={onRefresh} style={styles.refreshButton} disabled={refreshing}>
+          {refreshing ? (
+            <ActivityIndicator size="small" color="#ed167e" />
+          ) : (
+            <Icon name="refresh" size={24} color="#ed167e" />
+          )}
         </TouchableOpacity>
       </View>
 
       <ScrollView
         style={styles.content}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#ed167e" />
         }
       >
         {/* Dating Section */}
@@ -387,8 +369,9 @@ const OffersScreen = () => {
 
           {/* Private Messages Card */}
           <TouchableOpacity
-            style={styles.card}
+            style={[styles.card, loading && styles.cardDisabled]}
             onPress={handlePrivateMessagePress}
+            disabled={loading}
           >
             <View style={styles.cardContent}>
               <View style={styles.cardLeft}>
@@ -396,16 +379,19 @@ const OffersScreen = () => {
                 <View style={styles.cardText}>
                   <Text style={styles.cardTitle}>Private Messages</Text>
                   <Text style={styles.cardSubtitle}>
-                    {pendingCount > 0 ? ` Your pending Heyy's` : 'No pending requests'}
+                    Secure your private conversations
                   </Text>
                 </View>
               </View>
+              {loading && (
+                <ActivityIndicator size="small" color="#999" style={{ marginRight: 10 }} />
+              )}
             </View>
           </TouchableOpacity>
         </View>
 
-        {/* Loading State */}
-        {loading && (
+        {/* Loading State for main content */}
+        {loading && !isPinModalVisible && (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#ed167e" />
             <Text style={styles.loadingText}>Loading...</Text>
@@ -445,7 +431,6 @@ const OffersScreen = () => {
                     keyboardType="number-pad"
                     maxLength={8}
                     secureTextEntry={true}
-                    autoFocus={true}
                   />
                 </View>
 
@@ -482,7 +467,6 @@ const OffersScreen = () => {
                     keyboardType="number-pad"
                     maxLength={8}
                     secureTextEntry={true}
-                    autoFocus={true}
                     onSubmitEditing={verifyPrivatePin}
                   />
                 </View>
@@ -580,6 +564,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     borderWidth: 1,
     borderColor: '#333',
+  },
+  cardDisabled: {
+    opacity: 0.7,
   },
   cardContent: {
     flexDirection: 'row',

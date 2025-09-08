@@ -1,4 +1,4 @@
-// src/screens/tabs/ChatUsers.js
+// src/screens/tabs/ChatUsers.js - COMPLETE VERSION WITH WAVFORM AUDIO PLAYER AND VIDEO COMPRESSION
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -19,6 +19,7 @@ import {
   AppState,
   Linking,
   PermissionsAndroid,
+  ActionSheetIOS,
 } from 'react-native';
 // ADDED: Import useFocusEffect for screen focus events
 import { useFocusEffect } from '@react-navigation/native';
@@ -35,29 +36,26 @@ import IncomingCallModal from '../../components/IncomingCallModal';
 import AudioRecorder from '../../components/AudioRecorder'; // Adjust path as needed
 // ADDED FOR AUDIO PLAYBACK: Import the Video component
 import Video from 'react-native-video';
-// ADDED: Import the new AudioPlayer component
-import AudioPlayer from '../../components/AudioPlayer'; // Adjust path as needed
-// Import image picker and document picker
+// ADDED: Import react-native-fs for video preview handling and compression
+import RNFS from 'react-native-fs';
+// FIXED: Import react-native-compressor with alias to avoid naming conflict
+import { Video as VideoCompressor } from 'react-native-compressor';
+// ADDED: Import image picker and document picker
 let ImagePicker;
-let DocumentPicker;
 try {
   ImagePicker = require('react-native-image-picker');
 } catch (e) {
   console.log('ImagePicker not installed');
 }
+let DocumentPicker;
 try {
   DocumentPicker = require('react-native-document-picker');
 } catch (e) {
   console.log('DocumentPicker not installed');
 }
-// ADDED: Import react-native-fs for video preview handling
-let RNFS;
-try {
-  RNFS = require('react-native-fs');
-} catch (e) {
-  console.log('react-native-fs not installed');
-}
+
 const { width, height } = Dimensions.get('window');
+
 const ChatDetailScreen = () => {
   // Chat state
   const [messages, setMessages] = useState([]);
@@ -78,11 +76,22 @@ const ChatDetailScreen = () => {
   const [unseenCount, setUnseenCount] = useState(0);
   const [conversationFocused, setConversationFocused] = useState(false);
   const [isAudioRecording, setIsAudioRecording] = useState(false); // State for audio recording
+
+  // NEW: Enhanced deletion states
+  const [showMessageOptionsModal, setShowMessageOptionsModal] = useState(false);
+  const [selectedMessageForOptions, setSelectedMessageForOptions] = useState(null);
+  const [showConversationOptionsModal, setShowConversationOptionsModal] = useState(false);
+  const [clearingConversation, setClearingConversation] = useState(false);
+  const [selectedMessages, setSelectedMessages] = useState(new Set());
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [bulkDeletingMessages, setBulkDeletingMessages] = useState(false);
+
   // WebRTC Call States
   const [incomingCall, setIncomingCall] = useState(null);
   const [isCallActive, setIsCallActive] = useState(false);
   const [callState, setCallState] = useState('idle');
   const [isInitiatingCall, setIsInitiatingCall] = useState(false);
+
   // ADDED FOR AUDIO PLAYBACK: State variables to manage audio playback
   const [currentlyPlaying, setCurrentlyPlaying] = useState(null); // Tracks the ID of the message being played
   const [paused, setPaused] = useState(true); // Controls the play/pause state for the <Video> component
@@ -91,6 +100,7 @@ const ChatDetailScreen = () => {
   const [playingMessageCurrentTime, setPlayingMessageCurrentTime] = useState(0);
   // ADDED: State to store local URIs for video previews
   const [videoPreviews, setVideoPreviews] = useState({});
+
   const { user: currentUser, token } = useAuth();
   const navigation = useNavigation();
   const route = useRoute();
@@ -98,7 +108,9 @@ const ChatDetailScreen = () => {
   const { socket } = useSocket();
   const appStateSubscriptionRef = useRef(null);
   const markAsReadTimeoutRef = useRef(null);
+
   const { conversationId, receiverId, receiverName, receiverOnline } = route.params;
+
   // ===== START: NEW UTILITY FUNCTION AND EFFECT =====
   const handleConnectionIssues = useCallback(() => {
     if (!socket || !socket.connected) {
@@ -110,10 +122,11 @@ const ChatDetailScreen = () => {
     }
     return true;
   }, [socket]);
+
   useEffect(() => {
     const connectionCheckInterval = setInterval(() => {
       if (!handleConnectionIssues() && socket) {
-        console.log('⚠ Socket disconnected, attempting to reconnect...');
+        console.log('⚠️ Socket disconnected, attempting to reconnect...');
         setTimeout(() => {
           if (socket?.connected && conversationId) {
             socket.emit('joinConversation', { conversationId });
@@ -121,9 +134,11 @@ const ChatDetailScreen = () => {
         }, 2000);
       }
     }, 10000);
+
     return () => clearInterval(connectionCheckInterval);
   }, [socket, conversationId, handleConnectionIssues]);
   // ===== END: NEW UTILITY FUNCTION AND EFFECT =====
+
   // ADDED: Function to handle video preview generation/fetching
   const handleVideoPreview = async (message) => {
     // Only process video messages that don't already have a local preview and have a remote URL
@@ -137,33 +152,36 @@ const ChatDetailScreen = () => {
         // Create a unique local filename for the cached video
         const localFileName = `${message._id}_preview.mp4`;
         const localFilePath = `${RNFS.CachesDirectoryPath}/${localFileName}`;
+
         // Check if the file already exists locally (e.g., from a previous render)
         const exists = await RNFS.exists(localFilePath);
         if (exists) {
-            console.log(`🔁 Video preview already exists for ${message._id}`);
-            setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: `file://${localFilePath}` }));
-            return;
+          console.log(`📁 Video preview already exists for ${message._id}`);
+          setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: `file://${localFilePath}` }));
+          return;
         }
+
         // If not, download the video file (or at least the beginning part)
         // Note: react-native-fs download might download the whole file.
         // For true thumbnail generation, a native module is usually better.
         // This approach fetches the file to get a local URI that *might* allow Image to grab a frame.
-        console.log(`🔽 Downloading video for preview: ${message.fileUrl} -> ${localFilePath}`);
+        console.log(`🎽 Downloading video for preview: ${message.fileUrl} -> ${localFilePath}`);
         const download = RNFS.downloadFile({
           fromUrl: message.fileUrl,
           toFile: localFilePath,
           discretionary: true, // iOS background download hint
-          cacheable: true,     // iOS cache hint
+          cacheable: true, // iOS cache hint
         });
+
         const downloadResult = await download.promise;
         if (downloadResult.statusCode === 200) {
           console.log(`✅ Video downloaded for preview: ${message._id}`);
           // Update state with the local file URI
           setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: `file://${localFilePath}` }));
         } else {
-           console.warn(`⚠️ Failed to download video for preview (${downloadResult.statusCode}): ${message._id}`);
-           // Optionally set an error state for this message
-           setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: 'error' }));
+          console.warn(`⚠️ Failed to download video for preview (${downloadResult.statusCode}): ${message._id}`);
+          // Optionally set an error state for this message
+          setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: 'error' }));
         }
       } catch (error) {
         console.error('❌ Error handling video preview for message:', message._id, error);
@@ -172,6 +190,7 @@ const ChatDetailScreen = () => {
       }
     }
   };
+
   // ADDED FOR AUDIO PLAYBACK: Function to handle playing/pausing audio messages
   const handleAudioPlayPause = (messageId, fileUrl) => {
     if (currentlyPlaying === messageId) {
@@ -182,21 +201,25 @@ const ChatDetailScreen = () => {
       setCurrentlyPlaying(messageId);
       setAudioMessageUrl(fileUrl);
       setPaused(false);
-      setPlayingMessageCurrentTime(0);
+      setPlayingMessageCurrentTime(0); // Reset time for new audio
     }
   };
+
   const onPlaybackEnd = () => {
     setPaused(true);
     setCurrentlyPlaying(null);
     setAudioMessageUrl(null);
     setPlayingMessageCurrentTime(0);
   };
+
+  // ADDED: Function to get current playback time for a message
   const getCurrentTimeForMessage = (messageId) => {
     if (currentlyPlaying === messageId) {
       return playingMessageCurrentTime;
     }
     return 0;
   };
+
   const handleAudioRecordingComplete = async (audioFile, duration = null) => {
     console.log('🎵 Audio recorded:', audioFile);
     setIsAudioRecording(false);
@@ -214,6 +237,7 @@ const ChatDetailScreen = () => {
       setUploadingFile(false);
     }
   };
+
   // Initialize WebRTC Service
   useEffect(() => {
     const initializeWebRTC = async () => {
@@ -222,6 +246,7 @@ const ChatDetailScreen = () => {
         if (!enhancedGlobalWebRTCService.isReady() && token) {
           await enhancedGlobalWebRTCService.initialize(token);
         }
+
         // Set screen-specific callbacks
         enhancedGlobalWebRTCService.setScreenCallbacks({
           onLocalStream: handleLocalStream,
@@ -230,12 +255,15 @@ const ChatDetailScreen = () => {
           onError: handleWebRTCError,
           onIncomingCall: handleIncomingCall
         });
+
         console.log('✅ WebRTC screen callbacks set for ChatDetailScreen');
       } catch (error) {
         console.error('❌ Failed to initialize WebRTC in ChatDetailScreen:', error);
       }
     };
+
     initializeWebRTC();
+
     return () => {
       // FIXED: Clear states on unmount
       setCallState('idle');
@@ -245,6 +273,7 @@ const ChatDetailScreen = () => {
       enhancedGlobalWebRTCService.clearScreenCallbacks();
     };
   }, [token]);
+
   // FIXED: Add focus effect to reset states when returning from CallScreen
   useFocusEffect(
     React.useCallback(() => {
@@ -263,6 +292,7 @@ const ChatDetailScreen = () => {
       };
     }, [])
   );
+
   // FIXED: Add periodic state check to prevent stuck states
   useEffect(() => {
     const stateCheckInterval = setInterval(() => {
@@ -275,12 +305,15 @@ const ChatDetailScreen = () => {
         setIsInitiatingCall(false);
       }
     }, 2000);
+
     return () => clearInterval(stateCheckInterval);
   }, [isInitiatingCall, callState]);
+
   // WebRTC Event Handlers
   const handleLocalStream = (stream) => {
     console.log('📹 Local stream received in ChatDetailScreen');
   };
+
   const handleRemoteStream = (stream) => {
     console.log('📺 Remote stream received in ChatDetailScreen');
     if (callState !== 'connected') {
@@ -288,9 +321,11 @@ const ChatDetailScreen = () => {
       setIsCallActive(true);
     }
   };
+
   // REPLACED: handleCallStateChange with more robust state resetting
   const handleCallStateChange = (type, data) => {
     console.log('🔄 Call state change in ChatDetailScreen:', type, data);
+
     switch (type) {
       case 'accepted':
         setCallState('connecting');
@@ -315,7 +350,7 @@ const ChatDetailScreen = () => {
       case 'ended':
       case 'cleanup':
         // FIXED: Comprehensive state reset
-        console.log('🔚 Call ended - resetting all states');
+        console.log('📞 Call ended - resetting all states');
         setCallState('idle');
         setIsCallActive(false);
         setIsInitiatingCall(false);
@@ -354,6 +389,7 @@ const ChatDetailScreen = () => {
         break;
     }
   };
+
   // REPLACED: handleWebRTCError with more robust state resetting
   const handleWebRTCError = (error) => {
     console.error('❌ WebRTC error in ChatDetailScreen:', error);
@@ -364,26 +400,32 @@ const ChatDetailScreen = () => {
     setIncomingCall(null);
     Alert.alert('Call Error', error.message || 'An error occurred during the call');
   };
+
   const handleIncomingCall = (callData) => {
     console.log('📞 Incoming call received in ChatDetailScreen:', callData);
     setIncomingCall(callData);
     setCallState('incoming');
   };
+
   // Call Functions
   const initiateAudioCall = async () => {
     if (isCallActive || isInitiatingCall) {
       Alert.alert('Error', 'You are already in a call or initiating one');
       return;
     }
+
     if (!enhancedGlobalWebRTCService.isReady()) {
       Alert.alert('Error', 'WebRTC service not ready. Please try again.');
       return;
     }
+
     try {
       setIsInitiatingCall(true);
       setCallState('ringing');
       console.log('🎵 Initiating audio call to:', receiverId);
+
       const result = await enhancedGlobalWebRTCService.initiateCall(receiverId, 'audio');
+
       if (result) {
         console.log('✅ Audio call initiated successfully');
         navigation.navigate('CallScreen', {
@@ -407,20 +449,25 @@ const ChatDetailScreen = () => {
       Alert.alert('Call Failed', 'Unable to start audio call. Please try again.');
     }
   };
+
   const initiateVideoCall = async () => {
     if (isCallActive || isInitiatingCall) {
       Alert.alert('Error', 'You are already in a call or initiating one');
       return;
     }
+
     if (!enhancedGlobalWebRTCService.isReady()) {
       Alert.alert('Error', 'WebRTC service not ready. Please try again.');
       return;
     }
+
     try {
       setIsInitiatingCall(true);
       setCallState('ringing');
       console.log('🎥 Initiating video call to:', receiverId);
+
       const result = await enhancedGlobalWebRTCService.initiateCall(receiverId, 'video');
+
       if (result) {
         console.log('✅ Video call initiated successfully');
         navigation.navigate('CallScreen', {
@@ -444,12 +491,15 @@ const ChatDetailScreen = () => {
       Alert.alert('Call Failed', 'Unable to start video call. Please try again.');
     }
   };
+
   const acceptIncomingCall = async () => {
     if (!incomingCall) return;
+
     try {
       console.log('✅ Accepting incoming call');
       setCallState('connecting');
       await enhancedGlobalWebRTCService.acceptCall();
+
       navigation.navigate('CallScreen', {
         callType: incomingCall.callType,
         isIncoming: true,
@@ -458,6 +508,7 @@ const ChatDetailScreen = () => {
         authToken: token,
         webrtcService: enhancedGlobalWebRTCService
       });
+
       setIncomingCall(null);
       setIsCallActive(true);
     } catch (error) {
@@ -467,8 +518,10 @@ const ChatDetailScreen = () => {
       setIncomingCall(null);
     }
   };
+
   const declineIncomingCall = async () => {
     if (!incomingCall) return;
+
     try {
       console.log('❌ Declining incoming call');
       await enhancedGlobalWebRTCService.declineCall();
@@ -480,15 +533,230 @@ const ChatDetailScreen = () => {
       setCallState('idle');
     }
   };
+
+  // ===== NEW: MESSAGE DELETION FUNCTIONS =====
+  // Clear all messages in conversation for current user
+  const clearAllMessagesForMe = async () => {
+    Alert.alert(
+      'Clear Chat',
+      'This will clear all messages for you only. Other participants will still see the messages. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear for Me',
+          style: 'destructive',
+          onPress: async () => {
+            setClearingConversation(true);
+            try {
+              const response = await fetch(
+                `${BASE_URL}/api/v1/chat/conversation/${conversationId}/clear-for-me`,
+                {
+                  method: 'DELETE',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                }
+              );
+
+              const data = await response.json();
+              if (response.ok && data.success) {
+                // Clear local messages immediately for better UX
+                setMessages([]);
+                Alert.alert('Success', `Cleared ${data.data.clearedCount} messages for you`);
+                setShowConversationOptionsModal(false);
+              } else {
+                Alert.alert('Error', data.message || 'Failed to clear messages');
+              }
+            } catch (error) {
+              console.error('❌ Error clearing conversation:', error);
+              Alert.alert('Error', 'Failed to clear messages');
+            } finally {
+              setClearingConversation(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Hide single message for current user
+  const hideMessageForMe = async (messageId) => {
+    try {
+      const response = await fetch(
+        `${BASE_URL}/api/v1/chat/message/${messageId}/hide-for-me`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const data = await response.json();
+      if (response.ok && data.success) {
+        // Remove message from local state immediately
+        setMessages(prev => prev.filter(msg => msg._id !== messageId));
+        setShowMessageOptionsModal(false);
+        setSelectedMessageForOptions(null);
+      } else {
+        Alert.alert('Error', data.message || 'Failed to hide message');
+      }
+    } catch (error) {
+      console.error('❌ Error hiding message:', error);
+      Alert.alert('Error', 'Failed to hide message');
+    }
+  };
+
+  // Bulk hide selected messages
+  const bulkHideSelectedMessages = async () => {
+    if (selectedMessages.size === 0) return;
+
+    const messageIds = Array.from(selectedMessages);
+    Alert.alert(
+      'Delete Messages',
+      `Delete ${messageIds.length} selected message(s) for you only? This action cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete for Me',
+          style: 'destructive',
+          onPress: async () => {
+            setBulkDeletingMessages(true);
+            try {
+              const response = await fetch(
+                `${BASE_URL}/api/v1/chat/messages/bulk-hide-for-me`,
+                {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ messageIds }),
+                }
+              );
+
+              const data = await response.json();
+              if (response.ok && data.success) {
+                // Remove messages from local state immediately
+                setMessages(prev => prev.filter(msg => !selectedMessages.has(msg._id)));
+                setSelectedMessages(new Set());
+                setIsSelectionMode(false);
+                Alert.alert('Success', `Deleted ${data.data.hiddenCount} messages for you`);
+              } else {
+                Alert.alert('Error', data.message || 'Failed to delete messages');
+              }
+            } catch (error) {
+              console.error('❌ Error bulk hiding messages:', error);
+              Alert.alert('Error', 'Failed to delete messages');
+            } finally {
+              setBulkDeletingMessages(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Toggle message selection
+  const toggleMessageSelection = (messageId) => {
+    setSelectedMessages(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(messageId)) {
+        newSet.delete(messageId);
+      } else {
+        newSet.add(messageId);
+      }
+      return newSet;
+    });
+  };
+
+  // Enter/exit selection mode
+  const toggleSelectionMode = () => {
+    setIsSelectionMode(!isSelectionMode);
+    setSelectedMessages(new Set());
+  };
+
+  // Show message options
+  const showMessageOptions = (message) => {
+    if (isSelectionMode) {
+      toggleMessageSelection(message._id);
+      return;
+    }
+
+    setSelectedMessageForOptions(message);
+    if (Platform.OS === 'ios') {
+      const options = ['Cancel'];
+      if (message.sender._id === currentUser?._id) {
+        options.unshift('Delete for Everyone');
+      }
+      options.unshift('Delete for Me');
+      options.unshift('Select Messages');
+
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: options,
+          destructiveButtonIndex: message.sender._id === currentUser?._id ? 1 : 0,
+          cancelButtonIndex: options.length - 1,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 0) {
+            // Select Messages
+            setIsSelectionMode(true);
+            setSelectedMessages(new Set([message._id]));
+          } else if (buttonIndex === 1 && message.sender._id !== currentUser?._id) {
+            // Delete for Me (when not own message)
+            hideMessageForMe(message._id);
+          } else if (buttonIndex === 1 && message.sender._id === currentUser?._id) {
+            // Delete for Everyone (when own message)
+            deleteMessage(message._id);
+          } else if (buttonIndex === 2 && message.sender._id === currentUser?._id) {
+            // Delete for Me (when own message)
+            hideMessageForMe(message._id);
+          }
+        }
+      );
+    } else {
+      setShowMessageOptionsModal(true);
+    }
+  };
+
+  // Show conversation options
+  const showConversationOptions = () => {
+    if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ['Cancel', 'Select Messages', 'Clear Chat for Me'],
+          destructiveButtonIndex: 2,
+          cancelButtonIndex: 0,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 1) {
+            setIsSelectionMode(true);
+          } else if (buttonIndex === 2) {
+            clearAllMessagesForMe();
+          }
+        }
+      );
+    } else {
+      setShowConversationOptionsModal(true);
+    }
+  };
+  // ===== END: NEW MESSAGE DELETION FUNCTIONS =====
+
   // Get profile image URL
   const getProfileImageUrl = (user) => {
     if (!user) return null;
+
     if (user.photoUrl && typeof user.photoUrl === 'string') {
       return user.photoUrl;
     }
+
     if (user.profilePicture && typeof user.profilePicture === 'string') {
       return user.profilePicture;
     }
+
     if (user.profilePic && typeof user.profilePic === 'string') {
       if (user.profilePic.startsWith('http://') || user.profilePic.startsWith('https://')) {
         return user.profilePic;
@@ -496,6 +764,7 @@ const ChatDetailScreen = () => {
       const cleanPath = user.profilePic.startsWith('/') ? user.profilePic.substring(1) : user.profilePic;
       return `${BASE_URL}/${cleanPath}`;
     }
+
     if (user.avatar && typeof user.avatar === 'string') {
       if (user.avatar.startsWith('http://') || user.avatar.startsWith('https://')) {
         return user.avatar;
@@ -503,11 +772,14 @@ const ChatDetailScreen = () => {
       const cleanPath = user.avatar.startsWith('/') ? user.avatar.substring(1) : user.avatar;
       return `${BASE_URL}/${cleanPath}`;
     }
+
     return null;
   };
+
   // Get message status icon
   const getStatusIcon = (message) => {
     if (message.sender._id !== currentUser?._id) return null;
+
     switch (message.status) {
       case 'sent':
         return <Text style={[styles.statusIcon, { color: '#666' }]}>✓</Text>;
@@ -519,18 +791,22 @@ const ChatDetailScreen = () => {
         return null;
     }
   };
+
   // Enhanced markMessagesAsRead function with socket emission
   const markMessagesAsRead = async (specificMessageIds = null) => {
     try {
       if (!token || !conversationId) return;
+
       const payload = { conversationId };
       if (specificMessageIds && specificMessageIds.length > 0) {
         payload.messageIds = specificMessageIds;
       }
+
       // Get unread message IDs before marking as read
       const unreadMessageIds = messages
         .filter(msg => msg.sender._id !== currentUser._id && msg.status !== 'read')
         .map(msg => msg._id);
+
       const response = await fetch(`${BASE_URL}/api/v1/chat/messages/bulk-seen`, {
         method: 'POST',
         headers: {
@@ -539,6 +815,7 @@ const ChatDetailScreen = () => {
         },
         body: JSON.stringify(payload),
       });
+
       const data = await response.json();
       if (response.ok && data.success) {
         // Update local state
@@ -548,7 +825,9 @@ const ChatDetailScreen = () => {
           }
           return msg;
         }));
+
         setUnseenCount(0);
+
         // IMPORTANT: Emit socket event to notify sender about read status
         if (socket && socket.connected && unreadMessageIds.length > 0) {
           socket.emit('messagesRead', {
@@ -565,11 +844,13 @@ const ChatDetailScreen = () => {
       console.error('❌ Error marking messages as read:', error);
     }
   };
+
   // Handle conversation focus/blur
   const handleConversationFocus = () => {
     if (!conversationFocused && socket) {
       socket.emit('conversationFocused', { conversationId });
       setConversationFocused(true);
+
       if (markAsReadTimeoutRef.current) {
         clearTimeout(markAsReadTimeoutRef.current);
       }
@@ -578,6 +859,7 @@ const ChatDetailScreen = () => {
       }, 1000);
     }
   };
+
   const handleConversationBlur = () => {
     if (conversationFocused && socket) {
       socket.emit('conversationBlurred', {
@@ -585,11 +867,13 @@ const ChatDetailScreen = () => {
         markRead: true
       });
       setConversationFocused(false);
+
       if (markAsReadTimeoutRef.current) {
         clearTimeout(markAsReadTimeoutRef.current);
       }
     }
   };
+
   // Handle app state changes
   useEffect(() => {
     const handleAppStateChange = (nextAppState) => {
@@ -601,8 +885,10 @@ const ChatDetailScreen = () => {
         handleConversationBlur();
       }
     };
+
     appStateSubscriptionRef.current = AppState.addEventListener('change', handleAppStateChange);
     updateOnlineStatus(true);
+
     return () => {
       if (appStateSubscriptionRef.current) {
         appStateSubscriptionRef.current.remove();
@@ -611,12 +897,16 @@ const ChatDetailScreen = () => {
       handleConversationBlur();
     };
   }, []);
+
   // Enhanced Socket listeners with better error handling and reconnection
   useEffect(() => {
     if (!socket || !conversationId) return;
+
     console.log('🔌 Setting up socket listeners for conversation:', conversationId);
+
     // Join conversation room immediately
     socket.emit('joinConversation', { conversationId });
+
     const handleUserOnline = (data) => {
       console.log('👤 User came online:', data);
       setOnlineUsers(prev => new Set([...prev, data.userId]));
@@ -624,6 +914,7 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(true);
       }
     };
+
     const handleUserOffline = (data) => {
       console.log('👤 User went offline:', data);
       setOnlineUsers(prev => {
@@ -635,6 +926,7 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(false);
       }
     };
+
     const handleOnlineUsersList = (data) => {
       console.log('👥 Received online users list:', data);
       if (data && Array.isArray(data)) {
@@ -644,6 +936,7 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(isReceiverOnline);
       }
     };
+
     // Enhanced message handler with better error handling
     const handleNewMessage = (message) => {
       console.log('📨 New message received:', {
@@ -654,11 +947,13 @@ const ChatDetailScreen = () => {
         content: message.content?.substring(0, 50) + '...',
         messageType: message.messageType
       });
+
       // Verify this message belongs to current conversation
       if (message.conversationId !== conversationId) {
         console.log('📨 Message not for current conversation, ignoring');
         return;
       }
+
       // Update messages state
       setMessages(prev => {
         // Check if message already exists to prevent duplicates
@@ -667,14 +962,18 @@ const ChatDetailScreen = () => {
           console.log('📨 Message already exists, skipping duplicate');
           return prev;
         }
+
         console.log('📨 Adding new message to state');
         const newMessages = [...prev, message];
+
         // Scroll to bottom after state update
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
         }, 100);
+
         return newMessages;
       });
+
       // Auto-mark as read if conversation is focused and message is from other user
       if (message.sender._id !== currentUser._id && conversationFocused) {
         setTimeout(() => {
@@ -684,9 +983,11 @@ const ChatDetailScreen = () => {
         setUnseenCount(prev => prev + 1);
       }
     };
+
     // Message status updates - FIXED VERSION
     const handleMessageStatusUpdate = (data) => {
       console.log('📊 Message status update received:', data);
+
       // Update messages for both single message and bulk updates
       setMessages(prev => prev.map(msg => {
         // Check if this is a message sent by the current user
@@ -712,13 +1013,15 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
+
     // Bulk message status updates - FIXED VERSION
     const handleBulkMessageStatusUpdate = (data) => {
       console.log('📊 Bulk message status update received:', data);
+
       setMessages(prev => prev.map(msg => {
         // Update all messages sent by current user that are now read
         if (msg.sender._id === currentUser._id &&
-          data.conversationId === conversationId) {
+            data.conversationId === conversationId) {
           // If messageIds array is provided, check if this message is in it
           if (data.messageIds && Array.isArray(data.messageIds)) {
             if (data.messageIds.includes(msg._id)) {
@@ -742,9 +1045,11 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
+
     // Add this new handler for real-time read receipts
     const handleMessageRead = (data) => {
       console.log('👁️ Message read event received:', data);
+
       setMessages(prev => prev.map(msg => {
         // Update message if it matches the read message ID or is part of bulk read
         if (msg.sender._id === currentUser._id) {
@@ -757,11 +1062,38 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
+
+    // NEW: Handle conversation cleared event
+    const handleConversationCleared = (data) => {
+      console.log('🗑️ Conversation cleared event received:', data);
+      if (data.conversationId === conversationId && data.clearedBy === currentUser._id) {
+        setMessages([]);
+      }
+    };
+
+    // NEW: Handle messages hidden event
+    const handleMessagesHidden = (data) => {
+      console.log('🗑️ Messages hidden event received:', data);
+      if (data.hiddenBy === currentUser._id) {
+        setMessages(prev => prev.filter(msg => !data.messageIds.includes(msg._id)));
+      }
+    };
+
+    // NEW: Handle message restored event
+    const handleMessageRestored = (data) => {
+      console.log('🔄 Message restored event received:', data);
+      if (data.restoredBy === currentUser._id) {
+        // Refresh messages to show restored message
+        fetchMessages(1, false);
+      }
+    };
+
     // Conversation joined confirmation
     const handleJoinedConversation = (data) => {
       console.log('✅ Successfully joined conversation:', data);
       handleConversationFocus();
     };
+
     // Connection status handlers
     const handleConnect = () => {
       console.log('🔌 Socket connected, rejoining conversation');
@@ -769,15 +1101,18 @@ const ChatDetailScreen = () => {
         socket.emit('joinConversation', { conversationId });
       }, 1000);
     };
+
     const handleDisconnect = () => {
       console.log('🔌 Socket disconnected');
     };
+
     const handleReconnect = () => {
       console.log('🔌 Socket reconnected, rejoining conversation');
       setTimeout(() => {
         socket.emit('joinConversation', { conversationId });
       }, 1000);
     };
+
     // Register all event listeners
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
@@ -789,10 +1124,17 @@ const ChatDetailScreen = () => {
     socket.on('messageStatusUpdate', handleMessageStatusUpdate);
     socket.on('bulkMessageStatusUpdate', handleBulkMessageStatusUpdate);
     socket.on('messageRead', handleMessageRead);
-    socket.on('messagesRead', handleMessageRead); // Handle both single and plural events
+    socket.on('messagesRead', handleMessageRead);
     socket.on('joinedConversation', handleJoinedConversation);
+
+    // NEW: Register deletion event listeners
+    socket.on('conversationCleared', handleConversationCleared);
+    socket.on('messagesHidden', handleMessagesHidden);
+    socket.on('messageRestored', handleMessageRestored);
+
     // Request current online users
     socket.emit('getAllOnlineUsers');
+
     // Cleanup function
     return () => {
       console.log('🧹 Cleaning up socket listeners for conversation:', conversationId);
@@ -808,10 +1150,17 @@ const ChatDetailScreen = () => {
       socket.off('messageRead', handleMessageRead);
       socket.off('messagesRead', handleMessageRead);
       socket.off('joinedConversation', handleJoinedConversation);
+
+      // NEW: Cleanup deletion listeners
+      socket.off('conversationCleared', handleConversationCleared);
+      socket.off('messagesHidden', handleMessagesHidden);
+      socket.off('messageRestored', handleMessageRestored);
+
       // Leave conversation room
       socket.emit('leaveConversation', { conversationId });
     };
   }, [socket, conversationId, receiverId, currentUser, conversationFocused]);
+
   // Add this useEffect to handle app focus/blur for better real-time updates
   useFocusEffect(
     React.useCallback(() => {
@@ -821,6 +1170,7 @@ const ChatDetailScreen = () => {
         socket.emit('joinConversation', { conversationId });
         handleConversationFocus();
       }
+
       return () => {
         console.log('📱 ChatDetailScreen blurred');
         if (socket && conversationId) {
@@ -829,32 +1179,38 @@ const ChatDetailScreen = () => {
       };
     }, [socket, conversationId])
   );
+
   // Initial data loading
   useEffect(() => {
     fetchMessages();
     setReceiverOnlineStatus(receiverOnline || false);
     handleConversationFocus();
+
     return () => {
       if (markAsReadTimeoutRef.current) {
         clearTimeout(markAsReadTimeoutRef.current);
       }
     };
   }, [conversationId]);
+
   // Extract receiver data from messages
   useEffect(() => {
     if (messages.length > 0 && !receiverData) {
       const firstMessage = messages[0];
       const receiver = firstMessage.sender._id === receiverId ?
         firstMessage.sender : firstMessage.receiver;
+
       if (receiver && receiver._id === receiverId) {
         setReceiverData(receiver);
       }
     }
   }, [messages, receiverId, receiverData]);
+
   // Update online status
   const updateOnlineStatus = async (isOnline) => {
     try {
       if (!token || !currentUser) return;
+
       const response = await fetch(`${BASE_URL}/api/v1/chat/user/online-status`, {
         method: 'POST',
         headers: {
@@ -863,6 +1219,7 @@ const ChatDetailScreen = () => {
         },
         body: JSON.stringify({ isOnline }),
       });
+
       if (response.ok && socket) {
         if (isOnline) {
           socket.emit('user-online', { userId: currentUser._id });
@@ -874,10 +1231,12 @@ const ChatDetailScreen = () => {
       console.error('❌ Error updating online status:', error);
     }
   };
+
   // Fetch messages
   const fetchMessages = async (pageNum = 1, prepend = false) => {
     try {
       if (!token) return;
+
       const response = await fetch(
         `${BASE_URL}/api/v1/chat/conversations/${conversationId}/messages?page=${pageNum}&limit=50`,
         {
@@ -888,12 +1247,14 @@ const ChatDetailScreen = () => {
           },
         }
       );
+
       const data = await response.json();
       if (response.ok && data.success) {
         const newMessages = data.data || [];
         const sortedMessages = newMessages.sort((a, b) =>
           new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
         );
+
         if (prepend) {
           setMessages(prev => [...sortedMessages, ...prev]);
         } else {
@@ -902,6 +1263,7 @@ const ChatDetailScreen = () => {
             flatListRef.current?.scrollToEnd({ animated: false });
           }, 100);
         }
+
         setHasMoreMessages(newMessages.length === 50);
         setPage(pageNum);
       } else {
@@ -914,19 +1276,24 @@ const ChatDetailScreen = () => {
       setLoading(false);
     }
   };
+
   // STEP 1: Replace the sendMessage function in ChatDetailScreen
   const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null) => {
     if (messageType === 'text' && (!newMessage.trim() || sending)) return;
     if (messageType !== 'text' && !fileData) return;
+
     const messageText = messageType === 'text' ? newMessage.trim() : newMessage;
     const tempId = `temp_${Date.now()}_${Math.random()}`;
+
     setNewMessage('');
+
     // Set loading states based on message type
     if (messageType === 'text') {
       setSending(true);
     } else {
       setUploadingFile(true);
     }
+
     try {
       if (messageType === 'text' && socket && socket.connected) {
         // Handle text messages via socket (existing logic)
@@ -938,11 +1305,14 @@ const ChatDetailScreen = () => {
           messageType: 'text',
           tempId
         };
+
         socket.emit('sendMessage', messageData);
+
         const confirmationTimeout = setTimeout(() => {
           console.log('⚠️ Socket message timeout, falling back to HTTP');
           sendViaHTTP();
         }, 5000);
+
         const handleMessageSent = (data) => {
           if (data.tempId === tempId) {
             clearTimeout(confirmationTimeout);
@@ -952,6 +1322,7 @@ const ChatDetailScreen = () => {
             console.log('✅ Message sent via socket successfully');
           }
         };
+
         const handleMessageError = (error) => {
           if (error.tempId === tempId) {
             clearTimeout(confirmationTimeout);
@@ -961,12 +1332,14 @@ const ChatDetailScreen = () => {
             sendViaHTTP();
           }
         };
+
         socket.on('messageSent', handleMessageSent);
         socket.on('error', handleMessageError);
       } else {
         // Handle file messages via HTTP with immediate UI feedback
         await sendViaHTTP();
       }
+
       async function sendViaHTTP() {
         console.log('📤 Sending message via HTTP, type:', messageType);
         let requestBody;
@@ -974,6 +1347,7 @@ const ChatDetailScreen = () => {
           'Authorization': `Bearer ${token}`,
         };
         let endpoint = `${BASE_URL}/api/v1/chat/message`;
+
         // 🔥 STEP 1A: Create optimistic message for immediate UI feedback (for file uploads)
         let optimisticMessage = null;
         if (messageType !== 'text') {
@@ -999,13 +1373,16 @@ const ChatDetailScreen = () => {
             createdAt: new Date().toISOString(),
             isOptimistic: true // Flag to identify optimistic messages
           };
+
           // Add optimistic message to UI immediately
           setMessages(prev => [...prev, optimisticMessage]);
+
           // Scroll to bottom
           setTimeout(() => {
             flatListRef.current?.scrollToEnd({ animated: true });
           }, 100);
         }
+
         // Prepare request based on message type
         if (messageType === 'audio') {
           endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
@@ -1040,14 +1417,18 @@ const ChatDetailScreen = () => {
           }
           requestBody = formData;
         }
+
         const response = await fetch(endpoint, {
           method: 'POST',
           headers,
           body: requestBody,
         });
+
         const data = await response.json();
+
         if (response.ok && data.success) {
           console.log('✅ Message sent via HTTP successfully');
+
           // 🔥 STEP 1B: Handle successful file upload
           if (messageType !== 'text' && optimisticMessage) {
             // Replace optimistic message with real message
@@ -1064,6 +1445,7 @@ const ChatDetailScreen = () => {
               }
               return msg;
             }));
+
             // 🔥 STEP 1C: Emit via socket for real-time updates to other users
             if (socket && socket.connected) {
               socket.emit('fileMessageSent', {
@@ -1075,6 +1457,7 @@ const ChatDetailScreen = () => {
           }
         } else {
           console.error('❌ HTTP message failed:', data);
+
           // 🔥 STEP 1D: Handle failed file upload
           if (messageType !== 'text' && optimisticMessage) {
             // Remove optimistic message and show error
@@ -1093,10 +1476,12 @@ const ChatDetailScreen = () => {
       }
     } catch (error) {
       console.error('❌ Error sending message:', error);
+
       // Handle error for optimistic messages
       if (messageType !== 'text') {
         setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
       }
+
       Alert.alert('Error', 'Failed to send message');
       if (messageType === 'text') {
         setNewMessage(messageText);
@@ -1109,10 +1494,11 @@ const ChatDetailScreen = () => {
       }
     }
   };
-  // ===== END: REPLACED sendMessage FUNCTION =====
+
   // Delete message
   const deleteMessage = async (messageId) => {
     if (!messageId || deletingMessage) return;
+
     setDeletingMessage(true);
     try {
       const response = await fetch(`${BASE_URL}/api/v1/chat/message/${messageId}`, {
@@ -1122,10 +1508,13 @@ const ChatDetailScreen = () => {
           'Content-Type': 'application/json',
         },
       });
+
       const data = await response.json();
       if (response.ok && data.success) {
         setMessages(prev => prev.filter(msg => msg._id !== messageId));
         setSelectedMessageForDelete(null);
+        setShowMessageOptionsModal(false);
+        setSelectedMessageForOptions(null);
       } else {
         Alert.alert('Error', data.message || 'Failed to delete message');
       }
@@ -1136,20 +1525,26 @@ const ChatDetailScreen = () => {
       setDeletingMessage(false);
     }
   };
+
   // Message handlers
   const handleMessageLongPress = (message) => {
-    if (message.sender._id === currentUser?._id) {
-      setSelectedMessageForDelete(message);
+    if (isSelectionMode) {
+      toggleMessageSelection(message._id);
+    } else {
+      showMessageOptions(message);
     }
   };
+
   const cancelDelete = () => {
     setSelectedMessageForDelete(null);
   };
+
   const loadOlderMessages = () => {
     if (hasMoreMessages && !loading) {
       fetchMessages(page + 1, true);
     }
   };
+
   const handleProfilePress = () => {
     navigation.navigate('UserProfile', {
       userId: receiverId,
@@ -1157,21 +1552,15 @@ const ChatDetailScreen = () => {
       conversationId: conversationId,
     });
   };
+
   // File handling
   const handleAttachmentPress = () => {
     if (!ImagePicker && !DocumentPicker) {
-//       Alert.alert(
-//         'Packages Required',
-//         'To send photos and files, install:
-// • react-native-image-picker
-// • react-native-document-picker
-// Then restart the app.',
-//         [{ text: 'OK' }]
-//       );
       return;
     }
     setShowAttachmentModal(true);
   };
+
   const requestCameraPermission = async () => {
     if (Platform.OS === 'android') {
       try {
@@ -1194,6 +1583,7 @@ const ChatDetailScreen = () => {
     }
     return true;
   };
+
   // ADDED: Request microphone permission for video recording
   const requestMicrophonePermission = async () => {
     if (Platform.OS === 'android') {
@@ -1217,6 +1607,7 @@ const ChatDetailScreen = () => {
     // iOS permissions are typically handled by the native picker
     return true;
   };
+
   // ADDED: Combined function to request both camera and microphone permissions
   const requestCameraAndMicrophonePermissions = async () => {
     const cameraGranted = await requestCameraPermission();
@@ -1224,34 +1615,33 @@ const ChatDetailScreen = () => {
       Alert.alert('Permission Denied', 'Camera permission is required to take photos/videos.');
       return false;
     }
+
     const micGranted = await requestMicrophonePermission();
     if (!micGranted) {
       Alert.alert('Permission Denied', 'Microphone permission is required to record videos.');
       return false;
     }
+
     return true;
   };
+
   const openCamera = async () => {
-    if (!ImagePicker) {
-      Alert.alert('Error', 'Image picker not available');
-      return;
-    }
-    const hasPermission = await requestCameraPermission(); // Reuse existing camera permission
-    if (!hasPermission) {
-      Alert.alert('Permission Denied', 'Camera permission is required to take photos.');
-      return;
-    }
     setShowAttachmentModal(false);
+
     const options = {
       mediaType: 'photo',
       quality: 0.8,
       maxWidth: 1024,
       maxHeight: 1024,
     };
-    ImagePicker.launchCamera(options, async (response) => {
-      if (response.didCancel || response.errorMessage) {
+
+    // Use launchCamera from react-native-image-picker
+    const { launchCamera } = require('react-native-image-picker');
+    launchCamera(options, async (response) => {
+      if (response.didCancel || response.errorCode || response.errorMessage) {
         return;
       }
+
       if (response.assets && response.assets[0]) {
         const asset = response.assets[0];
         const fileData = {
@@ -1259,40 +1649,45 @@ const ChatDetailScreen = () => {
           type: asset.type || 'image/jpeg',
           name: asset.fileName || `camera_photo_${Date.now()}.jpg`,
         };
+
         setUploadingFile(true);
         await sendMessage('image', fileData);
       }
     });
   };
-  // ADDED: New function for recording video
+
+  // ADDED: New function for recording video with compression
   const recordVideo = async () => {
-    if (!ImagePicker) {
-      Alert.alert('Error', 'Image/Video picker not available');
-      return;
-    }
     const hasPermissions = await requestCameraAndMicrophonePermissions(); // Request both permissions
     if (!hasPermissions) {
       // Alerts are shown inside requestCameraAndMicrophonePermissions
       return;
     }
+
     setShowAttachmentModal(false); // Close the modal
+
     const options = {
       mediaType: 'video', // Specify video
       // You can add quality, max duration settings if supported by your ImagePicker version
       // videoQuality: 'high', // Example (check ImagePicker docs)
-      // durationLimit: 30,    // Example: 30 seconds max (check ImagePicker docs)
+      // durationLimit: 30, // Example: 30 seconds max (check ImagePicker docs)
     };
+
     // Use launchCamera for recording directly
-    ImagePicker.launchCamera(options, async (response) => {
+    const { launchCamera } = require('react-native-image-picker');
+    launchCamera(options, async (response) => {
       console.log('Video Picker Response:', response); // Log the response structure
+
       if (response.didCancel || response.errorCode || response.errorMessage) {
         console.log('Video recording cancelled or failed:', response.errorMessage || response.errorCode);
         return;
       }
+
       // Check if assets exist and get the first one (video)
       if (response.assets && response.assets.length > 0) {
         const asset = response.assets[0];
         console.log('Selected Video Asset:', asset); // Log asset details
+
         // Prepare file data similar to image capture
         // Ensure the URI, type, and name are correctly extracted
         const fileData = {
@@ -1302,14 +1697,93 @@ const ChatDetailScreen = () => {
           // Include size if available
           size: asset.fileSize,
         };
+
         setUploadingFile(true); // Show uploading indicator
+
         try {
-          // Use the existing sendMessage function with 'video' type
-          await sendMessage('video', fileData);
+          // Step 1: Get the actual file size using RNFS
+          const cleanUri = asset.uri.replace('file://', '');
+          let originalSize;
+          try {
+            const fileInfo = await RNFS.stat(cleanUri);
+            originalSize = fileInfo.size;
+            console.log('📊 Original recorded video size:', formatFileSize(originalSize));
+          } catch (statError) {
+            console.warn('Could not get file size with RNFS, proceeding without size check:', statError);
+            originalSize = 0; // Or asset.fileSize if you trust it more
+          }
+
+          // Step 2: Check if compression is needed (e.g., larger than 5MB)
+          const sizeThreshold = 5 * 1024 * 1024; // 5 MB in bytes
+          let finalFileData = fileData; // Default to original
+
+          if (originalSize > sizeThreshold) {
+            console.log('📦 Recorded video is large, starting compression...');
+
+            // Step 3: Perform Compression
+            try {
+              const compressionOptions = {
+                compressionMethod: 'auto',
+                quality: 'medium', // 'low', 'medium', 'high'
+                input: asset.uri,
+                output: undefined, // Let the library generate output path
+                getCancellationId: (cancellationId) => {
+                  console.log('📝 Compression cancellation ID:', cancellationId);
+                },
+                progressDivider: 10,
+                includeAudio: true,
+                optimizeForNetworkUse: true,
+                minimumFileSizeForCompress: 2, // Only compress if larger than 2MB
+              };
+
+              // FIXED: Use VideoCompressor instead of Video
+              const compressedVideoUri = await VideoCompressor.compress(
+                asset.uri, // Input URI
+                compressionOptions,
+                (progress) => {
+                  // Optional: Update UI with progress if you have a dedicated indicator
+                  console.log('📊 Compression progress:', Math.round(progress), '%');
+                }
+              );
+
+              // Step 4: Get compressed file details
+              const compressedFileInfo = await RNFS.stat(compressedVideoUri.replace('file://', ''));
+              const compressedSize = compressedFileInfo.size;
+              const ratio = ((originalSize - compressedSize) / originalSize) * 100;
+
+              console.log('✅ Video compression completed!');
+              console.log('📊 Original size:', formatFileSize(originalSize));
+              console.log('📊 Compressed size:', formatFileSize(compressedSize));
+              console.log('📊 Compression ratio:', Math.round(ratio), '%');
+
+              // Step 5: Update fileData to use the compressed video
+              finalFileData = {
+                ...fileData, // Keep original name, type etc. if possible, or update them
+                uri: compressedVideoUri, // <-- Use the compressed URI
+                size: compressedSize,     // <-- Update size
+                // You might want to add metadata like originalSize, compressionRatio if your backend needs it
+                // originalUri: asset.uri, // Optional: keep track of the original
+                // isCompressed: true,     // Optional: flag
+              };
+
+            } catch (compressionError) {
+              console.error('❌ Video compression failed:', compressionError);
+              // Cancel sending on compression failure
+              Alert.alert("Compression Failed", `Could not compress video: ${compressionError.message || 'Unknown error'}. Sending cancelled.`);
+              setUploadingFile(false);
+              return;
+            }
+          } else {
+            console.log('✅ Recorded video is small enough, no compression needed.');
+          }
+
+          // Step 6: Send the (potentially compressed) video
+          await sendMessage('video', finalFileData);
+
         } catch (error) {
-             console.error("Error sending recorded video:", error);
-             Alert.alert("Send Error", "Failed to send recorded video.");
-             setUploadingFile(false); // Hide indicator on error
+          console.error("Error processing recorded video:", error);
+          Alert.alert("Processing Error", "Failed to process the recorded video.");
+          setUploadingFile(false); // Hide indicator on error
         }
       } else {
         console.log('No video asset found in response');
@@ -1317,22 +1791,24 @@ const ChatDetailScreen = () => {
       }
     });
   };
+
   const openGallery = () => {
-    if (!ImagePicker) {
-      Alert.alert('Error', 'Image picker not available');
-      return;
-    }
     setShowAttachmentModal(false);
+
     const options = {
       mediaType: 'photo',
       quality: 0.8,
       maxWidth: 1024,
       maxHeight: 1024,
     };
-    ImagePicker.launchImageLibrary(options, (response) => {
-      if (response.didCancel || response.errorMessage) {
+
+    // Use launchImageLibrary from react-native-image-picker
+    const { launchImageLibrary } = require('react-native-image-picker');
+    launchImageLibrary(options, (response) => {
+      if (response.didCancel || response.errorCode || response.errorMessage) {
         return;
       }
+
       if (response.assets && response.assets[0]) {
         const asset = response.assets[0];
         setSelectedPreviewImage(asset);
@@ -1340,21 +1816,22 @@ const ChatDetailScreen = () => {
       }
     });
   };
+
   const openDocumentPicker = async () => {
-    if (!DocumentPicker) {
-      Alert.alert('Error', 'Document picker not available');
-      return;
-    }
     setShowAttachmentModal(false);
     setUploadingFile(true);
+
     try {
+      const DocumentPicker = require('react-native-document-picker').default;
       const result = await DocumentPicker.pick({
         type: [DocumentPicker.types.allFiles],
         copyTo: 'cachesDirectory',
       });
+
       if (result && result[0]) {
         const file = result[0];
         let messageType = 'file';
+
         if (file.type) {
           if (file.type.startsWith('image/')) {
             messageType = 'image';
@@ -1364,17 +1841,19 @@ const ChatDetailScreen = () => {
             messageType = 'audio';
           }
         }
+
         const fileData = {
           uri: file.fileCopyUri || file.uri,
           type: file.type || 'application/octet-stream',
           name: file.name || 'document',
         };
+
         await sendMessage(messageType, fileData);
       } else {
         setUploadingFile(false);
       }
     } catch (err) {
-      if (DocumentPicker.isCancel(err)) {
+      if (err.code === 'DOCUMENT_PICKER_CANCELED') {
         console.log('📄 Document picker cancelled by user');
       } else {
         console.error('❌ DocumentPicker Error:', err);
@@ -1383,17 +1862,20 @@ const ChatDetailScreen = () => {
       setUploadingFile(false);
     }
   };
+
   const handleFileDownload = async (fileUrl, fileName, messageType) => {
     try {
       if (!fileUrl) {
         Alert.alert('Error', 'File URL not available');
         return;
       }
+
       if (messageType === 'image') {
         setSelectedPreviewImage({ uri: fileUrl, fileName });
         setShowImagePreview(true);
         return;
       }
+
       const supported = await Linking.canOpenURL(fileUrl);
       if (supported) {
         await Linking.openURL(fileUrl);
@@ -1420,18 +1902,23 @@ Would you like to open this file?`,
       Alert.alert('Error', 'Failed to open file');
     }
   };
+
   const sendSelectedImage = () => {
     if (!selectedPreviewImage) return;
+
     setShowImagePreview(false);
     setUploadingFile(true);
+
     const fileData = {
       uri: selectedPreviewImage.uri,
       type: selectedPreviewImage.type || 'image/jpeg',
       name: selectedPreviewImage.fileName || 'image.jpg',
     };
+
     sendMessage('image', fileData);
     setSelectedPreviewImage(null);
   };
+
   // Utility functions
   const getInitials = (fullName) => {
     if (!fullName) return '?';
@@ -1441,6 +1928,7 @@ Would you like to open this file?`,
     }
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
+
   const getAvatarColor = (name) => {
     const colors = [
       '#FF6B9D', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
@@ -1449,10 +1937,12 @@ Would you like to open this file?`,
     const charCodeSum = name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
     return colors[charCodeSum % colors.length];
   };
+
   const formatTime = (dateString) => {
     const date = new Date(dateString);
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
+
     if (isToday) {
       return date.toLocaleTimeString('en-US', {
         hour: '2-digit',
@@ -1460,16 +1950,57 @@ Would you like to open this file?`,
         hour12: false
       });
     }
+
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric'
     });
   };
+
+  // Add this utility function near other utilities
+  const formatDuration = (seconds) => {
+    if (!seconds) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
+
+  // Add this utility function for file size formatting
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Add this function to generate the waveform data
+  const generateWaveform = (duration, currentTime) => {
+    const segments = 60; // Number of wave segments
+    const segmentDuration = duration / segments;
+    const currentSegment = Math.floor(currentTime / segmentDuration);
+
+    // Generate an array of heights for each segment
+    return Array.from({ length: segments }, (_, i) => {
+      if (i < currentSegment) {
+        // Already played segments - full height
+        return 8;
+      } else if (i === currentSegment) {
+        // Current playing segment - half height
+        return 4;
+      } else {
+        // Future segments - no height (invisible)
+        return 0;
+      }
+    });
+  };
+
   // Render functions
   const renderHeaderAvatar = () => {
     const userData = receiverData || { fullName: receiverName };
     const profileImageUrl = getProfileImageUrl(userData);
     const safeFullName = userData.fullName || receiverName || 'User';
+
     return (
       <View style={[
         styles.headerAvatar,
@@ -1488,17 +2019,25 @@ Would you like to open this file?`,
       </View>
     );
   };
+
   const renderMessage = ({ item }) => {
     const isOwnMessage = item.sender._id === currentUser?._id;
     const isSelected = selectedMessageForDelete && selectedMessageForDelete._id === item._id;
+    const isSelectedForBulk = selectedMessages.has(item._id);
     // ADDED FOR AUDIO PLAYBACK: Check if this message is the one currently playing
     const isPlaying = currentlyPlaying === item._id;
+
+    // Generate waveform data for the audio player
+    const waveformData = generateWaveform(item.duration || 1, getCurrentTimeForMessage(item._id));
+
     return (
       <View style={styles.messageWrapper}>
         <TouchableOpacity
           onLongPress={() => handleMessageLongPress(item)}
           onPress={() => {
-            if (selectedMessageForDelete && selectedMessageForDelete._id !== item._id) {
+            if (isSelectionMode) {
+              toggleMessageSelection(item._id);
+            } else if (selectedMessageForDelete && selectedMessageForDelete._id !== item._id) {
               cancelDelete();
             }
           }}
@@ -1506,20 +2045,35 @@ Would you like to open this file?`,
           style={[
             styles.messageContainer,
             isOwnMessage ? styles.ownMessage : styles.otherMessage,
-            isSelected && styles.selectedMessage
+            (isSelected || isSelectedForBulk) && styles.selectedMessage
           ]}
         >
+          {/* NEW: Selection indicator */}
+          {isSelectionMode && (
+            <View style={styles.selectionIndicator}>
+              <View style={[
+                styles.selectionCircle,
+                isSelectedForBulk && styles.selectedCircle
+              ]}>
+                {isSelectedForBulk && (
+                  <Ionicons name="checkmark" size={14} color="white" />
+                )}
+              </View>
+            </View>
+          )}
+
           <View style={[
             styles.messageBubble,
             styles.commonMessageBubbleAppearance,
             isOwnMessage ? styles.ownMessageTail : styles.otherMessageTail,
-            isSelected && styles.selectedMessageBubble
+            (isSelected || isSelectedForBulk) && styles.selectedMessageBubble
           ]}>
             {item.messageType === 'text' && (
               <Text style={styles.messageText}>
                 {item.content}
               </Text>
             )}
+
             {item.messageType === 'image' && (
               <TouchableOpacity
                 style={styles.imageMessageContainer}
@@ -1538,6 +2092,7 @@ Would you like to open this file?`,
                 )}
               </TouchableOpacity>
             )}
+
             {/* UPDATED FOR VIDEO PREVIEW */}
             {item.messageType === 'video' && (
               <TouchableOpacity
@@ -1562,7 +2117,8 @@ Would you like to open this file?`,
                 )}
               </TouchableOpacity>
             )}
-            {/* UPDATED FOR AUDIO PLAYBACK: This block now handles audio playback using the AudioPlayer component */}
+
+            {/* UPDATED FOR AUDIO PLAYBACK: This block now handles audio playback using the custom waveform */}
             {(item.messageType === 'file' || item.messageType === 'audio') && item.messageType !== 'video' && (
               <TouchableOpacity
                 style={styles.fileMessageContainer}
@@ -1590,18 +2146,23 @@ Would you like to open this file?`,
                       <Ionicons name="play" size={20} color="#00C853" />
                     </TouchableOpacity>
 
-                    {/* Progress Bar */}
-                    <View style={styles.progressBar}>
-                      <View style={[styles.progressFill, { width: `${(playingMessageCurrentTime / (item.duration || 1)) * 100}%` }]} />
+                    {/* Waveform Visualization */}
+                    <View style={styles.waveformContainer}>
+                      <View style={styles.waveform}>
+                        {waveformData.map((height, index) => (
+                          <View
+                            key={index}
+                            style={[
+                              styles.waveformSegment,
+                              { height: height }
+                            ]}
+                          />
+                        ))}
+                      </View>
                     </View>
 
-                    {/* Duration Text - Bottom Left */}
+                    {/* Duration Text */}
                     {/* <Text style={styles.durationText}>{formatDuration(item.duration)}</Text> */}
-
-                    {/* Read Status - Bottom Right */}
-                    {/* <View style={styles.readStatus}>
-                      <Text style={styles.readStatusText}>✓✓</Text>
-                    </View> */}
                   </View>
                 ) : (
                   // Render the previous UI for file (non-video, non-audio)
@@ -1626,6 +2187,7 @@ Would you like to open this file?`,
                 )}
               </TouchableOpacity>
             )}
+
             <View style={styles.messageFooter}>
               <Text style={[
                 styles.timestamp,
@@ -1637,7 +2199,8 @@ Would you like to open this file?`,
             </View>
           </View>
         </TouchableOpacity>
-        {isSelected && (
+
+        {isSelected && !isSelectionMode && (
           <View style={styles.deleteButtonContainer}>
             <TouchableOpacity
               style={styles.deleteButton}
@@ -1664,15 +2227,24 @@ Would you like to open this file?`,
       </View>
     );
   };
+
   const renderHeader = () => (
     <View style={styles.header}>
       <View style={styles.headerContent}>
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => {
+            if (isSelectionMode) {
+              setIsSelectionMode(false);
+              setSelectedMessages(new Set());
+            } else {
+              navigation.goBack();
+            }
+          }}
         >
           <Ionicons name="chevron-back-outline" size={28} color="#FF6B9D" />
         </TouchableOpacity>
+
         <TouchableOpacity
           style={styles.profileSection}
           onPress={handleProfilePress}
@@ -1680,21 +2252,23 @@ Would you like to open this file?`,
         >
           {renderHeaderAvatar()}
           <View style={styles.headerTextContainer}>
-            <Text style={styles.headerName}>{receiverName}</Text>
+            <Text style={styles.headerName}>
+              {isSelectionMode ? `${selectedMessages.size} selected` : receiverName}
+            </Text>
             <View style={styles.statusContainer}>
-              {receiverOnlineStatus && <View style={styles.onlineIndicator} />}
+              {!isSelectionMode && receiverOnlineStatus && <View style={styles.onlineIndicator} />}
               <Text style={[
                 styles.headerStatus,
                 { color: receiverOnlineStatus ? '#4CAF50' : '#999' }
               ]}>
-                {receiverOnlineStatus ? 'Online' : 'Offline'}
+                {isSelectionMode ? 'Tap messages to select' : (receiverOnlineStatus ? 'Online' : 'Offline')}
               </Text>
-              {unseenCount > 0 && (
+              {!isSelectionMode && unseenCount > 0 && (
                 <View style={styles.unseenBadge}>
                   <Text style={styles.unseenBadgeText}>{unseenCount}</Text>
                 </View>
               )}
-              {callState !== 'idle' && (
+              {!isSelectionMode && callState !== 'idle' && (
                 <View style={styles.callStateBadge}>
                   <Text style={styles.callStateText}>{callState}</Text>
                 </View>
@@ -1702,40 +2276,73 @@ Would you like to open this file?`,
             </View>
           </View>
         </TouchableOpacity>
+
         <View style={styles.headerActions}>
-          {/* REPLACED: Header action buttons with more specific loading indicators */}
-          <TouchableOpacity
-              style={[
-            styles.actionButton,
-            (isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()) && styles.disabledButton
-          ]}
-          onPress={initiateAudioCall}
-          disabled={isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()}
-        >
-          {/* Always show the icon, never the loader */}
-          <Ionicons name="call-outline" size={24} color="#FF6B9D" />
-        </TouchableOpacity>
-                <TouchableOpacity
-          style={[
-            styles.actionButton,
-            (isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()) && styles.disabledButton
-          ]}
-          onPress={initiateVideoCall}
-          disabled={isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()}
-        >
-          {/* Always show the icon, never the loader */}
-          <Ionicons name="videocam-outline" size={24} color="#FF6B9D" />
-        </TouchableOpacity>
+          {isSelectionMode ? (
+            <>
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={bulkHideSelectedMessages}
+                disabled={selectedMessages.size === 0 || bulkDeletingMessages}
+              >
+                {bulkDeletingMessages ? (
+                  <ActivityIndicator size="small" color="#FF6B9D" />
+                ) : (
+                  <Ionicons name="trash-outline" size={24} color="#FF6B9D" />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={toggleSelectionMode}
+              >
+                <Ionicons name="close" size={24} color="#FF6B9D" />
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              {/* REPLACED: Header action buttons with more specific loading indicators */}
+              <TouchableOpacity
+                style={[
+                  styles.actionButton,
+                  (isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()) && styles.disabledButton
+                ]}
+                onPress={initiateAudioCall}
+                disabled={isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()}
+              >
+                {/* Always show the icon, never the loader */}
+                <Ionicons name="call-outline" size={24} color="#FF6B9D" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.actionButton,
+                  (isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()) && styles.disabledButton
+                ]}
+                onPress={initiateVideoCall}
+                disabled={isCallActive || isInitiatingCall || !enhancedGlobalWebRTCService.isReady()}
+              >
+                {/* Always show the icon, never the loader */}
+                <Ionicons name="videocam-outline" size={24} color="#FF6B9D" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.actionButton}
+                onPress={showConversationOptions}
+              >
+                <Ionicons name="ellipsis-vertical" size={24} color="#FF6B9D" />
+              </TouchableOpacity>
+            </>
+          )}
         </View>
       </View>
     </View>
   );
+
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
       <Text style={styles.emptyText}>No messages yet</Text>
       <Text style={styles.emptySubtext}>Send a message to start the conversation!</Text>
     </View>
   );
+
   const renderLoadMoreButton = () => {
     if (loading && page > 1) {
       return (
@@ -1744,6 +2351,7 @@ Would you like to open this file?`,
         </View>
       );
     }
+
     if (hasMoreMessages && messages.length > 0) {
       return (
         <TouchableOpacity onPress={loadOlderMessages} style={styles.loadMoreButton}>
@@ -1751,8 +2359,10 @@ Would you like to open this file?`,
         </TouchableOpacity>
       );
     }
+
     return null;
   };
+
   const renderAttachmentModal = () => (
     <Modal
       visible={showAttachmentModal}
@@ -1767,25 +2377,23 @@ Would you like to open this file?`,
       >
         <View style={styles.attachmentModal}>
           <Text style={styles.modalTitle}>Send Attachment</Text>
-          {ImagePicker && (
-            <TouchableOpacity style={styles.attachmentOption} onPress={openGallery}>
-              <Ionicons name="images" size={24} color="#FF6B9D" />
-              <Text style={styles.attachmentOptionText}>Gallery</Text>
-            </TouchableOpacity>
-          )}
+
+          <TouchableOpacity style={styles.attachmentOption} onPress={openGallery}>
+            <Ionicons name="images" size={24} color="#FF6B9D" />
+            <Text style={styles.attachmentOptionText}>Gallery</Text>
+          </TouchableOpacity>
+
           {/* ADDED: Record Video Option */}
-          {ImagePicker && (
-            <TouchableOpacity style={styles.attachmentOption} onPress={recordVideo}>
-              <Ionicons name="videocam" size={24} color="#FF6B9D" />
-              <Text style={styles.attachmentOptionText}>Record Video</Text>
-            </TouchableOpacity>
-          )}
-          {DocumentPicker && (
-            <TouchableOpacity style={styles.attachmentOption} onPress={openDocumentPicker}>
-              <Ionicons name="document" size={24} color="#FF6B9D" />
-              <Text style={styles.attachmentOptionText}>Document</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity style={styles.attachmentOption} onPress={recordVideo}>
+            <Ionicons name="videocam" size={24} color="#FF6B9D" />
+            <Text style={styles.attachmentOptionText}>Record Video</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.attachmentOption} onPress={openDocumentPicker}>
+            <Ionicons name="document" size={24} color="#FF6B9D" />
+            <Text style={styles.attachmentOptionText}>Document</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity
             style={styles.modalCancelButton}
             onPress={() => setShowAttachmentModal(false)}
@@ -1796,6 +2404,7 @@ Would you like to open this file?`,
       </TouchableOpacity>
     </Modal>
   );
+
   const renderImagePreviewModal = () => (
     <Modal
       visible={showImagePreview}
@@ -1830,6 +2439,125 @@ Would you like to open this file?`,
       </View>
     </Modal>
   );
+
+  // NEW: Message Options Modal
+  const renderMessageOptionsModal = () => (
+    <Modal
+      visible={showMessageOptionsModal}
+      transparent={true}
+      animationType="fade"
+      onRequestClose={() => setShowMessageOptionsModal(false)}
+    >
+      <TouchableOpacity
+        style={styles.modalOverlay}
+        activeOpacity={1}
+        onPress={() => setShowMessageOptionsModal(false)}
+      >
+        <View style={styles.messageOptionsModal}>
+          <Text style={styles.modalTitle}>Message Options</Text>
+
+          <TouchableOpacity
+            style={styles.messageOptionButton}
+            onPress={() => {
+              setIsSelectionMode(true);
+              setSelectedMessages(new Set([selectedMessageForOptions._id]));
+              setShowMessageOptionsModal(false);
+              setSelectedMessageForOptions(null);
+            }}
+          >
+            <Ionicons name="checkmark-circle-outline" size={24} color="#FF6B9D" />
+            <Text style={styles.messageOptionText}>Select Messages</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.messageOptionButton}
+            onPress={() => {
+              hideMessageForMe(selectedMessageForOptions._id);
+            }}
+          >
+            <Ionicons name="eye-off-outline" size={24} color="#FF6B9D" />
+            <Text style={styles.messageOptionText}>Delete for Me</Text>
+          </TouchableOpacity>
+
+          {selectedMessageForOptions?.sender?._id === currentUser?._id && (
+            <TouchableOpacity
+              style={[styles.messageOptionButton, styles.destructiveOption]}
+              onPress={() => {
+                deleteMessage(selectedMessageForOptions._id);
+              }}
+            >
+              <Ionicons name="trash-outline" size={24} color="#FF4444" />
+              <Text style={[styles.messageOptionText, styles.destructiveText]}>Delete for Everyone</Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={styles.modalCancelButton}
+            onPress={() => setShowMessageOptionsModal(false)}
+          >
+            <Text style={styles.modalCancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
+  // NEW: Conversation Options Modal
+  const renderConversationOptionsModal = () => (
+    <Modal
+      visible={showConversationOptionsModal}
+      transparent={true}
+      animationType="fade"
+      onRequestClose={() => setShowConversationOptionsModal(false)}
+    >
+      <TouchableOpacity
+        style={styles.modalOverlay}
+        activeOpacity={1}
+        onPress={() => setShowConversationOptionsModal(false)}
+      >
+        <View style={styles.conversationOptionsModal}>
+          <Text style={styles.modalTitle}>Chat Options</Text>
+
+          <TouchableOpacity
+            style={styles.conversationOptionButton}
+            onPress={() => {
+              setIsSelectionMode(true);
+              setShowConversationOptionsModal(false);
+            }}
+          >
+            <Ionicons name="checkmark-circle-outline" size={24} color="#FF6B9D" />
+            <Text style={styles.conversationOptionText}>Select Messages</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.conversationOptionButton, styles.destructiveOption]}
+            onPress={() => {
+              setShowConversationOptionsModal(false);
+              clearAllMessagesForMe();
+            }}
+            disabled={clearingConversation}
+          >
+            {clearingConversation ? (
+              <ActivityIndicator size="small" color="#FF4444" />
+            ) : (
+              <Ionicons name="trash-outline" size={24} color="#FF4444" />
+            )}
+            <Text style={[styles.conversationOptionText, styles.destructiveText]}>
+              Clear Chat for Me
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.modalCancelButton}
+            onPress={() => setShowConversationOptionsModal(false)}
+          >
+            <Text style={styles.modalCancelButtonText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
+
   if (loading && messages.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
@@ -1842,15 +2570,17 @@ Would you like to open this file?`,
       </SafeAreaView>
     );
   }
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1C1C1E" />
+
       {/* ADDED FOR AUDIO PLAYBACK: This invisible component handles the actual audio stream */}
       {audioMessageUrl && (
         <Video
           source={{ uri: audioMessageUrl }} // The URL of the audio file to play
-          paused={paused}                   // Binds the play/pause state
-          onEnd={onPlaybackEnd}             // Callback for when audio finishes
+          paused={paused} // Binds the play/pause state
+          onEnd={onPlaybackEnd} // Callback for when audio finishes
           // --- Add onProgress handler ---
           onProgress={(data) => {
             if (currentlyPlaying) {
@@ -1858,10 +2588,10 @@ Would you like to open this file?`,
             }
           }}
           // -------------------------------
-          audioOnly={true}                  // Ensures it's only for audio
-          playInBackground={true}           // Allows playback while app is in the background
-          playWhenInactive={true}           // Allows playback from control center
-          ignoreSilentSwitch={"ignore"}     // Plays audio even if the phone is on silent
+          audioOnly={true} // Ensures it's only for audio
+          playInBackground={true} // Allows playback while app is in the background
+          playWhenInactive={true} // Allows playback from control center
+          ignoreSilentSwitch={"ignore"} // Prevent audio from being muted even if phone is on silent
           onError={(e) => {
             console.error('Audio Playback Error:', e);
             Alert.alert("Playback Error", "Could not play this audio file.");
@@ -1869,7 +2599,9 @@ Would you like to open this file?`,
           }}
         />
       )}
+
       {renderHeader()}
+
       <View style={styles.contentContainer}>
         <KeyboardAvoidingView
           style={styles.keyboardContainer}
@@ -1896,14 +2628,33 @@ Would you like to open this file?`,
               }
             }}
           />
+
           {/* ===== START: UPDATED INPUT SECTION ===== */}
           <View style={styles.inputContainer}>
-            <TouchableOpacity style={styles.cameraButton} onPress={openCamera} disabled={isAudioRecording || sending || uploadingFile}>
-              <Ionicons name="camera" size={24} color={isAudioRecording || sending || uploadingFile ? "#666" : "#FF6B9D"} />
+            <TouchableOpacity
+              style={styles.cameraButton}
+              onPress={openCamera}
+              disabled={isAudioRecording || sending || uploadingFile || isSelectionMode}
+            >
+              <Ionicons
+                name="camera"
+                size={24}
+                color={isAudioRecording || sending || uploadingFile || isSelectionMode ? "#666" : "#FF6B9D"}
+              />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.attachButton} onPress={handleAttachmentPress} disabled={isAudioRecording || sending || uploadingFile}>
-              <Ionicons name="add" size={24} color={isAudioRecording || sending || uploadingFile ? "#666" : "#FF6B9D"} />
+
+            <TouchableOpacity
+              style={styles.attachButton}
+              onPress={handleAttachmentPress}
+              disabled={isAudioRecording || sending || uploadingFile || isSelectionMode}
+            >
+              <Ionicons
+                name="add"
+                size={24}
+                color={isAudioRecording || sending || uploadingFile || isSelectionMode ? "#666" : "#FF6B9D"}
+              />
             </TouchableOpacity>
+
             <View style={styles.messageInputContainer}>
               <TextInput
                 style={styles.messageInput}
@@ -1913,14 +2664,15 @@ Would you like to open this file?`,
                 onChangeText={setNewMessage}
                 multiline
                 maxLength={2000}
-                editable={!isAudioRecording} // Disable text input while recording
+                editable={!isAudioRecording && !isSelectionMode} // Disable text input while recording or selecting
               />
             </View>
+
             {newMessage.trim() ? (
               <TouchableOpacity
                 style={styles.sendButton}
                 onPress={() => sendMessage('text')}
-                disabled={sending || uploadingFile || isAudioRecording} // Disable send while recording
+                disabled={sending || uploadingFile || isAudioRecording || isSelectionMode} // Disable send while recording or selecting
               >
                 {sending ? (
                   <ActivityIndicator size="small" color="white" />
@@ -1932,11 +2684,12 @@ Would you like to open this file?`,
               // Use the new AudioRecorder component with specified props removed
               <AudioRecorder
                 onRecordingComplete={handleAudioRecordingComplete}
-                disabled={sending || uploadingFile || newMessage.trim().length > 0} // Disable if sending, uploading, or text is present
+                disabled={sending || uploadingFile || newMessage.trim().length > 0 || isSelectionMode} // Disable if sending, uploading, text is present, or selecting
               />
             )}
           </View>
           {/* ===== END: UPDATED INPUT SECTION ===== */}
+
           {uploadingFile && (
             <View style={styles.uploadingIndicator}>
               <ActivityIndicator size="small" color="#FF6B9D" />
@@ -1945,8 +2698,12 @@ Would you like to open this file?`,
           )}
         </KeyboardAvoidingView>
       </View>
+
       {renderAttachmentModal()}
       {renderImagePreviewModal()}
+      {renderMessageOptionsModal()}
+      {renderConversationOptionsModal()}
+
       {/* WebRTC Incoming Call Modal */}
       <IncomingCallModal
         visible={!!incomingCall}
@@ -1958,14 +2715,6 @@ Would you like to open this file?`,
       />
     </SafeAreaView>
   );
-};
-
-// Add this utility function near other utilities
-const formatDuration = (seconds) => {
-  if (!seconds) return '0:00';
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
 };
 
 const styles = StyleSheet.create({
@@ -2096,7 +2845,9 @@ const styles = StyleSheet.create({
     marginVertical: 4,
   },
   messageContainer: {
-    maxWidth: '80%',
+    maxWidth: '65%', // UPDATED: Reduced from 80% to make bubbles narrower
+    flexDirection: 'row',
+    alignItems: 'flex-end',
   },
   ownMessage: {
     alignSelf: 'flex-end',
@@ -2107,12 +2858,32 @@ const styles = StyleSheet.create({
   selectedMessage: {
     transform: [{ scale: 0.98 }],
   },
+  // NEW: Selection indicator styles
+  selectionIndicator: {
+    marginRight: 8,
+    marginLeft: 4,
+  },
+  selectionCircle: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#FF6B9D',
+    backgroundColor: 'transparent',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  selectedCircle: {
+    backgroundColor: '#FF6B9D',
+    borderColor: '#FF6B9D',
+  },
   messageBubble: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 20,
+    paddingHorizontal: 12, // UPDATED: Reduced from 16
+    paddingVertical: 8,    // UPDATED: Reduced from 12
+    borderRadius: 18,      // UPDATED: Reduced from 20
     maxWidth: '100%',
     position: 'relative',
+    alignSelf: 'flex-start', // ADDED: Allows bubble to size to content
   },
   commonMessageBubbleAppearance: {
     backgroundColor: '#2C2C2E',
@@ -2130,8 +2901,8 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 8,
   },
   messageText: {
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: 15,    // UPDATED: Reduced from 16
+    lineHeight: 19,  // UPDATED: Reduced from 20
     color: 'white',
   },
   messageFooter: {
@@ -2150,8 +2921,8 @@ const styles = StyleSheet.create({
     position: 'relative', // Needed for absolute overlay
   },
   messageImage: {
-    width: 200,
-    height: 200,
+    width: 180,      // UPDATED: Reduced from 200
+    height: 180,     // UPDATED: Reduced from 200
     borderRadius: 12,
     marginBottom: 8,
   },
@@ -2174,12 +2945,10 @@ const styles = StyleSheet.create({
   },
   // --- END ADDED: Styles for video preview ---
   fileMessageContainer: {
-    // flexDirection: 'row', // Removed as AudioPlayer handles its own layout
-    // alignItems: 'center',  // Removed as AudioPlayer handles its own layout
-    width:'fit-content',
-    padding: 8,
-    minHeight: 60, // Ensure it has a minimum height for touch targets
-    maxHeight: 100, // Prevent it from stretching too tall // Keep padding for touch area
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 6,      // UPDATED: Reduced from 8
+    minHeight: 50,   // UPDATED: Reduced from 60
   },
   fileIcon: {
     width: 40,
@@ -2208,7 +2977,7 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   timestamp: {
-    fontSize: 10,
+    fontSize: 9,     // UPDATED: Reduced from 10
     color: '#999',
   },
   ownTimestamp: {
@@ -2442,19 +3211,73 @@ const styles = StyleSheet.create({
     width: width,
     height: height - 100,
   },
+  // NEW: Message Options Modal Styles
+  messageOptionsModal: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 20,
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+    width: '85%',
+    maxWidth: 300,
+  },
+  messageOptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: '#2C2C2E',
+    marginBottom: 12,
+  },
+  messageOptionText: {
+    color: 'white',
+    fontSize: 16,
+    marginLeft: 16,
+    fontWeight: '500',
+  },
+  destructiveOption: {
+    backgroundColor: '#2C2C2E',
+  },
+  destructiveText: {
+    color: '#FF4444',
+  },
+  // NEW: Conversation Options Modal Styles
+  conversationOptionsModal: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 20,
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+    width: '85%',
+    maxWidth: 300,
+  },
+  conversationOptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: '#2C2C2E',
+    marginBottom: 12,
+  },
+  conversationOptionText: {
+    color: 'white',
+    fontSize: 16,
+    marginLeft: 16,
+    fontWeight: '500',
+  },
   // ADDED: WhatsApp-style audio player styles
   audioPlayerContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    paddingVertical: 6,    // UPDATED: Reduced from 8
+    paddingHorizontal: 10, // UPDATED: Reduced from 12
     backgroundColor: '#2C2C2E',
-    borderRadius: 16,
+    borderRadius: 14,      // UPDATED: Reduced from 16
     borderWidth: 1,
-    borderColor: '#2C2C2E', // Pink border like WhatsApp
+    borderColor: '#2C2C2E',
     width: '100%',
-    minHeight: 40,
+    minHeight: 36,         // UPDATED: Reduced from 40
   },
   audioPlayButton: {
     width: 32,
@@ -2462,16 +3285,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  progressBar: {
+  waveformContainer: {
     flex: 1,
-    height: 2,
-    backgroundColor: '#444',
-    marginHorizontal: 12,
-    borderRadius: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 8,
+    marginRight: 8,
   },
-  progressFill: {
-    height: '100%',
-    backgroundColor: '#00C853', // Green fill like WhatsApp
+  waveform: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  waveformSegment: {
+    width: 2,
+    backgroundColor: '#00C853', // Green color like WhatsApp
     borderRadius: 1,
   },
   durationText: {
@@ -2488,4 +3317,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+
 export default ChatDetailScreen;

@@ -1,4 +1,4 @@
-// src/context/CallManager.js - COMPLETE FIXED VERSION
+// src/context/CallManager.js - COMPLETE FIXED VERSION WITH HARD RINGTONE STOP
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Alert, AppState, Platform } from 'react-native';
 import { useAuth } from './AuthContext';
@@ -319,6 +319,97 @@ class AudioSessionManager {
   }
 
   /**
+   * NUCLEAR STOP - Most aggressive possible ringtone stopping
+   * Use this if normal hard stop doesn't work
+   */
+  async nuclearStopRingtone() {
+    console.log('☢️ NUCLEAR STOP: Maximum force ringtone termination');
+    
+    // Clear all state immediately
+    this.ringtoneActive = false;
+    this.lastRingtoneAction = 'nuclear_stop';
+    this.currentState = AudioState.IDLE;
+    
+    // Clear ALL timers
+    if (this.ringtoneTimer) {
+      clearTimeout(this.ringtoneTimer);
+      this.ringtoneTimer = null;
+    }
+    if (this.speakerCheckTimer) {
+      clearInterval(this.speakerCheckTimer);
+      this.speakerCheckTimer = null;
+    }
+    
+    // Multiple complete InCallManager resets
+    for (let reset = 0; reset < 3; reset++) {
+      console.log(`☢️ Nuclear reset ${reset + 1}/3`);
+      
+      // Stop everything multiple times
+      for (let i = 0; i < 5; i++) {
+        InCallManager.stopRingtone();
+        InCallManager.stopRingback();
+        InCallManager.stop();
+        await this._delay(10);
+      }
+      
+      // Force speaker off
+      InCallManager.setForceSpeakerphoneOn(false);
+      
+      // Complete stop
+      InCallManager.stop();
+      await this._delay(100);
+      
+      // Restart for next iteration
+      if (reset < 2) {
+        InCallManager.start({ media: 'audio', auto: false });
+        await this._delay(50);
+      }
+    }
+    
+    console.log('☢️ Nuclear stop complete - all audio forcefully terminated');
+  }
+
+  /**
+   * HARD STOP - Aggressive ringtone stopping for critical situations
+   * This method performs multiple stop attempts with increased intensity
+   */
+  async hardStopRingtone() {
+    console.log('🚨 HARD STOP: Aggressively stopping all ringtones');
+    
+    // Mark ringtone as inactive immediately
+    this.ringtoneActive = false;
+    this.lastRingtoneAction = 'hard_stop';
+    
+    // Clear all timers immediately
+    if (this.ringtoneTimer) {
+      clearTimeout(this.ringtoneTimer);
+      this.ringtoneTimer = null;
+    }
+    if (this.speakerCheckTimer) {
+      clearInterval(this.speakerCheckTimer);
+      this.speakerCheckTimer = null;
+    }
+    
+    // Perform aggressive stop sequence
+    for (let attempt = 0; attempt < 10; attempt++) {
+      console.log(`🔨 Hard stop attempt ${attempt + 1}/10`);
+      
+      // Stop all possible audio sources
+      InCallManager.stopRingtone();
+      InCallManager.stopRingback();
+      
+      // Short delay between attempts
+      await this._delay(50);
+    }
+    
+    // Final cleanup
+    InCallManager.stopRingtone();
+    InCallManager.stopRingback();
+    
+    console.log('✅ Hard stop complete');
+  }
+
+  /**
    * Start in-call audio session
    */
   async _startCallAudio(isVideo = false) {
@@ -451,6 +542,7 @@ export const CallProvider = ({ children }) => {
   const navigationRef = useRef(null);
   const callTimeoutRef = useRef(null);
   const audioManager = useRef(new AudioSessionManager());
+  const hardStopTimeoutRef = useRef(null);
 
   // ============ WEBRTC SERVICE INITIALIZATION ============
   useEffect(() => {
@@ -505,6 +597,16 @@ export const CallProvider = ({ children }) => {
         console.log('✅ Call accepted, transitioning to connecting state');
         // Transition through CONNECTING state to ensure ringtone stops
         await audioManager.current.transitionTo(AudioState.CONNECTING);
+        
+        // CRITICAL: Schedule hard stop after 500ms
+        if (hardStopTimeoutRef.current) {
+          clearTimeout(hardStopTimeoutRef.current);
+        }
+        hardStopTimeoutRef.current = setTimeout(async () => {
+          console.log('⏰ Executing scheduled hard stop after call acceptance');
+          await audioManager.current.hardStopRingtone();
+          hardStopTimeoutRef.current = null;
+        }, 500);
         break;
         
       case 'answering':
@@ -533,6 +635,12 @@ export const CallProvider = ({ children }) => {
           // Properly transition to in-call audio state
           const isVideo = currentCall?.callType === 'video';
           await audioManager.current.transitionTo(AudioState.IN_CALL, { isVideo });
+          
+          // CRITICAL: Perform another hard stop after connection is established
+          setTimeout(async () => {
+            console.log('🔨 Performing post-connection hard stop');
+            await audioManager.current.hardStopRingtone();
+          }, 500);
         }
         break;
     }
@@ -540,6 +648,12 @@ export const CallProvider = ({ children }) => {
 
   const handleWebRTCError = async (error) => {
     console.error('❌ WebRTC error:', error);
+    
+    // Clear any hard stop timeouts
+    if (hardStopTimeoutRef.current) {
+      clearTimeout(hardStopTimeoutRef.current);
+      hardStopTimeoutRef.current = null;
+    }
     
     // Ensure audio is cleaned up on error
     await audioManager.current.transitionTo(AudioState.IDLE);
@@ -656,6 +770,16 @@ export const CallProvider = ({ children }) => {
       // This ensures ringtone stops BEFORE any other operations
       await audioManager.current.transitionTo(AudioState.CONNECTING);
       
+      // CRITICAL: Schedule hard stop after 500ms
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
+      }
+      hardStopTimeoutRef.current = setTimeout(async () => {
+        console.log('⏰ Executing scheduled hard stop after answering call');
+        await audioManager.current.hardStopRingtone();
+        hardStopTimeoutRef.current = null;
+      }, 500);
+      
       // Validate incoming call
       if (!incomingCall || incomingCall.callId !== callId) {
         console.error('❌ No matching incoming call found');
@@ -712,12 +836,25 @@ export const CallProvider = ({ children }) => {
           if (audioManager.current.currentState === AudioState.CONNECTING) {
             const isVideo = enhancedCallData.callType === 'video';
             await audioManager.current.transitionTo(AudioState.IN_CALL, { isVideo });
+            
+            // ADDITIONAL HARD STOP after transitioning to IN_CALL
+            setTimeout(async () => {
+              console.log('🔨 Final hard stop after IN_CALL transition');
+              await audioManager.current.hardStopRingtone();
+            }, 500);
           }
         }, 2000);
         
         return true;
       } catch (webrtcError) {
         console.error('❌ WebRTC call acceptance failed:', webrtcError);
+        
+        // Clear hard stop timeout on error
+        if (hardStopTimeoutRef.current) {
+          clearTimeout(hardStopTimeoutRef.current);
+          hardStopTimeoutRef.current = null;
+        }
+        
         await audioManager.current.transitionTo(AudioState.IDLE);
         setShowIncomingCallModal(false);
         setIncomingCall(null);
@@ -726,6 +863,13 @@ export const CallProvider = ({ children }) => {
     } catch (error) {
       console.error('❌ Answer call error:', error);
       Alert.alert('Error', 'Failed to accept call');
+      
+      // Clear hard stop timeout on error
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
+        hardStopTimeoutRef.current = null;
+      }
+      
       await audioManager.current.transitionTo(AudioState.IDLE);
       setShowIncomingCallModal(false);
       setIncomingCall(null);
@@ -739,6 +883,12 @@ export const CallProvider = ({ children }) => {
   const rejectCall = async (callId) => {
     try {
       console.log('📞 Rejecting call:', callId);
+      
+      // Clear any hard stop timeouts
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
+        hardStopTimeoutRef.current = null;
+      }
       
       // Stop ringtone immediately
       await audioManager.current.transitionTo(AudioState.IDLE);
@@ -764,6 +914,12 @@ export const CallProvider = ({ children }) => {
   const endCall = async (callId, duration = 0, reason = 'user_end') => {
     try {
       console.log('📞 Ending call:', { callId, duration, reason });
+      
+      // Clear any hard stop timeouts
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
+        hardStopTimeoutRef.current = null;
+      }
       
       // Transition audio to ending state
       await audioManager.current.transitionTo(AudioState.ENDING);
@@ -802,16 +958,33 @@ export const CallProvider = ({ children }) => {
   useEffect(() => {
     if (!socket || !user) return;
 
-    const handleCallAccepted = (data) => {
+    const handleCallAccepted = async (data) => {
       console.log('📞 Call accepted (socket):', data);
       if (callTimeoutRef.current) {
         clearTimeout(callTimeoutRef.current);
         callTimeoutRef.current = null;
       }
+      
+      // CRITICAL: Schedule hard stop after outgoing call is accepted
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
+      }
+      hardStopTimeoutRef.current = setTimeout(async () => {
+        console.log('⏰ Executing scheduled hard stop after outgoing call acceptance');
+        await audioManager.current.hardStopRingtone();
+        hardStopTimeoutRef.current = null;
+      }, 500);
     };
 
     const handleCallDeclined = async (data) => {
       console.log('📞 Call declined (socket):', data);
+      
+      // Clear any hard stop timeouts
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
+        hardStopTimeoutRef.current = null;
+      }
+      
       await audioManager.current.transitionTo(AudioState.IDLE);
       Alert.alert('Call Declined', 'The user declined your call.');
       endCall(data.callId, 0, 'declined');
@@ -819,6 +992,13 @@ export const CallProvider = ({ children }) => {
 
     const handleCallEnded = async (data) => {
       console.log('📞 Call ended (socket):', data);
+      
+      // Clear any hard stop timeouts
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
+        hardStopTimeoutRef.current = null;
+      }
+      
       await audioManager.current.transitionTo(AudioState.ENDING);
       endCall(data.callId, data.duration || 0, 'remote_end');
     };
@@ -834,6 +1014,10 @@ export const CallProvider = ({ children }) => {
       
       if (callTimeoutRef.current) {
         clearTimeout(callTimeoutRef.current);
+      }
+      
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
       }
     };
   }, [socket, user, isInCall]);
@@ -874,6 +1058,11 @@ export const CallProvider = ({ children }) => {
   // ============ CLEANUP ON UNMOUNT ============
   useEffect(() => {
     return () => {
+      // Clear any hard stop timeouts
+      if (hardStopTimeoutRef.current) {
+        clearTimeout(hardStopTimeoutRef.current);
+      }
+      
       // Ensure audio is cleaned up when component unmounts
       audioManager.current.forceStopAll();
     };
@@ -902,6 +1091,7 @@ export const CallProvider = ({ children }) => {
         `Ringtone Active: ${audioDebug.ringtoneActive}\n` +
         `Ringtone Starts: ${audioDebug.ringtoneStartCount}\n` +
         `Ringtone Stops: ${audioDebug.ringtoneStopCount}\n` +
+        `Last Action: ${audioDebug.lastRingtoneAction}\n` +
         `Local Stream: ${callState.hasLocalStream}\n` +
         `Remote Stream: ${callState.hasRemoteStream}`,
         [{ text: 'OK' }]
@@ -937,6 +1127,11 @@ export const CallProvider = ({ children }) => {
     if (callTimeoutRef.current) {
       clearTimeout(callTimeoutRef.current);
       callTimeoutRef.current = null;
+    }
+    
+    if (hardStopTimeoutRef.current) {
+      clearTimeout(hardStopTimeoutRef.current);
+      hardStopTimeoutRef.current = null;
     }
     
     await audioManager.current.forceStopAll();
