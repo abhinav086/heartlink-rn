@@ -1,4 +1,5 @@
 // src/screens/tabs/ChatUsers.js - COMPLETE VERSION WITH WAVFORM AUDIO PLAYER AND VIDEO COMPRESSION
+// AND WITH CALL INITIATION MESSAGE FEATURE
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
@@ -53,9 +54,7 @@ try {
 } catch (e) {
   console.log('DocumentPicker not installed');
 }
-
 const { width, height } = Dimensions.get('window');
-
 const ChatDetailScreen = () => {
   // Chat state
   const [messages, setMessages] = useState([]);
@@ -76,7 +75,6 @@ const ChatDetailScreen = () => {
   const [unseenCount, setUnseenCount] = useState(0);
   const [conversationFocused, setConversationFocused] = useState(false);
   const [isAudioRecording, setIsAudioRecording] = useState(false); // State for audio recording
-
   // NEW: Enhanced deletion states
   const [showMessageOptionsModal, setShowMessageOptionsModal] = useState(false);
   const [selectedMessageForOptions, setSelectedMessageForOptions] = useState(null);
@@ -85,13 +83,11 @@ const ChatDetailScreen = () => {
   const [selectedMessages, setSelectedMessages] = useState(new Set());
   const [isSelectionMode, setIsSelectionMode] = useState(false);
   const [bulkDeletingMessages, setBulkDeletingMessages] = useState(false);
-
   // WebRTC Call States
   const [incomingCall, setIncomingCall] = useState(null);
   const [isCallActive, setIsCallActive] = useState(false);
   const [callState, setCallState] = useState('idle');
   const [isInitiatingCall, setIsInitiatingCall] = useState(false);
-
   // ADDED FOR AUDIO PLAYBACK: State variables to manage audio playback
   const [currentlyPlaying, setCurrentlyPlaying] = useState(null); // Tracks the ID of the message being played
   const [paused, setPaused] = useState(true); // Controls the play/pause state for the <Video> component
@@ -100,7 +96,6 @@ const ChatDetailScreen = () => {
   const [playingMessageCurrentTime, setPlayingMessageCurrentTime] = useState(0);
   // ADDED: State to store local URIs for video previews
   const [videoPreviews, setVideoPreviews] = useState({});
-
   const { user: currentUser, token } = useAuth();
   const navigation = useNavigation();
   const route = useRoute();
@@ -108,9 +103,7 @@ const ChatDetailScreen = () => {
   const { socket } = useSocket();
   const appStateSubscriptionRef = useRef(null);
   const markAsReadTimeoutRef = useRef(null);
-
   const { conversationId, receiverId, receiverName, receiverOnline } = route.params;
-
   // ===== START: NEW UTILITY FUNCTION AND EFFECT =====
   const handleConnectionIssues = useCallback(() => {
     if (!socket || !socket.connected) {
@@ -122,7 +115,6 @@ const ChatDetailScreen = () => {
     }
     return true;
   }, [socket]);
-
   useEffect(() => {
     const connectionCheckInterval = setInterval(() => {
       if (!handleConnectionIssues() && socket) {
@@ -134,11 +126,9 @@ const ChatDetailScreen = () => {
         }, 2000);
       }
     }, 10000);
-
     return () => clearInterval(connectionCheckInterval);
   }, [socket, conversationId, handleConnectionIssues]);
   // ===== END: NEW UTILITY FUNCTION AND EFFECT =====
-
   // ADDED: Function to handle video preview generation/fetching
   const handleVideoPreview = async (message) => {
     // Only process video messages that don't already have a local preview and have a remote URL
@@ -152,7 +142,6 @@ const ChatDetailScreen = () => {
         // Create a unique local filename for the cached video
         const localFileName = `${message._id}_preview.mp4`;
         const localFilePath = `${RNFS.CachesDirectoryPath}/${localFileName}`;
-
         // Check if the file already exists locally (e.g., from a previous render)
         const exists = await RNFS.exists(localFilePath);
         if (exists) {
@@ -160,7 +149,6 @@ const ChatDetailScreen = () => {
           setVideoPreviews(prev => ({ ...prev, [message.fileUrl]: `file://${localFilePath}` }));
           return;
         }
-
         // If not, download the video file (or at least the beginning part)
         // Note: react-native-fs download might download the whole file.
         // For true thumbnail generation, a native module is usually better.
@@ -172,7 +160,6 @@ const ChatDetailScreen = () => {
           discretionary: true, // iOS background download hint
           cacheable: true, // iOS cache hint
         });
-
         const downloadResult = await download.promise;
         if (downloadResult.statusCode === 200) {
           console.log(`✅ Video downloaded for preview: ${message._id}`);
@@ -190,7 +177,6 @@ const ChatDetailScreen = () => {
       }
     }
   };
-
   // ADDED FOR AUDIO PLAYBACK: Function to handle playing/pausing audio messages
   const handleAudioPlayPause = (messageId, fileUrl) => {
     if (currentlyPlaying === messageId) {
@@ -204,14 +190,12 @@ const ChatDetailScreen = () => {
       setPlayingMessageCurrentTime(0); // Reset time for new audio
     }
   };
-
   const onPlaybackEnd = () => {
     setPaused(true);
     setCurrentlyPlaying(null);
     setAudioMessageUrl(null);
     setPlayingMessageCurrentTime(0);
   };
-
   // ADDED: Function to get current playback time for a message
   const getCurrentTimeForMessage = (messageId) => {
     if (currentlyPlaying === messageId) {
@@ -219,7 +203,6 @@ const ChatDetailScreen = () => {
     }
     return 0;
   };
-
   const handleAudioRecordingComplete = async (audioFile, duration = null) => {
     console.log('🎵 Audio recorded:', audioFile);
     setIsAudioRecording(false);
@@ -237,7 +220,6 @@ const ChatDetailScreen = () => {
       setUploadingFile(false);
     }
   };
-
   // Initialize WebRTC Service
   useEffect(() => {
     const initializeWebRTC = async () => {
@@ -246,7 +228,6 @@ const ChatDetailScreen = () => {
         if (!enhancedGlobalWebRTCService.isReady() && token) {
           await enhancedGlobalWebRTCService.initialize(token);
         }
-
         // Set screen-specific callbacks
         enhancedGlobalWebRTCService.setScreenCallbacks({
           onLocalStream: handleLocalStream,
@@ -255,15 +236,12 @@ const ChatDetailScreen = () => {
           onError: handleWebRTCError,
           onIncomingCall: handleIncomingCall
         });
-
         console.log('✅ WebRTC screen callbacks set for ChatDetailScreen');
       } catch (error) {
         console.error('❌ Failed to initialize WebRTC in ChatDetailScreen:', error);
       }
     };
-
     initializeWebRTC();
-
     return () => {
       // FIXED: Clear states on unmount
       setCallState('idle');
@@ -273,7 +251,6 @@ const ChatDetailScreen = () => {
       enhancedGlobalWebRTCService.clearScreenCallbacks();
     };
   }, [token]);
-
   // FIXED: Add focus effect to reset states when returning from CallScreen
   useFocusEffect(
     React.useCallback(() => {
@@ -292,7 +269,6 @@ const ChatDetailScreen = () => {
       };
     }, [])
   );
-
   // FIXED: Add periodic state check to prevent stuck states
   useEffect(() => {
     const stateCheckInterval = setInterval(() => {
@@ -305,15 +281,12 @@ const ChatDetailScreen = () => {
         setIsInitiatingCall(false);
       }
     }, 2000);
-
     return () => clearInterval(stateCheckInterval);
   }, [isInitiatingCall, callState]);
-
   // WebRTC Event Handlers
   const handleLocalStream = (stream) => {
     console.log('📹 Local stream received in ChatDetailScreen');
   };
-
   const handleRemoteStream = (stream) => {
     console.log('📺 Remote stream received in ChatDetailScreen');
     if (callState !== 'connected') {
@@ -321,11 +294,9 @@ const ChatDetailScreen = () => {
       setIsCallActive(true);
     }
   };
-
   // REPLACED: handleCallStateChange with more robust state resetting
   const handleCallStateChange = (type, data) => {
     console.log('🔄 Call state change in ChatDetailScreen:', type, data);
-
     switch (type) {
       case 'accepted':
         setCallState('connecting');
@@ -389,7 +360,6 @@ const ChatDetailScreen = () => {
         break;
     }
   };
-
   // REPLACED: handleWebRTCError with more robust state resetting
   const handleWebRTCError = (error) => {
     console.error('❌ WebRTC error in ChatDetailScreen:', error);
@@ -400,32 +370,35 @@ const ChatDetailScreen = () => {
     setIncomingCall(null);
     Alert.alert('Call Error', error.message || 'An error occurred during the call');
   };
-
   const handleIncomingCall = (callData) => {
     console.log('📞 Incoming call received in ChatDetailScreen:', callData);
     setIncomingCall(callData);
     setCallState('incoming');
   };
-
   // Call Functions
   const initiateAudioCall = async () => {
     if (isCallActive || isInitiatingCall) {
       Alert.alert('Error', 'You are already in a call or initiating one');
       return;
     }
-
     if (!enhancedGlobalWebRTCService.isReady()) {
       Alert.alert('Error', 'WebRTC service not ready. Please try again.');
       return;
     }
-
     try {
       setIsInitiatingCall(true);
       setCallState('ringing');
       console.log('🎵 Initiating audio call to:', receiverId);
 
-      const result = await enhancedGlobalWebRTCService.initiateCall(receiverId, 'audio');
+      // --- NEW: Send a text message indicating the call initiation ---
+      // Customize the message text as needed
+      const callMessageText = `📞 Audio call initiated to ${receiverName || 'user'}...`;
+      // Call sendMessage with 'text' type and the message content
+      // We don't await it to avoid blocking the call initiation
+      sendMessage('text', null, null, callMessageText);
+      // --- END NEW ---
 
+      const result = await enhancedGlobalWebRTCService.initiateCall(receiverId, 'audio');
       if (result) {
         console.log('✅ Audio call initiated successfully');
         navigation.navigate('CallScreen', {
@@ -449,25 +422,29 @@ const ChatDetailScreen = () => {
       Alert.alert('Call Failed', 'Unable to start audio call. Please try again.');
     }
   };
-
   const initiateVideoCall = async () => {
     if (isCallActive || isInitiatingCall) {
       Alert.alert('Error', 'You are already in a call or initiating one');
       return;
     }
-
     if (!enhancedGlobalWebRTCService.isReady()) {
       Alert.alert('Error', 'WebRTC service not ready. Please try again.');
       return;
     }
-
     try {
       setIsInitiatingCall(true);
       setCallState('ringing');
       console.log('🎥 Initiating video call to:', receiverId);
 
-      const result = await enhancedGlobalWebRTCService.initiateCall(receiverId, 'video');
+      // --- NEW: Send a text message indicating the call initiation ---
+      // Customize the message text as needed
+      const callMessageText = `📹 Video call initiated to ${receiverName || 'user'}...`;
+      // Call sendMessage with 'text' type and the message content
+      // We don't await it to avoid blocking the call initiation
+      sendMessage('text', null, null, callMessageText);
+      // --- END NEW ---
 
+      const result = await enhancedGlobalWebRTCService.initiateCall(receiverId, 'video');
       if (result) {
         console.log('✅ Video call initiated successfully');
         navigation.navigate('CallScreen', {
@@ -491,15 +468,12 @@ const ChatDetailScreen = () => {
       Alert.alert('Call Failed', 'Unable to start video call. Please try again.');
     }
   };
-
   const acceptIncomingCall = async () => {
     if (!incomingCall) return;
-
     try {
       console.log('✅ Accepting incoming call');
       setCallState('connecting');
       await enhancedGlobalWebRTCService.acceptCall();
-
       navigation.navigate('CallScreen', {
         callType: incomingCall.callType,
         isIncoming: true,
@@ -508,7 +482,6 @@ const ChatDetailScreen = () => {
         authToken: token,
         webrtcService: enhancedGlobalWebRTCService
       });
-
       setIncomingCall(null);
       setIsCallActive(true);
     } catch (error) {
@@ -518,10 +491,8 @@ const ChatDetailScreen = () => {
       setIncomingCall(null);
     }
   };
-
   const declineIncomingCall = async () => {
     if (!incomingCall) return;
-
     try {
       console.log('❌ Declining incoming call');
       await enhancedGlobalWebRTCService.declineCall();
@@ -533,7 +504,6 @@ const ChatDetailScreen = () => {
       setCallState('idle');
     }
   };
-
   // ===== NEW: MESSAGE DELETION FUNCTIONS =====
   // Clear all messages in conversation for current user
   const clearAllMessagesForMe = async () => {
@@ -558,7 +528,6 @@ const ChatDetailScreen = () => {
                   },
                 }
               );
-
               const data = await response.json();
               if (response.ok && data.success) {
                 // Clear local messages immediately for better UX
@@ -579,7 +548,6 @@ const ChatDetailScreen = () => {
       ]
     );
   };
-
   // Hide single message for current user
   const hideMessageForMe = async (messageId) => {
     try {
@@ -593,7 +561,6 @@ const ChatDetailScreen = () => {
           },
         }
       );
-
       const data = await response.json();
       if (response.ok && data.success) {
         // Remove message from local state immediately
@@ -608,11 +575,9 @@ const ChatDetailScreen = () => {
       Alert.alert('Error', 'Failed to hide message');
     }
   };
-
   // Bulk hide selected messages
   const bulkHideSelectedMessages = async () => {
     if (selectedMessages.size === 0) return;
-
     const messageIds = Array.from(selectedMessages);
     Alert.alert(
       'Delete Messages',
@@ -636,7 +601,6 @@ const ChatDetailScreen = () => {
                   body: JSON.stringify({ messageIds }),
                 }
               );
-
               const data = await response.json();
               if (response.ok && data.success) {
                 // Remove messages from local state immediately
@@ -658,7 +622,6 @@ const ChatDetailScreen = () => {
       ]
     );
   };
-
   // Toggle message selection
   const toggleMessageSelection = (messageId) => {
     setSelectedMessages(prev => {
@@ -671,20 +634,17 @@ const ChatDetailScreen = () => {
       return newSet;
     });
   };
-
   // Enter/exit selection mode
   const toggleSelectionMode = () => {
     setIsSelectionMode(!isSelectionMode);
     setSelectedMessages(new Set());
   };
-
   // Show message options
   const showMessageOptions = (message) => {
     if (isSelectionMode) {
       toggleMessageSelection(message._id);
       return;
     }
-
     setSelectedMessageForOptions(message);
     if (Platform.OS === 'ios') {
       const options = ['Cancel'];
@@ -693,7 +653,6 @@ const ChatDetailScreen = () => {
       }
       options.unshift('Delete for Me');
       options.unshift('Select Messages');
-
       ActionSheetIOS.showActionSheetWithOptions(
         {
           options: options,
@@ -721,7 +680,6 @@ const ChatDetailScreen = () => {
       setShowMessageOptionsModal(true);
     }
   };
-
   // Show conversation options
   const showConversationOptions = () => {
     if (Platform.OS === 'ios') {
@@ -744,19 +702,15 @@ const ChatDetailScreen = () => {
     }
   };
   // ===== END: NEW MESSAGE DELETION FUNCTIONS =====
-
   // Get profile image URL
   const getProfileImageUrl = (user) => {
     if (!user) return null;
-
     if (user.photoUrl && typeof user.photoUrl === 'string') {
       return user.photoUrl;
     }
-
     if (user.profilePicture && typeof user.profilePicture === 'string') {
       return user.profilePicture;
     }
-
     if (user.profilePic && typeof user.profilePic === 'string') {
       if (user.profilePic.startsWith('http://') || user.profilePic.startsWith('https://')) {
         return user.profilePic;
@@ -764,7 +718,6 @@ const ChatDetailScreen = () => {
       const cleanPath = user.profilePic.startsWith('/') ? user.profilePic.substring(1) : user.profilePic;
       return `${BASE_URL}/${cleanPath}`;
     }
-
     if (user.avatar && typeof user.avatar === 'string') {
       if (user.avatar.startsWith('http://') || user.avatar.startsWith('https://')) {
         return user.avatar;
@@ -772,14 +725,11 @@ const ChatDetailScreen = () => {
       const cleanPath = user.avatar.startsWith('/') ? user.avatar.substring(1) : user.avatar;
       return `${BASE_URL}/${cleanPath}`;
     }
-
     return null;
   };
-
   // Get message status icon
   const getStatusIcon = (message) => {
     if (message.sender._id !== currentUser?._id) return null;
-
     switch (message.status) {
       case 'sent':
         return <Text style={[styles.statusIcon, { color: '#666' }]}>✓</Text>;
@@ -791,22 +741,18 @@ const ChatDetailScreen = () => {
         return null;
     }
   };
-
   // Enhanced markMessagesAsRead function with socket emission
   const markMessagesAsRead = async (specificMessageIds = null) => {
     try {
       if (!token || !conversationId) return;
-
       const payload = { conversationId };
       if (specificMessageIds && specificMessageIds.length > 0) {
         payload.messageIds = specificMessageIds;
       }
-
       // Get unread message IDs before marking as read
       const unreadMessageIds = messages
         .filter(msg => msg.sender._id !== currentUser._id && msg.status !== 'read')
         .map(msg => msg._id);
-
       const response = await fetch(`${BASE_URL}/api/v1/chat/messages/bulk-seen`, {
         method: 'POST',
         headers: {
@@ -815,7 +761,6 @@ const ChatDetailScreen = () => {
         },
         body: JSON.stringify(payload),
       });
-
       const data = await response.json();
       if (response.ok && data.success) {
         // Update local state
@@ -825,9 +770,7 @@ const ChatDetailScreen = () => {
           }
           return msg;
         }));
-
         setUnseenCount(0);
-
         // IMPORTANT: Emit socket event to notify sender about read status
         if (socket && socket.connected && unreadMessageIds.length > 0) {
           socket.emit('messagesRead', {
@@ -844,13 +787,11 @@ const ChatDetailScreen = () => {
       console.error('❌ Error marking messages as read:', error);
     }
   };
-
   // Handle conversation focus/blur
   const handleConversationFocus = () => {
     if (!conversationFocused && socket) {
       socket.emit('conversationFocused', { conversationId });
       setConversationFocused(true);
-
       if (markAsReadTimeoutRef.current) {
         clearTimeout(markAsReadTimeoutRef.current);
       }
@@ -859,7 +800,6 @@ const ChatDetailScreen = () => {
       }, 1000);
     }
   };
-
   const handleConversationBlur = () => {
     if (conversationFocused && socket) {
       socket.emit('conversationBlurred', {
@@ -867,13 +807,11 @@ const ChatDetailScreen = () => {
         markRead: true
       });
       setConversationFocused(false);
-
       if (markAsReadTimeoutRef.current) {
         clearTimeout(markAsReadTimeoutRef.current);
       }
     }
   };
-
   // Handle app state changes
   useEffect(() => {
     const handleAppStateChange = (nextAppState) => {
@@ -885,10 +823,8 @@ const ChatDetailScreen = () => {
         handleConversationBlur();
       }
     };
-
     appStateSubscriptionRef.current = AppState.addEventListener('change', handleAppStateChange);
     updateOnlineStatus(true);
-
     return () => {
       if (appStateSubscriptionRef.current) {
         appStateSubscriptionRef.current.remove();
@@ -897,16 +833,12 @@ const ChatDetailScreen = () => {
       handleConversationBlur();
     };
   }, []);
-
   // Enhanced Socket listeners with better error handling and reconnection
   useEffect(() => {
     if (!socket || !conversationId) return;
-
     console.log('🔌 Setting up socket listeners for conversation:', conversationId);
-
     // Join conversation room immediately
     socket.emit('joinConversation', { conversationId });
-
     const handleUserOnline = (data) => {
       console.log('👤 User came online:', data);
       setOnlineUsers(prev => new Set([...prev, data.userId]));
@@ -914,7 +846,6 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(true);
       }
     };
-
     const handleUserOffline = (data) => {
       console.log('👤 User went offline:', data);
       setOnlineUsers(prev => {
@@ -926,7 +857,6 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(false);
       }
     };
-
     const handleOnlineUsersList = (data) => {
       console.log('👥 Received online users list:', data);
       if (data && Array.isArray(data)) {
@@ -936,7 +866,6 @@ const ChatDetailScreen = () => {
         setReceiverOnlineStatus(isReceiverOnline);
       }
     };
-
     // Enhanced message handler with better error handling
     const handleNewMessage = (message) => {
       console.log('📨 New message received:', {
@@ -947,13 +876,11 @@ const ChatDetailScreen = () => {
         content: message.content?.substring(0, 50) + '...',
         messageType: message.messageType
       });
-
       // Verify this message belongs to current conversation
       if (message.conversationId !== conversationId) {
         console.log('📨 Message not for current conversation, ignoring');
         return;
       }
-
       // Update messages state
       setMessages(prev => {
         // Check if message already exists to prevent duplicates
@@ -962,18 +889,14 @@ const ChatDetailScreen = () => {
           console.log('📨 Message already exists, skipping duplicate');
           return prev;
         }
-
         console.log('📨 Adding new message to state');
         const newMessages = [...prev, message];
-
         // Scroll to bottom after state update
         setTimeout(() => {
           flatListRef.current?.scrollToEnd({ animated: true });
         }, 100);
-
         return newMessages;
       });
-
       // Auto-mark as read if conversation is focused and message is from other user
       if (message.sender._id !== currentUser._id && conversationFocused) {
         setTimeout(() => {
@@ -983,11 +906,9 @@ const ChatDetailScreen = () => {
         setUnseenCount(prev => prev + 1);
       }
     };
-
     // Message status updates - FIXED VERSION
     const handleMessageStatusUpdate = (data) => {
       console.log('📊 Message status update received:', data);
-
       // Update messages for both single message and bulk updates
       setMessages(prev => prev.map(msg => {
         // Check if this is a message sent by the current user
@@ -1013,11 +934,9 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
-
     // Bulk message status updates - FIXED VERSION
     const handleBulkMessageStatusUpdate = (data) => {
       console.log('📊 Bulk message status update received:', data);
-
       setMessages(prev => prev.map(msg => {
         // Update all messages sent by current user that are now read
         if (msg.sender._id === currentUser._id &&
@@ -1045,11 +964,9 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
-
     // Add this new handler for real-time read receipts
     const handleMessageRead = (data) => {
       console.log('👁️ Message read event received:', data);
-
       setMessages(prev => prev.map(msg => {
         // Update message if it matches the read message ID or is part of bulk read
         if (msg.sender._id === currentUser._id) {
@@ -1062,7 +979,6 @@ const ChatDetailScreen = () => {
         return msg;
       }));
     };
-
     // NEW: Handle conversation cleared event
     const handleConversationCleared = (data) => {
       console.log('🗑️ Conversation cleared event received:', data);
@@ -1070,7 +986,6 @@ const ChatDetailScreen = () => {
         setMessages([]);
       }
     };
-
     // NEW: Handle messages hidden event
     const handleMessagesHidden = (data) => {
       console.log('🗑️ Messages hidden event received:', data);
@@ -1078,7 +993,6 @@ const ChatDetailScreen = () => {
         setMessages(prev => prev.filter(msg => !data.messageIds.includes(msg._id)));
       }
     };
-
     // NEW: Handle message restored event
     const handleMessageRestored = (data) => {
       console.log('🔄 Message restored event received:', data);
@@ -1087,13 +1001,11 @@ const ChatDetailScreen = () => {
         fetchMessages(1, false);
       }
     };
-
     // Conversation joined confirmation
     const handleJoinedConversation = (data) => {
       console.log('✅ Successfully joined conversation:', data);
       handleConversationFocus();
     };
-
     // Connection status handlers
     const handleConnect = () => {
       console.log('🔌 Socket connected, rejoining conversation');
@@ -1101,18 +1013,15 @@ const ChatDetailScreen = () => {
         socket.emit('joinConversation', { conversationId });
       }, 1000);
     };
-
     const handleDisconnect = () => {
       console.log('🔌 Socket disconnected');
     };
-
     const handleReconnect = () => {
       console.log('🔌 Socket reconnected, rejoining conversation');
       setTimeout(() => {
         socket.emit('joinConversation', { conversationId });
       }, 1000);
     };
-
     // Register all event listeners
     socket.on('connect', handleConnect);
     socket.on('disconnect', handleDisconnect);
@@ -1126,15 +1035,12 @@ const ChatDetailScreen = () => {
     socket.on('messageRead', handleMessageRead);
     socket.on('messagesRead', handleMessageRead);
     socket.on('joinedConversation', handleJoinedConversation);
-
     // NEW: Register deletion event listeners
     socket.on('conversationCleared', handleConversationCleared);
     socket.on('messagesHidden', handleMessagesHidden);
     socket.on('messageRestored', handleMessageRestored);
-
     // Request current online users
     socket.emit('getAllOnlineUsers');
-
     // Cleanup function
     return () => {
       console.log('🧹 Cleaning up socket listeners for conversation:', conversationId);
@@ -1150,17 +1056,14 @@ const ChatDetailScreen = () => {
       socket.off('messageRead', handleMessageRead);
       socket.off('messagesRead', handleMessageRead);
       socket.off('joinedConversation', handleJoinedConversation);
-
       // NEW: Cleanup deletion listeners
       socket.off('conversationCleared', handleConversationCleared);
       socket.off('messagesHidden', handleMessagesHidden);
       socket.off('messageRestored', handleMessageRestored);
-
       // Leave conversation room
       socket.emit('leaveConversation', { conversationId });
     };
   }, [socket, conversationId, receiverId, currentUser, conversationFocused]);
-
   // Add this useEffect to handle app focus/blur for better real-time updates
   useFocusEffect(
     React.useCallback(() => {
@@ -1170,7 +1073,6 @@ const ChatDetailScreen = () => {
         socket.emit('joinConversation', { conversationId });
         handleConversationFocus();
       }
-
       return () => {
         console.log('📱 ChatDetailScreen blurred');
         if (socket && conversationId) {
@@ -1179,38 +1081,32 @@ const ChatDetailScreen = () => {
       };
     }, [socket, conversationId])
   );
-
   // Initial data loading
   useEffect(() => {
     fetchMessages();
     setReceiverOnlineStatus(receiverOnline || false);
     handleConversationFocus();
-
     return () => {
       if (markAsReadTimeoutRef.current) {
         clearTimeout(markAsReadTimeoutRef.current);
       }
     };
   }, [conversationId]);
-
   // Extract receiver data from messages
   useEffect(() => {
     if (messages.length > 0 && !receiverData) {
       const firstMessage = messages[0];
       const receiver = firstMessage.sender._id === receiverId ?
         firstMessage.sender : firstMessage.receiver;
-
       if (receiver && receiver._id === receiverId) {
         setReceiverData(receiver);
       }
     }
   }, [messages, receiverId, receiverData]);
-
   // Update online status
   const updateOnlineStatus = async (isOnline) => {
     try {
       if (!token || !currentUser) return;
-
       const response = await fetch(`${BASE_URL}/api/v1/chat/user/online-status`, {
         method: 'POST',
         headers: {
@@ -1219,7 +1115,6 @@ const ChatDetailScreen = () => {
         },
         body: JSON.stringify({ isOnline }),
       });
-
       if (response.ok && socket) {
         if (isOnline) {
           socket.emit('user-online', { userId: currentUser._id });
@@ -1231,12 +1126,10 @@ const ChatDetailScreen = () => {
       console.error('❌ Error updating online status:', error);
     }
   };
-
   // Fetch messages
   const fetchMessages = async (pageNum = 1, prepend = false) => {
     try {
       if (!token) return;
-
       const response = await fetch(
         `${BASE_URL}/api/v1/chat/conversations/${conversationId}/messages?page=${pageNum}&limit=50`,
         {
@@ -1247,14 +1140,12 @@ const ChatDetailScreen = () => {
           },
         }
       );
-
       const data = await response.json();
       if (response.ok && data.success) {
         const newMessages = data.data || [];
         const sortedMessages = newMessages.sort((a, b) =>
           new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
         );
-
         if (prepend) {
           setMessages(prev => [...sortedMessages, ...prev]);
         } else {
@@ -1263,7 +1154,6 @@ const ChatDetailScreen = () => {
             flatListRef.current?.scrollToEnd({ animated: false });
           }, 100);
         }
-
         setHasMoreMessages(newMessages.length === 50);
         setPage(pageNum);
       } else {
@@ -1276,24 +1166,23 @@ const ChatDetailScreen = () => {
       setLoading(false);
     }
   };
-
-  // STEP 1: Replace the sendMessage function in ChatDetailScreen
-  const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null) => {
-    if (messageType === 'text' && (!newMessage.trim() || sending)) return;
+  // STEP 1: Updated sendMessage function signature to accept contentOverride
+  const sendMessage = async (messageType = 'text', fileData = null, audioDuration = null, contentOverride = null) => {
+    if (messageType === 'text' && (!newMessage.trim() || sending) && !contentOverride) return; // Allow override without newMessage
     if (messageType !== 'text' && !fileData) return;
-
-    const messageText = messageType === 'text' ? newMessage.trim() : newMessage;
+    // Use the override if provided, otherwise use the state/input
+    const messageText = contentOverride !== null ? contentOverride : (messageType === 'text' ? newMessage.trim() : newMessage);
     const tempId = `temp_${Date.now()}_${Math.random()}`;
-
-    setNewMessage('');
-
+    // Clear input only if it's a regular text message and no override is used
+    if (messageType === 'text' && contentOverride === null) {
+       setNewMessage('');
+    }
     // Set loading states based on message type
     if (messageType === 'text') {
       setSending(true);
     } else {
       setUploadingFile(true);
     }
-
     try {
       if (messageType === 'text' && socket && socket.connected) {
         // Handle text messages via socket (existing logic)
@@ -1305,14 +1194,11 @@ const ChatDetailScreen = () => {
           messageType: 'text',
           tempId
         };
-
         socket.emit('sendMessage', messageData);
-
         const confirmationTimeout = setTimeout(() => {
           console.log('⚠️ Socket message timeout, falling back to HTTP');
           sendViaHTTP();
         }, 5000);
-
         const handleMessageSent = (data) => {
           if (data.tempId === tempId) {
             clearTimeout(confirmationTimeout);
@@ -1322,7 +1208,6 @@ const ChatDetailScreen = () => {
             console.log('✅ Message sent via socket successfully');
           }
         };
-
         const handleMessageError = (error) => {
           if (error.tempId === tempId) {
             clearTimeout(confirmationTimeout);
@@ -1332,14 +1217,12 @@ const ChatDetailScreen = () => {
             sendViaHTTP();
           }
         };
-
         socket.on('messageSent', handleMessageSent);
         socket.on('error', handleMessageError);
       } else {
         // Handle file messages via HTTP with immediate UI feedback
         await sendViaHTTP();
       }
-
       async function sendViaHTTP() {
         console.log('📤 Sending message via HTTP, type:', messageType);
         let requestBody;
@@ -1347,7 +1230,6 @@ const ChatDetailScreen = () => {
           'Authorization': `Bearer ${token}`,
         };
         let endpoint = `${BASE_URL}/api/v1/chat/message`;
-
         // 🔥 STEP 1A: Create optimistic message for immediate UI feedback (for file uploads)
         let optimisticMessage = null;
         if (messageType !== 'text') {
@@ -1373,16 +1255,13 @@ const ChatDetailScreen = () => {
             createdAt: new Date().toISOString(),
             isOptimistic: true // Flag to identify optimistic messages
           };
-
           // Add optimistic message to UI immediately
           setMessages(prev => [...prev, optimisticMessage]);
-
           // Scroll to bottom
           setTimeout(() => {
             flatListRef.current?.scrollToEnd({ animated: true });
           }, 100);
         }
-
         // Prepare request based on message type
         if (messageType === 'audio') {
           endpoint = `${BASE_URL}/api/v1/chat/message/voice`;
@@ -1417,18 +1296,14 @@ const ChatDetailScreen = () => {
           }
           requestBody = formData;
         }
-
         const response = await fetch(endpoint, {
           method: 'POST',
           headers,
           body: requestBody,
         });
-
         const data = await response.json();
-
         if (response.ok && data.success) {
           console.log('✅ Message sent via HTTP successfully');
-
           // 🔥 STEP 1B: Handle successful file upload
           if (messageType !== 'text' && optimisticMessage) {
             // Replace optimistic message with real message
@@ -1445,7 +1320,6 @@ const ChatDetailScreen = () => {
               }
               return msg;
             }));
-
             // 🔥 STEP 1C: Emit via socket for real-time updates to other users
             if (socket && socket.connected) {
               socket.emit('fileMessageSent', {
@@ -1457,18 +1331,17 @@ const ChatDetailScreen = () => {
           }
         } else {
           console.error('❌ HTTP message failed:', data);
-
           // 🔥 STEP 1D: Handle failed file upload
           if (messageType !== 'text' && optimisticMessage) {
             // Remove optimistic message and show error
             setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
             Alert.alert('Error', data.message || 'Failed to send message');
-            if (messageType === 'text') {
+            if (messageType === 'text' && contentOverride === null) { // Only restore if it was user input
               setNewMessage(messageText);
             }
           } else {
             Alert.alert('Error', data.message || 'Failed to send message');
-            if (messageType === 'text') {
+            if (messageType === 'text' && contentOverride === null) { // Only restore if it was user input
               setNewMessage(messageText);
             }
           }
@@ -1476,14 +1349,12 @@ const ChatDetailScreen = () => {
       }
     } catch (error) {
       console.error('❌ Error sending message:', error);
-
       // Handle error for optimistic messages
       if (messageType !== 'text') {
         setMessages(prev => prev.filter(msg => !(msg._id === tempId && msg.isOptimistic)));
       }
-
       Alert.alert('Error', 'Failed to send message');
-      if (messageType === 'text') {
+      if (messageType === 'text' && contentOverride === null) { // Only restore if it was user input
         setNewMessage(messageText);
       }
     } finally {
@@ -1494,11 +1365,9 @@ const ChatDetailScreen = () => {
       }
     }
   };
-
   // Delete message
   const deleteMessage = async (messageId) => {
     if (!messageId || deletingMessage) return;
-
     setDeletingMessage(true);
     try {
       const response = await fetch(`${BASE_URL}/api/v1/chat/message/${messageId}`, {
@@ -1508,7 +1377,6 @@ const ChatDetailScreen = () => {
           'Content-Type': 'application/json',
         },
       });
-
       const data = await response.json();
       if (response.ok && data.success) {
         setMessages(prev => prev.filter(msg => msg._id !== messageId));
@@ -1525,7 +1393,6 @@ const ChatDetailScreen = () => {
       setDeletingMessage(false);
     }
   };
-
   // Message handlers
   const handleMessageLongPress = (message) => {
     if (isSelectionMode) {
@@ -1534,17 +1401,14 @@ const ChatDetailScreen = () => {
       showMessageOptions(message);
     }
   };
-
   const cancelDelete = () => {
     setSelectedMessageForDelete(null);
   };
-
   const loadOlderMessages = () => {
     if (hasMoreMessages && !loading) {
       fetchMessages(page + 1, true);
     }
   };
-
   const handleProfilePress = () => {
     navigation.navigate('UserProfile', {
       userId: receiverId,
@@ -1552,7 +1416,6 @@ const ChatDetailScreen = () => {
       conversationId: conversationId,
     });
   };
-
   // File handling
   const handleAttachmentPress = () => {
     if (!ImagePicker && !DocumentPicker) {
@@ -1560,7 +1423,6 @@ const ChatDetailScreen = () => {
     }
     setShowAttachmentModal(true);
   };
-
   const requestCameraPermission = async () => {
     if (Platform.OS === 'android') {
       try {
@@ -1583,7 +1445,6 @@ const ChatDetailScreen = () => {
     }
     return true;
   };
-
   // ADDED: Request microphone permission for video recording
   const requestMicrophonePermission = async () => {
     if (Platform.OS === 'android') {
@@ -1607,7 +1468,6 @@ const ChatDetailScreen = () => {
     // iOS permissions are typically handled by the native picker
     return true;
   };
-
   // ADDED: Combined function to request both camera and microphone permissions
   const requestCameraAndMicrophonePermissions = async () => {
     const cameraGranted = await requestCameraPermission();
@@ -1615,33 +1475,27 @@ const ChatDetailScreen = () => {
       Alert.alert('Permission Denied', 'Camera permission is required to take photos/videos.');
       return false;
     }
-
     const micGranted = await requestMicrophonePermission();
     if (!micGranted) {
       Alert.alert('Permission Denied', 'Microphone permission is required to record videos.');
       return false;
     }
-
     return true;
   };
-
   const openCamera = async () => {
     setShowAttachmentModal(false);
-
     const options = {
       mediaType: 'photo',
       quality: 0.8,
       maxWidth: 1024,
       maxHeight: 1024,
     };
-
     // Use launchCamera from react-native-image-picker
     const { launchCamera } = require('react-native-image-picker');
     launchCamera(options, async (response) => {
       if (response.didCancel || response.errorCode || response.errorMessage) {
         return;
       }
-
       if (response.assets && response.assets[0]) {
         const asset = response.assets[0];
         const fileData = {
@@ -1649,13 +1503,11 @@ const ChatDetailScreen = () => {
           type: asset.type || 'image/jpeg',
           name: asset.fileName || `camera_photo_${Date.now()}.jpg`,
         };
-
         setUploadingFile(true);
         await sendMessage('image', fileData);
       }
     });
   };
-
   // ADDED: New function for recording video with compression
   const recordVideo = async () => {
     const hasPermissions = await requestCameraAndMicrophonePermissions(); // Request both permissions
@@ -1663,31 +1515,25 @@ const ChatDetailScreen = () => {
       // Alerts are shown inside requestCameraAndMicrophonePermissions
       return;
     }
-
     setShowAttachmentModal(false); // Close the modal
-
     const options = {
       mediaType: 'video', // Specify video
       // You can add quality, max duration settings if supported by your ImagePicker version
       // videoQuality: 'high', // Example (check ImagePicker docs)
       // durationLimit: 30, // Example: 30 seconds max (check ImagePicker docs)
     };
-
     // Use launchCamera for recording directly
     const { launchCamera } = require('react-native-image-picker');
     launchCamera(options, async (response) => {
       console.log('Video Picker Response:', response); // Log the response structure
-
       if (response.didCancel || response.errorCode || response.errorMessage) {
         console.log('Video recording cancelled or failed:', response.errorMessage || response.errorCode);
         return;
       }
-
       // Check if assets exist and get the first one (video)
       if (response.assets && response.assets.length > 0) {
         const asset = response.assets[0];
         console.log('Selected Video Asset:', asset); // Log asset details
-
         // Prepare file data similar to image capture
         // Ensure the URI, type, and name are correctly extracted
         const fileData = {
@@ -1697,9 +1543,7 @@ const ChatDetailScreen = () => {
           // Include size if available
           size: asset.fileSize,
         };
-
         setUploadingFile(true); // Show uploading indicator
-
         try {
           // Step 1: Get the actual file size using RNFS
           const cleanUri = asset.uri.replace('file://', '');
@@ -1712,14 +1556,11 @@ const ChatDetailScreen = () => {
             console.warn('Could not get file size with RNFS, proceeding without size check:', statError);
             originalSize = 0; // Or asset.fileSize if you trust it more
           }
-
           // Step 2: Check if compression is needed (e.g., larger than 5MB)
           const sizeThreshold = 5 * 1024 * 1024; // 5 MB in bytes
           let finalFileData = fileData; // Default to original
-
           if (originalSize > sizeThreshold) {
             console.log('📦 Recorded video is large, starting compression...');
-
             // Step 3: Perform Compression
             try {
               const compressionOptions = {
@@ -1735,7 +1576,6 @@ const ChatDetailScreen = () => {
                 optimizeForNetworkUse: true,
                 minimumFileSizeForCompress: 2, // Only compress if larger than 2MB
               };
-
               // FIXED: Use VideoCompressor instead of Video
               const compressedVideoUri = await VideoCompressor.compress(
                 asset.uri, // Input URI
@@ -1745,17 +1585,14 @@ const ChatDetailScreen = () => {
                   console.log('📊 Compression progress:', Math.round(progress), '%');
                 }
               );
-
               // Step 4: Get compressed file details
               const compressedFileInfo = await RNFS.stat(compressedVideoUri.replace('file://', ''));
               const compressedSize = compressedFileInfo.size;
               const ratio = ((originalSize - compressedSize) / originalSize) * 100;
-
               console.log('✅ Video compression completed!');
               console.log('📊 Original size:', formatFileSize(originalSize));
               console.log('📊 Compressed size:', formatFileSize(compressedSize));
               console.log('📊 Compression ratio:', Math.round(ratio), '%');
-
               // Step 5: Update fileData to use the compressed video
               finalFileData = {
                 ...fileData, // Keep original name, type etc. if possible, or update them
@@ -1765,7 +1602,6 @@ const ChatDetailScreen = () => {
                 // originalUri: asset.uri, // Optional: keep track of the original
                 // isCompressed: true,     // Optional: flag
               };
-
             } catch (compressionError) {
               console.error('❌ Video compression failed:', compressionError);
               // Cancel sending on compression failure
@@ -1776,10 +1612,8 @@ const ChatDetailScreen = () => {
           } else {
             console.log('✅ Recorded video is small enough, no compression needed.');
           }
-
           // Step 6: Send the (potentially compressed) video
           await sendMessage('video', finalFileData);
-
         } catch (error) {
           console.error("Error processing recorded video:", error);
           Alert.alert("Processing Error", "Failed to process the recorded video.");
@@ -1791,24 +1625,20 @@ const ChatDetailScreen = () => {
       }
     });
   };
-
   const openGallery = () => {
     setShowAttachmentModal(false);
-
     const options = {
       mediaType: 'photo',
       quality: 0.8,
       maxWidth: 1024,
       maxHeight: 1024,
     };
-
     // Use launchImageLibrary from react-native-image-picker
     const { launchImageLibrary } = require('react-native-image-picker');
     launchImageLibrary(options, (response) => {
       if (response.didCancel || response.errorCode || response.errorMessage) {
         return;
       }
-
       if (response.assets && response.assets[0]) {
         const asset = response.assets[0];
         setSelectedPreviewImage(asset);
@@ -1816,22 +1646,18 @@ const ChatDetailScreen = () => {
       }
     });
   };
-
   const openDocumentPicker = async () => {
     setShowAttachmentModal(false);
     setUploadingFile(true);
-
     try {
       const DocumentPicker = require('react-native-document-picker').default;
       const result = await DocumentPicker.pick({
         type: [DocumentPicker.types.allFiles],
         copyTo: 'cachesDirectory',
       });
-
       if (result && result[0]) {
         const file = result[0];
         let messageType = 'file';
-
         if (file.type) {
           if (file.type.startsWith('image/')) {
             messageType = 'image';
@@ -1841,13 +1667,11 @@ const ChatDetailScreen = () => {
             messageType = 'audio';
           }
         }
-
         const fileData = {
           uri: file.fileCopyUri || file.uri,
           type: file.type || 'application/octet-stream',
           name: file.name || 'document',
         };
-
         await sendMessage(messageType, fileData);
       } else {
         setUploadingFile(false);
@@ -1862,20 +1686,17 @@ const ChatDetailScreen = () => {
       setUploadingFile(false);
     }
   };
-
   const handleFileDownload = async (fileUrl, fileName, messageType) => {
     try {
       if (!fileUrl) {
         Alert.alert('Error', 'File URL not available');
         return;
       }
-
       if (messageType === 'image') {
         setSelectedPreviewImage({ uri: fileUrl, fileName });
         setShowImagePreview(true);
         return;
       }
-
       const supported = await Linking.canOpenURL(fileUrl);
       if (supported) {
         await Linking.openURL(fileUrl);
@@ -1902,23 +1723,18 @@ Would you like to open this file?`,
       Alert.alert('Error', 'Failed to open file');
     }
   };
-
   const sendSelectedImage = () => {
     if (!selectedPreviewImage) return;
-
     setShowImagePreview(false);
     setUploadingFile(true);
-
     const fileData = {
       uri: selectedPreviewImage.uri,
       type: selectedPreviewImage.type || 'image/jpeg',
       name: selectedPreviewImage.fileName || 'image.jpg',
     };
-
     sendMessage('image', fileData);
     setSelectedPreviewImage(null);
   };
-
   // Utility functions
   const getInitials = (fullName) => {
     if (!fullName) return '?';
@@ -1928,7 +1744,6 @@ Would you like to open this file?`,
     }
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
-
   const getAvatarColor = (name) => {
     const colors = [
       '#FF6B9D', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
@@ -1937,12 +1752,10 @@ Would you like to open this file?`,
     const charCodeSum = name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
     return colors[charCodeSum % colors.length];
   };
-
   const formatTime = (dateString) => {
     const date = new Date(dateString);
     const now = new Date();
     const isToday = date.toDateString() === now.toDateString();
-
     if (isToday) {
       return date.toLocaleTimeString('en-US', {
         hour: '2-digit',
@@ -1950,13 +1763,11 @@ Would you like to open this file?`,
         hour12: false
       });
     }
-
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric'
     });
   };
-
   // Add this utility function near other utilities
   const formatDuration = (seconds) => {
     if (!seconds) return '0:00';
@@ -1964,7 +1775,6 @@ Would you like to open this file?`,
     const secs = Math.floor(seconds % 60);
     return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
-
   // Add this utility function for file size formatting
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -1973,13 +1783,11 @@ Would you like to open this file?`,
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
-
   // Add this function to generate the waveform data
   const generateWaveform = (duration, currentTime) => {
     const segments = 60; // Number of wave segments
     const segmentDuration = duration / segments;
     const currentSegment = Math.floor(currentTime / segmentDuration);
-
     // Generate an array of heights for each segment
     return Array.from({ length: segments }, (_, i) => {
       if (i < currentSegment) {
@@ -1994,13 +1802,11 @@ Would you like to open this file?`,
       }
     });
   };
-
   // Render functions
   const renderHeaderAvatar = () => {
     const userData = receiverData || { fullName: receiverName };
     const profileImageUrl = getProfileImageUrl(userData);
     const safeFullName = userData.fullName || receiverName || 'User';
-
     return (
       <View style={[
         styles.headerAvatar,
@@ -2019,17 +1825,14 @@ Would you like to open this file?`,
       </View>
     );
   };
-
   const renderMessage = ({ item }) => {
     const isOwnMessage = item.sender._id === currentUser?._id;
     const isSelected = selectedMessageForDelete && selectedMessageForDelete._id === item._id;
     const isSelectedForBulk = selectedMessages.has(item._id);
     // ADDED FOR AUDIO PLAYBACK: Check if this message is the one currently playing
     const isPlaying = currentlyPlaying === item._id;
-
     // Generate waveform data for the audio player
     const waveformData = generateWaveform(item.duration || 1, getCurrentTimeForMessage(item._id));
-
     return (
       <View style={styles.messageWrapper}>
         <TouchableOpacity
@@ -2061,7 +1864,6 @@ Would you like to open this file?`,
               </View>
             </View>
           )}
-
           <View style={[
             styles.messageBubble,
             styles.commonMessageBubbleAppearance,
@@ -2073,7 +1875,6 @@ Would you like to open this file?`,
                 {item.content}
               </Text>
             )}
-
             {item.messageType === 'image' && (
               <TouchableOpacity
                 style={styles.imageMessageContainer}
@@ -2092,7 +1893,6 @@ Would you like to open this file?`,
                 )}
               </TouchableOpacity>
             )}
-
             {/* UPDATED FOR VIDEO PREVIEW */}
             {item.messageType === 'video' && (
               <TouchableOpacity
@@ -2117,7 +1917,6 @@ Would you like to open this file?`,
                 )}
               </TouchableOpacity>
             )}
-
             {/* UPDATED FOR AUDIO PLAYBACK: This block now handles audio playback using the custom waveform */}
             {(item.messageType === 'file' || item.messageType === 'audio') && item.messageType !== 'video' && (
               <TouchableOpacity
@@ -2145,7 +1944,6 @@ Would you like to open this file?`,
                     >
                       <Ionicons name="play" size={20} color="#00C853" />
                     </TouchableOpacity>
-
                     {/* Waveform Visualization */}
                     <View style={styles.waveformContainer}>
                       <View style={styles.waveform}>
@@ -2160,7 +1958,6 @@ Would you like to open this file?`,
                         ))}
                       </View>
                     </View>
-
                     {/* Duration Text */}
                     {/* <Text style={styles.durationText}>{formatDuration(item.duration)}</Text> */}
                   </View>
@@ -2187,7 +1984,6 @@ Would you like to open this file?`,
                 )}
               </TouchableOpacity>
             )}
-
             <View style={styles.messageFooter}>
               <Text style={[
                 styles.timestamp,
@@ -2199,7 +1995,6 @@ Would you like to open this file?`,
             </View>
           </View>
         </TouchableOpacity>
-
         {isSelected && !isSelectionMode && (
           <View style={styles.deleteButtonContainer}>
             <TouchableOpacity
@@ -2227,7 +2022,6 @@ Would you like to open this file?`,
       </View>
     );
   };
-
   const renderHeader = () => (
     <View style={styles.header}>
       <View style={styles.headerContent}>
@@ -2244,7 +2038,6 @@ Would you like to open this file?`,
         >
           <Ionicons name="chevron-back-outline" size={28} color="#FF6B9D" />
         </TouchableOpacity>
-
         <TouchableOpacity
           style={styles.profileSection}
           onPress={handleProfilePress}
@@ -2276,7 +2069,6 @@ Would you like to open this file?`,
             </View>
           </View>
         </TouchableOpacity>
-
         <View style={styles.headerActions}>
           {isSelectionMode ? (
             <>
@@ -2335,14 +2127,12 @@ Would you like to open this file?`,
       </View>
     </View>
   );
-
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
       <Text style={styles.emptyText}>No messages yet</Text>
       <Text style={styles.emptySubtext}>Send a message to start the conversation!</Text>
     </View>
   );
-
   const renderLoadMoreButton = () => {
     if (loading && page > 1) {
       return (
@@ -2351,7 +2141,6 @@ Would you like to open this file?`,
         </View>
       );
     }
-
     if (hasMoreMessages && messages.length > 0) {
       return (
         <TouchableOpacity onPress={loadOlderMessages} style={styles.loadMoreButton}>
@@ -2359,10 +2148,8 @@ Would you like to open this file?`,
         </TouchableOpacity>
       );
     }
-
     return null;
   };
-
   const renderAttachmentModal = () => (
     <Modal
       visible={showAttachmentModal}
@@ -2377,23 +2164,19 @@ Would you like to open this file?`,
       >
         <View style={styles.attachmentModal}>
           <Text style={styles.modalTitle}>Send Attachment</Text>
-
           <TouchableOpacity style={styles.attachmentOption} onPress={openGallery}>
             <Ionicons name="images" size={24} color="#FF6B9D" />
             <Text style={styles.attachmentOptionText}>Gallery</Text>
           </TouchableOpacity>
-
           {/* ADDED: Record Video Option */}
           <TouchableOpacity style={styles.attachmentOption} onPress={recordVideo}>
             <Ionicons name="videocam" size={24} color="#FF6B9D" />
             <Text style={styles.attachmentOptionText}>Record Video</Text>
           </TouchableOpacity>
-
           <TouchableOpacity style={styles.attachmentOption} onPress={openDocumentPicker}>
             <Ionicons name="document" size={24} color="#FF6B9D" />
             <Text style={styles.attachmentOptionText}>Document</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.modalCancelButton}
             onPress={() => setShowAttachmentModal(false)}
@@ -2404,7 +2187,6 @@ Would you like to open this file?`,
       </TouchableOpacity>
     </Modal>
   );
-
   const renderImagePreviewModal = () => (
     <Modal
       visible={showImagePreview}
@@ -2439,7 +2221,6 @@ Would you like to open this file?`,
       </View>
     </Modal>
   );
-
   // NEW: Message Options Modal
   const renderMessageOptionsModal = () => (
     <Modal
@@ -2455,7 +2236,6 @@ Would you like to open this file?`,
       >
         <View style={styles.messageOptionsModal}>
           <Text style={styles.modalTitle}>Message Options</Text>
-
           <TouchableOpacity
             style={styles.messageOptionButton}
             onPress={() => {
@@ -2468,7 +2248,6 @@ Would you like to open this file?`,
             <Ionicons name="checkmark-circle-outline" size={24} color="#FF6B9D" />
             <Text style={styles.messageOptionText}>Select Messages</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.messageOptionButton}
             onPress={() => {
@@ -2478,7 +2257,6 @@ Would you like to open this file?`,
             <Ionicons name="eye-off-outline" size={24} color="#FF6B9D" />
             <Text style={styles.messageOptionText}>Delete for Me</Text>
           </TouchableOpacity>
-
           {selectedMessageForOptions?.sender?._id === currentUser?._id && (
             <TouchableOpacity
               style={[styles.messageOptionButton, styles.destructiveOption]}
@@ -2490,7 +2268,6 @@ Would you like to open this file?`,
               <Text style={[styles.messageOptionText, styles.destructiveText]}>Delete for Everyone</Text>
             </TouchableOpacity>
           )}
-
           <TouchableOpacity
             style={styles.modalCancelButton}
             onPress={() => setShowMessageOptionsModal(false)}
@@ -2501,7 +2278,6 @@ Would you like to open this file?`,
       </TouchableOpacity>
     </Modal>
   );
-
   // NEW: Conversation Options Modal
   const renderConversationOptionsModal = () => (
     <Modal
@@ -2517,7 +2293,6 @@ Would you like to open this file?`,
       >
         <View style={styles.conversationOptionsModal}>
           <Text style={styles.modalTitle}>Chat Options</Text>
-
           <TouchableOpacity
             style={styles.conversationOptionButton}
             onPress={() => {
@@ -2528,7 +2303,6 @@ Would you like to open this file?`,
             <Ionicons name="checkmark-circle-outline" size={24} color="#FF6B9D" />
             <Text style={styles.conversationOptionText}>Select Messages</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.conversationOptionButton, styles.destructiveOption]}
             onPress={() => {
@@ -2546,7 +2320,6 @@ Would you like to open this file?`,
               Clear Chat for Me
             </Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.modalCancelButton}
             onPress={() => setShowConversationOptionsModal(false)}
@@ -2557,7 +2330,6 @@ Would you like to open this file?`,
       </TouchableOpacity>
     </Modal>
   );
-
   if (loading && messages.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
@@ -2570,11 +2342,9 @@ Would you like to open this file?`,
       </SafeAreaView>
     );
   }
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#1C1C1E" />
-
       {/* ADDED FOR AUDIO PLAYBACK: This invisible component handles the actual audio stream */}
       {audioMessageUrl && (
         <Video
@@ -2599,9 +2369,7 @@ Would you like to open this file?`,
           }}
         />
       )}
-
       {renderHeader()}
-
       <View style={styles.contentContainer}>
         <KeyboardAvoidingView
           style={styles.keyboardContainer}
@@ -2628,7 +2396,6 @@ Would you like to open this file?`,
               }
             }}
           />
-
           {/* ===== START: UPDATED INPUT SECTION ===== */}
           <View style={styles.inputContainer}>
             <TouchableOpacity
@@ -2642,7 +2409,6 @@ Would you like to open this file?`,
                 color={isAudioRecording || sending || uploadingFile || isSelectionMode ? "#666" : "#FF6B9D"}
               />
             </TouchableOpacity>
-
             <TouchableOpacity
               style={styles.attachButton}
               onPress={handleAttachmentPress}
@@ -2654,7 +2420,6 @@ Would you like to open this file?`,
                 color={isAudioRecording || sending || uploadingFile || isSelectionMode ? "#666" : "#FF6B9D"}
               />
             </TouchableOpacity>
-
             <View style={styles.messageInputContainer}>
               <TextInput
                 style={styles.messageInput}
@@ -2667,7 +2432,6 @@ Would you like to open this file?`,
                 editable={!isAudioRecording && !isSelectionMode} // Disable text input while recording or selecting
               />
             </View>
-
             {newMessage.trim() ? (
               <TouchableOpacity
                 style={styles.sendButton}
@@ -2689,7 +2453,6 @@ Would you like to open this file?`,
             )}
           </View>
           {/* ===== END: UPDATED INPUT SECTION ===== */}
-
           {uploadingFile && (
             <View style={styles.uploadingIndicator}>
               <ActivityIndicator size="small" color="#FF6B9D" />
@@ -2698,12 +2461,10 @@ Would you like to open this file?`,
           )}
         </KeyboardAvoidingView>
       </View>
-
       {renderAttachmentModal()}
       {renderImagePreviewModal()}
       {renderMessageOptionsModal()}
       {renderConversationOptionsModal()}
-
       {/* WebRTC Incoming Call Modal */}
       <IncomingCallModal
         visible={!!incomingCall}
@@ -2716,7 +2477,6 @@ Would you like to open this file?`,
     </SafeAreaView>
   );
 };
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -3317,5 +3077,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-
 export default ChatDetailScreen;
