@@ -13,7 +13,6 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { useAuth } from '../../context/AuthContext';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const NotificationsScreen = () => {
   const navigation = useNavigation();
@@ -27,77 +26,6 @@ const NotificationsScreen = () => {
   useEffect(() => {
     fetchNotifications();
   }, [activeTab]);
-
-  // ✅ NEW FUNCTION: Validate FCM Token
-  const validateFCMToken = async () => {
-    try {
-      const fcmToken = await AsyncStorage.getItem('fcm_token');
-      if (!fcmToken) {
-        Alert.alert('Error', 'No FCM token found. Please restart the app.');
-        return;
-      }
-
-      Alert.alert('Validating...', 'Please wait while we validate your FCM token.');
-
-      const response = await fetch('https://backendforheartlink.in/api/v1/fcm/validate-token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ fcmToken }),
-      });
-
-      const result = await response.json();
-
-      if (result.statusCode === 200) {
-        Alert.alert(
-          '✅ Validation Result',
-          `Token: ${result.data.token}\nStatus: ${result.data.isValid ? 'VALID' : 'INVALID'}\nMessage: ${result.message}`
-        );
-      } else {
-        Alert.alert('❌ Validation Failed', result.message || 'Unknown error');
-      }
-    } catch (error) {
-      console.error('Validation error:', error);
-      Alert.alert('❌ Error', 'Failed to validate token. Check logs for details.');
-    }
-  };
-
-  // ✅ NEW FUNCTION: Force Register FCM Token
-  const forceRegisterFCMToken = async () => {
-    try {
-      const fcmToken = await AsyncStorage.getItem('fcm_token');
-      if (!fcmToken) {
-        Alert.alert('Error', 'No FCM token found. Please restart the app to generate one.');
-        return;
-      }
-
-      Alert.alert('Force Registering...', 'Please wait while we register your FCM token.');
-
-      const response = await fetch('https://backendforheartlink.in/api/v1/fcm/force-register-token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({ fcmToken }),
-      });
-
-      const result = await response.json();
-
-      if (result.statusCode === 200) {
-        Alert.alert(
-          '✅ Force Register Result',
-          `${result.message}\nAction: ${result.data.action}\n\n${result.data.instructions ? Object.values(result.data.instructions).join('\n') : ''}`
-        );
-      } else {
-        Alert.alert('❌ Registration Failed', result.message || 'Unknown error');
-      }
-    } catch (error) {
-      console.error('Force register error:', error);
-      Alert.alert('❌ Error', 'Failed to force register token. Check logs for details.');
-    }
-  };
 
   const fetchNotifications = async (page = 1) => {
     try {
@@ -233,20 +161,43 @@ const NotificationsScreen = () => {
   };
 
   const handleUserPress = (userId) => {
+    console.log('Attempting to navigate to user profile:', userId);
+    
     // Don't navigate if user is deleted
     if (userId === 'deleted-user') {
       Alert.alert('User Not Available', 'This user is no longer available.');
       return;
     }
-    navigation.navigate('UserProfile', { userId });
+    
+    if (!userId) {
+      Alert.alert('Error', 'User information not available.');
+      return;
+    }
+    
+    try {
+      navigation.navigate('UserProfile', { userId });
+      console.log('Successfully navigated to UserProfile with userId:', userId);
+    } catch (error) {
+      console.error('Navigation error:', error);
+      Alert.alert('Navigation Error', 'Unable to open user profile.');
+    }
   };
 
   const handlePostPress = (postId) => {
+    console.log('Attempting to navigate to post detail:', postId);
+    
     if (!postId) {
       Alert.alert('Post Not Available', 'This post is no longer available.');
       return;
     }
-    navigation.navigate('PostDetail', { postId });
+    
+    try {
+      navigation.navigate('PostDetail', { postId });
+      console.log('Successfully navigated to PostDetail with postId:', postId);
+    } catch (error) {
+      console.error('Navigation error:', error);
+      Alert.alert('Navigation Error', 'Unable to open post.');
+    }
   };
 
   const markAsRead = async (notificationId) => {
@@ -273,62 +224,86 @@ const NotificationsScreen = () => {
     }
   };
 
-  const renderNotificationItem = ({ item }) => (
-    <TouchableOpacity 
-      style={styles.notificationItem}
-      onPress={() => {
-        if (item.type === 'like' && item.post) {
-          handlePostPress(item.post._id);
-        } else {
-          handleUserPress(item.user._id);
-        }
-        if (!item.isRead) {
-          markAsRead(item._id);
-        }
-      }}
-    >
-      <View style={styles.leftContainer}>
-        <View style={[styles.iconContainer, { backgroundColor: item.color }]}>
-          <Icon name={item.icon} size={20} color="white" />
+  const renderNotificationItem = ({ item }) => {
+    // Add validation
+    if (!item) {
+      return null;
+    }
+
+    const hasValidUser = item.user && item.user._id && item.user._id !== 'deleted-user';
+    const hasValidPost = item.type === 'like' && item.post && item.post._id;
+
+    return (
+      <TouchableOpacity 
+        style={styles.notificationItem}
+        onPress={async () => {
+          // Debug logging
+          console.log('Notification pressed:', {
+            id: item._id,
+            type: item.type,
+            hasValidUser,
+            hasValidPost,
+            userId: item.user?._id,
+            postId: item.post?._id,
+            isRead: item.isRead
+          });
+
+          // Mark as read first (if not already read)
+          if (!item.isRead && item._id) {
+            await markAsRead(item._id);
+          }
+
+          // Handle navigation - ALWAYS go to profile for all notification types
+          if (hasValidUser) {
+            handleUserPress(item.user._id);
+          } else {
+            Alert.alert('User Not Available', 'User information is not available for this notification.');
+          }
+        }}
+      >
+        <View style={styles.leftContainer}>
+          <View style={[styles.iconContainer, { backgroundColor: item.color }]}>
+            <Icon name={item.icon} size={20} color="white" />
+          </View>
         </View>
-      </View>
-      
-      <View style={styles.middleContainer}>
-        <View style={styles.userInfo}>
-          {item.user.photoUrl ? (
-            <Image source={{ uri: item.user.photoUrl }} style={styles.avatar} />
-          ) : (
-            <View style={styles.defaultAvatar}>
-              <Text style={styles.avatarText}>
-                {item.user.fullName?.charAt(0)?.toUpperCase() || 'U'}
-              </Text>
-            </View>
+        
+        <View style={styles.middleContainer}>
+          <View style={styles.userInfo}>
+            {item.user.photoUrl ? (
+              <Image source={{ uri: item.user.photoUrl }} style={styles.avatar} />
+            ) : (
+              <View style={styles.defaultAvatar}>
+                <Text style={styles.avatarText}>
+                  {item.user.fullName?.charAt(0)?.toUpperCase() || 'U'}
+                </Text>
+              </View>
+            )}
+            
+            <Text style={styles.userName} numberOfLines={1}>
+              {item.user.fullName || 'Unknown User'}
+            </Text>
+          </View>
+          
+          <Text style={styles.messageText}>
+            {item.message}
+            {item.type === 'like' && ':'}
+          </Text>
+          
+          {item.type === 'like' && item.post?.content && (
+            <Text style={styles.postPreview} numberOfLines={1}>
+              "{item.post.content.substring(0, 30)}..."
+            </Text>
           )}
           
-          <Text style={styles.userName} numberOfLines={1}>
-            {item.user.fullName || 'Unknown User'}
-          </Text>
+          <Text style={styles.timeAgo}>{item.timeAgo}</Text>
         </View>
         
-        <Text style={styles.messageText}>
-          {item.message}
-          {item.type === 'like' && ':'}
-        </Text>
-        
-        {item.type === 'like' && item.post?.content && (
-          <Text style={styles.postPreview} numberOfLines={1}>
-            "{item.post.content.substring(0, 30)}..."
-          </Text>
+        {!item.isRead && (
+          <View style={styles.unreadIndicator} />
         )}
-        
-        <Text style={styles.timeAgo}>{item.timeAgo}</Text>
-      </View>
-      
-      {!item.isRead && (
-        <View style={styles.unreadIndicator} />
-      )}
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   const renderEmptyState = () => (
     <View style={styles.emptyContainer}>
@@ -372,14 +347,6 @@ const NotificationsScreen = () => {
         <TouchableOpacity onPress={handleRefresh} style={styles.headerButton}>
           <Icon name="refresh" size={24} color="white" />
         </TouchableOpacity>
-        {/* ✅ ADD VALIDATE TOKEN BUTTON */}
-        {/* <TouchableOpacity onPress={validateFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
-          <Text style={styles.validateButtonText}>Validate</Text>
-        </TouchableOpacity> */}
-        {/* ✅ ADD FORCE REGISTER TOKEN BUTTON */}
-        {/* <TouchableOpacity onPress={forceRegisterFCMToken} style={[styles.headerButton, { marginLeft: 8 }]}>
-          <Text style={styles.validateButtonText}>Force Register</Text>
-        </TouchableOpacity> */}
       </View>
     </View>
   );
@@ -403,7 +370,6 @@ const NotificationsScreen = () => {
       {/* Tab Bar */}
       <View style={styles.tabBar}>
         {renderTabButton('all', 'notifications-outline', 'All')}
-        {/* {renderTabButton('impressions', 'eye-outline', 'Views')} */}
         {renderTabButton('follows', 'person-add-outline', 'Follows')}
         {renderTabButton('likes', 'heart-outline', 'Likes')}
       </View>
@@ -456,16 +422,6 @@ const styles = StyleSheet.create({
   },
   headerButton: {
     padding: 8,
-  },
-  validateButtonText: {
-    color: '#007AFF',
-    fontSize: 12,
-    fontWeight: '600',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderWidth: 1,
-    borderColor: '#007AFF',
-    borderRadius: 12,
   },
   tabBar: {
     flexDirection: 'row',

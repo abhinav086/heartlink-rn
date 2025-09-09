@@ -1,4 +1,3 @@
-// src/components/Dating/PrivateTakeOnDate.tsx - COMPLETE UPDATED CODE
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -21,13 +20,21 @@ import { useAuth } from '../../context/AuthContext';
 import BASE_URL from '../../config/config';
 import LinearGradient from 'react-native-linear-gradient';
 import Icon from 'react-native-vector-icons/MaterialIcons';
+import DateTimePicker from '@react-native-community/datetimepicker';
+
+// Enhanced Vector Icons component with more icon options
+const VectorIcon = ({ name, size = 20, color = '#ed167e', style = {} }) => (
+  <Icon name={name} size={size} color={color} style={style} />
+);
+
 const TakeOnDate = () => {
   const navigation = useNavigation();
-  const route = useRoute(); 
+  const route = useRoute();
   const { userId, username, profilePic, fullName } = route.params || {};
   const authContext = useAuth();
   const { user, token } = authContext || {};
   const scrollViewRef = useRef(null);
+
   // State management
   const [messages, setMessages] = useState([]);
   const [messageTypes, setMessageTypes] = useState({});
@@ -37,6 +44,7 @@ const TakeOnDate = () => {
   const [showTakeOnDateButton, setShowTakeOnDateButton] = useState(false);
   const [showMessageButtons, setShowMessageButtons] = useState(true);
   const [otherUserData, setOtherUserData] = useState(null);
+
   // Date request states
   const [dateRequests, setDateRequests] = useState([]);
   const [currentDateRequest, setCurrentDateRequest] = useState(null);
@@ -45,19 +53,27 @@ const TakeOnDate = () => {
   const [showCounterProposalForm, setShowCounterProposalForm] = useState(false);
   const [creatingDateRequest, setCreatingDateRequest] = useState(false);
   const [respondingToRequest, setRespondingToRequest] = useState(false);
-  // Form states for counter-proposal
+
+  // Enhanced Date/Time picker states
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showCounterDatePicker, setShowCounterDatePicker] = useState(false);
+  const [showCounterTimePicker, setShowCounterTimePicker] = useState(false);
+
+  // Form states for counter-proposal with improved structure
   const [counterProposal, setCounterProposal] = useState({
     preferredLocation: {
       city: '',
       area: '',
       specificPlace: ''
     },
-    preferredDate: '',
-    preferredTime: '',
-    suggestedBudget: '2000',
+    preferredDate: new Date(),
+    preferredTime: new Date(),
+    suggestedBudget: '',
     recipientMessage: ''
   });
-  // Initial date request form - COMPLETE WITH ALL FIELDS
+
+  // Enhanced initial date request form with date/time pickers
   const [initialDateRequest, setInitialDateRequest] = useState({
     message: 'Would you like to go on a date?',
     dateType: 'dinner',
@@ -66,20 +82,23 @@ const TakeOnDate = () => {
       area: '',
       specificPlace: ''
     },
-    preferredDate: '',
-    preferredTime: '',
+    preferredDate: new Date(),
+    preferredTime: new Date(),
     budget: '2000'
   });
+
   // Response form
   const [responseForm, setResponseForm] = useState({
     action: '',
     message: ''
   });
+
   const [pagination, setPagination] = useState({
     currentPage: 1,
     totalPages: 1,
     hasNextPage: false,
   });
+
   useEffect(() => {
     if (token && userId) {
       fetchMessageTypes();
@@ -87,6 +106,7 @@ const TakeOnDate = () => {
       fetchDateRequests();
     }
   }, [token, userId]);
+
   // Check message limits and button visibility
   useEffect(() => {
     if (messages.length === 0) {
@@ -94,10 +114,10 @@ const TakeOnDate = () => {
       setShowMessageButtons(true);
       return;
     }
-    const currentUserMessages = messages.filter(message => 
+    const currentUserMessages = messages.filter(message =>
       message.sender._id === user?._id
     );
-    const otherUserMessages = messages.filter(message => 
+    const otherUserMessages = messages.filter(message =>
       message.sender._id !== user?._id
     );
     if (currentUserMessages.length >= 1) {
@@ -107,19 +127,25 @@ const TakeOnDate = () => {
     }
     const firstMessage = messages[0];
     const currentUserInitiated = firstMessage.sender._id === user?._id;
-    const hasActiveDateRequest = dateRequests.some(req => 
+    const hasActiveDateRequest = dateRequests.some(req =>
       ['pending_initial', 'counter_proposed', 'accepted'].includes(req.status)
     );
-    const shouldShowTakeOnDateButton = currentUserInitiated && 
-                                     currentUserMessages.length === 1 && 
-                                     otherUserMessages.length === 1 &&
-                                     messages.length === 2 &&
-                                     !hasActiveDateRequest;
+    const shouldShowTakeOnDateButton = currentUserInitiated &&
+      currentUserMessages.length === 1 &&
+      otherUserMessages.length === 1 &&
+      messages.length === 2 &&
+      !hasActiveDateRequest;
     setShowTakeOnDateButton(shouldShowTakeOnDateButton);
   }, [messages, user?._id, dateRequests]);
+
+  // --- MODIFIED: Enhanced fetchDateRequests with robust checks ---
   // Fetch date requests between these users
   const fetchDateRequests = async () => {
-    if (!token || !userId) return;
+    // Ensure token, userId, and user._id are available before proceeding
+    if (!token || !userId || !user?._id) {
+      console.log("Missing required data for fetchDateRequests:", { token: !!token, userId, user_id: !!user?._id });
+      return;
+    }
     try {
       const response = await fetch(
         `${BASE_URL}/api/v1/dating?type=all&status=all&limit=10`,
@@ -129,40 +155,77 @@ const TakeOnDate = () => {
       );
       const data = await response.json();
       if (response.ok && data?.success) {
-        const relevantRequests = data.data.requests.filter(req => 
-          (req.requester._id === user?._id && req.recipient._id === userId) ||
-          (req.requester._id === userId && req.recipient._id === user?._id)
-        );
+
+        // --- MODIFIED: Add robust checks for requester and recipient ---
+        const relevantRequests = data.data.requests.filter(req => {
+          // Check if requester and recipient objects exist
+          if (!req.requester || !req.recipient) {
+            console.warn("Skipping date request due to missing requester or recipient:", req);
+            return false; // Skip this request if data is malformed
+          }
+          // Now it's safe to access _id
+          const isUserRequester = req.requester._id === user._id;
+          const isUserRecipient = req.recipient._id === user._id;
+          const isOtherUserRequester = req.requester._id === userId;
+          const isOtherUserRecipient = req.recipient._id === userId;
+
+          // Check if this request is between the current user and the other user
+          return (isUserRequester && isOtherUserRecipient) || (isOtherUserRequester && isUserRecipient);
+        });
+        // --- END OF MODIFICATION ---
+
         setDateRequests(relevantRequests);
-        const activeRequest = relevantRequests.find(req => 
-          ['pending_initial', 'counter_proposed', 'accepted', 'paid'].includes(req.status)
-        );
+
+        // Apply the same robust check for finding the active request
+        const activeRequest = relevantRequests.find(req => {
+          // Double-check structure even within relevant requests
+          if (!req.requester || !req.recipient) {
+            console.warn("Skipping relevant request for active check due to missing data:", req);
+            return false;
+          }
+          return ['pending_initial', 'counter_proposed', 'accepted', 'paid'].includes(req.status);
+        });
+
         setCurrentDateRequest(activeRequest || null);
-        console.log('Date requests:', relevantRequests);
+      } else {
+        console.error('API Error fetching date requests:', data.message || 'Unknown error');
       }
     } catch (error) {
-      console.error('Error fetching date requests:', error);
+      // More descriptive error logging
+      console.error('Network or unexpected error fetching date requests:', error);
+      // Consider adding user-facing error handling here if needed
     }
   };
-  // Create initial date request - UPDATED WITH ALL FIELDS
+  // --- END OF MODIFIED fetchDateRequests ---
+
+  // Enhanced date/time formatting utilities
+  const formatDateForAPI = (date) => {
+    return date.toISOString().split('T')[0]; // YYYY-MM-DD format
+  };
+  const formatTimeForAPI = (date) => {
+    return date.toTimeString().split(' ')[0].substring(0, 5); // HH:MM format
+  };
+  const formatDisplayDate = (date) => {
+    return date.toLocaleDateString('en-IN', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+  };
+  const formatDisplayTime = (date) => {
+    return date.toLocaleTimeString('en-IN', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  };
+
+  // Enhanced create initial date request with date/time pickers
   const createInitialDateRequest = async () => {
     if (!token || !userId || creatingDateRequest) return;
     // Validation for required fields
-    if (!initialDateRequest.location.city || !initialDateRequest.preferredDate || 
-        !initialDateRequest.preferredTime || !initialDateRequest.budget) {
-      Alert.alert('Missing Fields', 'Please fill in all required fields (City, Date, Time, Budget)');
-      return;
-    }
-    // Validate date format
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-    if (!dateRegex.test(initialDateRequest.preferredDate)) {
-      Alert.alert('Invalid Date', 'Please enter date in YYYY-MM-DD format (e.g., 2025-01-20)');
-      return;
-    }
-    // Validate time format
-    const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
-    if (!timeRegex.test(initialDateRequest.preferredTime)) {
-      Alert.alert('Invalid Time', 'Please enter time in HH:MM format (e.g., 19:30)');
+    if (!initialDateRequest.location.city || !initialDateRequest.budget) {
+      Alert.alert('Missing Fields', 'Please fill in City and Budget fields');
       return;
     }
     // Validate budget
@@ -172,8 +235,7 @@ const TakeOnDate = () => {
       return;
     }
     // Validate date is in future
-    const selectedDate = new Date(initialDateRequest.preferredDate);
-    if (selectedDate <= new Date()) {
+    if (initialDateRequest.preferredDate <= new Date()) {
       Alert.alert('Invalid Date', 'Please select a future date');
       return;
     }
@@ -190,8 +252,8 @@ const TakeOnDate = () => {
           message: initialDateRequest.message,
           dateType: initialDateRequest.dateType,
           location: initialDateRequest.location,
-          preferredDate: initialDateRequest.preferredDate,
-          preferredTime: initialDateRequest.preferredTime,
+          preferredDate: formatDateForAPI(initialDateRequest.preferredDate),
+          preferredTime: formatTimeForAPI(initialDateRequest.preferredTime),
           budget: budget,
           conversationId: route.params?.conversationId || null
         }),
@@ -212,7 +274,8 @@ const TakeOnDate = () => {
       setCreatingDateRequest(false);
     }
   };
-  // Respond to initial date request
+
+  // Enhanced respond to initial date request
   const respondToInitialRequest = async () => {
     if (!token || !currentDateRequest || respondingToRequest) return;
     setRespondingToRequest(true);
@@ -222,20 +285,23 @@ const TakeOnDate = () => {
         message: responseForm.message
       };
       if (responseForm.action === 'counter_propose') {
-        if (!counterProposal.preferredLocation.city || 
-            !counterProposal.preferredDate || 
-            !counterProposal.preferredTime || 
-            !counterProposal.suggestedBudget) {
-          Alert.alert('Error', 'Please fill in all preference fields');
+        if (!counterProposal.preferredLocation.city || !counterProposal.suggestedBudget) {
+          Alert.alert('Error', 'Please fill in City and Budget fields');
+          setRespondingToRequest(false);
+          return;
+        }
+        const budget = parseInt(counterProposal.suggestedBudget);
+        if (isNaN(budget) || budget < 500 || budget > 200000) {
+          Alert.alert('Invalid Budget', 'Budget must be between ₹500 and ₹200,000');
           setRespondingToRequest(false);
           return;
         }
         requestBody = {
           ...requestBody,
           preferredLocation: counterProposal.preferredLocation,
-          preferredDate: counterProposal.preferredDate,
-          preferredTime: counterProposal.preferredTime,
-          suggestedBudget: parseInt(counterProposal.suggestedBudget),
+          preferredDate: formatDateForAPI(counterProposal.preferredDate),
+          preferredTime: formatTimeForAPI(counterProposal.preferredTime),
+          suggestedBudget: budget,
           recipientMessage: counterProposal.recipientMessage
         };
       }
@@ -252,10 +318,10 @@ const TakeOnDate = () => {
       );
       const data = await response.json();
       if (response.ok && data?.success) {
-        Alert.alert('Success', 
+        Alert.alert('Success',
           responseForm.action === 'accept' ? 'Date request accepted!' :
-          responseForm.action === 'reject' ? 'Date request declined' :
-          'Your preferences have been shared!'
+            responseForm.action === 'reject' ? 'Date request declined' :
+              'Your preferences have been shared!'
         );
         setShowResponseModal(false);
         setShowCounterProposalForm(false);
@@ -271,6 +337,7 @@ const TakeOnDate = () => {
       setRespondingToRequest(false);
     }
   };
+
   // Respond to counter-proposal
   const respondToCounterProposal = async (action) => {
     if (!token || !currentDateRequest || respondingToRequest) return;
@@ -292,9 +359,9 @@ const TakeOnDate = () => {
       );
       const data = await response.json();
       if (response.ok && data?.success) {
-        Alert.alert('Success', 
+        Alert.alert('Success',
           action === 'accept' ? 'Counter-proposal accepted! Ready for payment.' :
-          'Counter-proposal declined'
+            'Counter-proposal declined'
         );
         setCurrentDateRequest(data.data);
         await fetchDateRequests();
@@ -308,6 +375,7 @@ const TakeOnDate = () => {
       setRespondingToRequest(false);
     }
   };
+
   // Check if can create date request
   const checkCanCreateDateRequest = async () => {
     if (!token || !userId) return false;
@@ -332,16 +400,15 @@ const TakeOnDate = () => {
       return false;
     }
   };
+
   // Navigate to payment screen
   const navigateToPayment = () => {
     if (!currentDateRequest) return;
     navigation.navigate('PaymentScreen', {
-      requestId: currentDateRequest._id, // Changed from dateRequestId to requestId
-      // Optional: You can still pass these if PaymentScreen needed them directly,
-      // but based on its code, it fetches details itself using requestId.
-      // request: currentDateRequest // Uncomment if needed by PaymentScreen directly
+      requestId: currentDateRequest._id,
     });
   };
+
   // Cancel date request
   const cancelDateRequest = async () => {
     if (!token || !currentDateRequest) return;
@@ -350,8 +417,8 @@ const TakeOnDate = () => {
       'Are you sure you want to cancel this date request?',
       [
         { text: 'No', style: 'cancel' },
-        { 
-          text: 'Yes', 
+        {
+          text: 'Yes',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -384,28 +451,37 @@ const TakeOnDate = () => {
       ]
     );
   };
+
   // Fetch available message types from API
   const fetchMessageTypes = async () => {
     try {
       const response = await fetch(`${BASE_URL}/api/v1/private-messages/message-types`);
       const data = await response.json();
       if (response.ok && data?.success) {
-        setMessageTypes(data.data.messageTypes || {});
+        const cleanMessageTypes = {};
+        Object.entries(data.data.messageTypes || {}).forEach(([key, value]) => {
+          cleanMessageTypes[key] = value.replace(/[^\w\s!]/g, '').trim();
+        });
+        setMessageTypes(cleanMessageTypes.HI ? cleanMessageTypes : {
+          HI: "Hi",
+          HELLO: "Hello!"
+        });
       } else {
         console.error('Failed to fetch message types:', data.message);
         setMessageTypes({
-          HI: "Hi 👋",
-          HELLO: "Hello! 😊"
+          HI: "Hi",
+          HELLO: "Hello!"
         });
       }
     } catch (error) {
       console.error('Error fetching message types:', error);
       setMessageTypes({
-        HI: "Hi 👋",
-        HELLO: "Hello! 😊"
+        HI: "Hi",
+        HELLO: "Hello!"
       });
     }
   };
+
   // Fetch conversation with the selected user
   const fetchConversation = async (page = 1, isRefresh = false) => {
     if (!token || !userId) return;
@@ -449,10 +525,11 @@ const TakeOnDate = () => {
       setRefreshing(false);
     }
   };
+
   // Send a predefined message
   const sendMessage = async (messageType) => {
     if (!token || !userId || sendingMessage) return;
-    const currentUserMessages = messages.filter(message => 
+    const currentUserMessages = messages.filter(message =>
       message.sender._id === user?._id
     );
     if (currentUserMessages.length >= 1) {
@@ -490,10 +567,11 @@ const TakeOnDate = () => {
       setSendingMessage(null);
     }
   };
+
   // Mark messages as read when viewing
   const markMessagesAsRead = async () => {
     if (!token || !userId) return;
-    const unreadMessages = messages.filter(msg => 
+    const unreadMessages = messages.filter(msg =>
       !msg.isRead && msg.receiver._id === user?._id
     );
     if (unreadMessages.length === 0) return;
@@ -511,22 +589,26 @@ const TakeOnDate = () => {
       console.error('Error marking messages as read:', error);
     }
   };
+
   useEffect(() => {
     if (messages.length > 0) {
       markMessagesAsRead();
     }
   }, [messages]);
+
   // Refresh conversation
   const onRefresh = () => {
     fetchConversation(1, true);
     fetchDateRequests();
   };
+
   // Load more messages (pagination)
   const loadMoreMessages = () => {
     if (pagination.hasNextPage && !loading) {
       fetchConversation(pagination.currentPage + 1);
     }
   };
+
   // Get user initials for avatar
   const getInitials = (userData) => {
     let name = '';
@@ -542,6 +624,7 @@ const TakeOnDate = () => {
     if (names.length === 1) return names[0].charAt(0).toUpperCase();
     return (names[0].charAt(0) + names[names.length - 1].charAt(0)).toUpperCase();
   };
+
   // Get avatar color
   const getAvatarColor = (userData) => {
     const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7'];
@@ -557,6 +640,7 @@ const TakeOnDate = () => {
     const charCodeSum = name.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
     return colors[charCodeSum % colors.length];
   };
+
   // Get display name for header
   const getDisplayName = () => {
     if (otherUserData) {
@@ -564,6 +648,7 @@ const TakeOnDate = () => {
     }
     return fullName || `@${username}` || 'Unknown User';
   };
+
   // Get profile image URL
   const getProfileImageUrl = () => {
     if (otherUserData) {
@@ -571,12 +656,13 @@ const TakeOnDate = () => {
     }
     return profilePic;
   };
+
   // Get message limit status text
   const getMessageLimitStatus = () => {
-    const currentUserMessages = messages.filter(message => 
+    const currentUserMessages = messages.filter(message =>
       message.sender._id === user?._id
     );
-    const otherUserMessages = messages.filter(message => 
+    const otherUserMessages = messages.filter(message =>
       message.sender._id !== user?._id
     );
     if (currentUserMessages.length === 0) {
@@ -588,6 +674,7 @@ const TakeOnDate = () => {
     }
     return "";
   };
+
   // Get date type display name
   const getDateTypeDisplay = (dateType) => {
     const dateTypeMap = {
@@ -605,13 +692,14 @@ const TakeOnDate = () => {
     };
     return dateTypeMap[dateType] || dateType;
   };
+
   // Get current date request status description
   const getDateRequestStatus = () => {
     if (!currentDateRequest) return null;
     const isRequester = currentDateRequest.requester._id === user?._id;
     switch (currentDateRequest.status) {
       case 'pending_initial':
-        return isRequester 
+        return isRequester
           ? 'Waiting for their response to your date request'
           : 'You have a pending date request - please respond';
       case 'counter_proposed':
@@ -623,7 +711,7 @@ const TakeOnDate = () => {
           ? 'Date accepted! Complete payment to confirm'
           : 'Date accepted! Waiting for payment';
       case 'paid':
-        return 'Date confirmed! Payment completed'; // Updated status message
+        return 'Date confirmed! Payment completed';
       case 'completed':
         return 'Date completed successfully';
       case 'rejected':
@@ -636,7 +724,8 @@ const TakeOnDate = () => {
         return null;
     }
   };
-  // Render date request status card
+
+  // Enhanced render date request status card with complete original request details
   const renderDateRequestStatus = () => {
     if (!currentDateRequest) return null;
     const isRequester = currentDateRequest.requester._id === user?._id;
@@ -644,101 +733,195 @@ const TakeOnDate = () => {
     return (
       <View style={styles.dateRequestCard}>
         <View style={styles.dateRequestHeader}>
-          <Text style={styles.dateRequestTitle}>Date Request Status</Text>
+          <View style={styles.dateRequestTitleContainer}>
+            <VectorIcon name="favorite" size={20} color="#ed167e" />
+            <Text style={styles.dateRequestTitle}>Date Request Status</Text>
+          </View>
           {['pending_initial', 'counter_proposed', 'accepted'].includes(status) && (
             <TouchableOpacity
               onPress={cancelDateRequest}
               style={styles.cancelButton}
             >
+              <VectorIcon name="close" size={16} color="#fff" />
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
           )}
         </View>
         <Text style={styles.dateRequestStatus}>{getDateRequestStatus()}</Text>
-        
-        {/* Show original request details */}
-        {currentDateRequest.initialRequest && (
-          <View style={styles.originalRequest}>
-            <Text style={styles.originalRequestTitle}>Original Request:</Text>
-            <View style={styles.originalRequestDetails}>
+        {/* COMPLETE Enhanced original request details display */}
+        <View style={styles.originalRequest}>
+          <View style={styles.originalRequestHeader}>
+            <VectorIcon name="info" size={16} color="#FF69B4" />
+            <Text style={styles.originalRequestTitle}>
+              {isRequester ? 'Your Original Request:' : 'Their Request:'}
+            </Text>
+          </View>
+          <View style={styles.originalRequestDetails}>
+            {/* Date Type - Always show */}
+            <View style={styles.originalRequestRow}>
+              <VectorIcon name="restaurant" size={16} color="#ed167e" />
               <Text style={styles.originalRequestDetail}>
-                Type: {getDateTypeDisplay(currentDateRequest.initialRequest.dateType)}
+                Type: {getDateTypeDisplay(currentDateRequest.initialRequest?.dateType || 'dinner')}
               </Text>
+            </View>
+            {/* Message - Always show */}
+            <View style={styles.originalRequestRow}>
+              <VectorIcon name="chat-bubble" size={16} color="#ed167e" />
               <Text style={styles.originalRequestDetail}>
-                Message: {currentDateRequest.initialRequest.message}
+                Message: "{currentDateRequest.initialRequest?.message || 'Would you like to go on a date?'}"
+              </Text>
+            </View>
+            {/* Location - Show all available location data */}
+            <View style={styles.originalRequestRow}>
+              <VectorIcon name="location-on" size={16} color="#ed167e" />
+              <Text style={styles.originalRequestDetail}>
+                Location: {(() => {
+                  const location = currentDateRequest.initialRequest?.location || currentDateRequest.location;
+                  if (location) {
+                    let locationText = location.city || 'Not specified';
+                    if (location.area) locationText += `, ${location.area}`;
+                    if (location.specificPlace) locationText += ` (${location.specificPlace})`;
+                    return locationText;
+                  }
+                  return 'Not specified';
+                })()}
+              </Text>
+            </View>
+            {/* Date - Show with proper formatting */}
+            <View style={styles.originalRequestRow}>
+              <VectorIcon name="event" size={16} color="#ed167e" />
+              <Text style={styles.originalRequestDetail}>
+                Date: {(() => {
+                  const date = currentDateRequest.initialRequest?.preferredDate || currentDateRequest.preferredDate;
+                  if (date) {
+                    try {
+                      return new Date(date).toLocaleDateString('en-IN', {
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                      });
+                    } catch (e) {
+                      return date;
+                    }
+                  }
+                  return 'Not specified';
+                })()}
+              </Text>
+            </View>
+            {/* Time - Show formatted time */}
+            <View style={styles.originalRequestRow}>
+              <VectorIcon name="access-time" size={16} color="#ed167e" />
+              <Text style={styles.originalRequestDetail}>
+                Time: {currentDateRequest.initialRequest?.preferredTime || currentDateRequest.preferredTime || 'Not specified'}
+              </Text>
+            </View>
+            {/* Budget - Show with proper formatting */}
+            <View style={styles.originalRequestRow}>
+              <VectorIcon name="currency-rupee" size={16} color="#ed167e" />
+              <Text style={styles.originalRequestDetail}>
+                Budget: {(() => {
+                  const budget = currentDateRequest.initialRequest?.budget || currentDateRequest.budget;
+                  if (budget && typeof budget === 'number') {
+                    return `₹${budget.toLocaleString('en-IN')}`;
+                  }
+                  return budget ? `₹${budget}` : 'Not specified';
+                })()}
               </Text>
             </View>
           </View>
-        )}
-        
-        {/* Show counter-proposal details if exists */}
+        </View>
+        {/* Enhanced counter-proposal details */}
         {currentDateRequest.counterProposal?.hasCounterProposal && (
           <View style={styles.counterProposalDetails}>
-            <Text style={styles.counterProposalTitle}>Date Preferences:</Text>
+            <View style={styles.counterProposalHeader}>
+              <VectorIcon name="edit" size={16} color="#FF69B4" />
+              <Text style={styles.counterProposalTitle}>
+                {isRequester ? 'Their Preferences:' : 'Your Preferences:'}
+              </Text>
+            </View>
             <View style={styles.counterProposalDetailsContainer}>
               <View style={styles.counterProposalRow}>
-                <Icon name="place" size={16} color="#ed167e" />
+                <VectorIcon name="location-on" size={16} color="#ed167e" />
                 <Text style={styles.counterProposalText}>
                   {currentDateRequest.counterProposal.preferredLocation.city}
                   {currentDateRequest.counterProposal.preferredLocation.area && `, ${currentDateRequest.counterProposal.preferredLocation.area}`}
+                  {currentDateRequest.counterProposal.preferredLocation.specificPlace && ` (${currentDateRequest.counterProposal.preferredLocation.specificPlace})`}
                 </Text>
               </View>
               <View style={styles.counterProposalRow}>
-                <Icon name="calendar-today" size={16} color="#ed167e" />
+                <VectorIcon name="event" size={16} color="#ed167e" />
                 <Text style={styles.counterProposalText}>
-                  {new Date(currentDateRequest.counterProposal.preferredDate).toLocaleDateString()}
+                  {new Date(currentDateRequest.counterProposal.preferredDate).toLocaleDateString('en-IN', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                  })}
                 </Text>
               </View>
               <View style={styles.counterProposalRow}>
-                <Icon name="access-time" size={16} color="#ed167e" />
+                <VectorIcon name="access-time" size={16} color="#ed167e" />
                 <Text style={styles.counterProposalText}>
                   {currentDateRequest.counterProposal.preferredTime}
                 </Text>
               </View>
               <View style={styles.counterProposalRow}>
-                <Icon name="attach-money" size={16} color="#ed167e" />
+                <VectorIcon name="currency-rupee" size={16} color="#ed167e" />
                 <Text style={styles.counterProposalText}>
                   ₹{currentDateRequest.counterProposal.suggestedBudget?.toLocaleString('en-IN')}
                 </Text>
               </View>
               {currentDateRequest.counterProposal.recipientMessage && (
                 <View style={styles.counterProposalRow}>
-                  <Icon name="message" size={16} color="#ed167e" />
+                  <VectorIcon name="chat-bubble" size={16} color="#ed167e" />
                   <Text style={styles.counterProposalMessage}>
-                    {currentDateRequest.counterProposal.recipientMessage}
+                    "{currentDateRequest.counterProposal.recipientMessage}"
                   </Text>
                 </View>
               )}
             </View>
           </View>
         )}
-        
         {/* Show final details if accepted or paid */}
         {currentDateRequest.finalDetails && (status === 'accepted' || status === 'paid') && (
           <View style={styles.finalDetails}>
-            <Text style={styles.finalDetailsTitle}>Final Date Details:</Text>
+            <View style={styles.finalDetailsHeader}>
+              <VectorIcon name="check-circle" size={16} color="#4CAF50" />
+              <Text style={styles.finalDetailsTitle}>Final Date Details:</Text>
+            </View>
             <View style={styles.finalDetailsContainer}>
               <View style={styles.finalDetailsRow}>
-                <Icon name="place" size={16} color="#ed167e" />
+                <VectorIcon name="location-on" size={16} color="#4CAF50" />
                 <Text style={styles.finalDetailsText}>
                   {currentDateRequest.finalDetails.location?.city}
                   {currentDateRequest.finalDetails.location?.area && `, ${currentDateRequest.finalDetails.location.area}`}
+                  {currentDateRequest.finalDetails.location?.specificPlace && ` (${currentDateRequest.finalDetails.location.specificPlace})`}
                 </Text>
               </View>
               <View style={styles.finalDetailsRow}>
-                <Icon name="calendar-today" size={16} color="#ed167e" />
+                <VectorIcon name="event" size={16} color="#4CAF50" />
                 <Text style={styles.finalDetailsText}>
-                  {new Date(currentDateRequest.finalDetails.dateTime).toLocaleDateString()}
+                  {new Date(currentDateRequest.finalDetails.dateTime).toLocaleDateString('en-IN', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                  })}
                 </Text>
               </View>
               <View style={styles.finalDetailsRow}>
-                <Icon name="access-time" size={16} color="#ed167e" />
+                <VectorIcon name="access-time" size={16} color="#4CAF50" />
                 <Text style={styles.finalDetailsText}>
-                  {new Date(currentDateRequest.finalDetails.dateTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {new Date(currentDateRequest.finalDetails.dateTime).toLocaleTimeString('en-IN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                  })}
                 </Text>
               </View>
               <View style={styles.finalDetailsRow}>
-                <Icon name="attach-money" size={16} color="#ed167e" />
+                <VectorIcon name="currency-rupee" size={16} color="#4CAF50" />
                 <Text style={styles.finalDetailsText}>
                   ₹{currentDateRequest.finalDetails.budget?.toLocaleString('en-IN')}
                 </Text>
@@ -746,13 +929,13 @@ const TakeOnDate = () => {
             </View>
           </View>
         )}
-        
         {/* Action buttons based on status */}
         {status === 'pending_initial' && !isRequester && (
           <TouchableOpacity
             style={styles.respondButton}
             onPress={() => setShowResponseModal(true)}
           >
+            <VectorIcon name="reply" size={20} color="#fff" />
             <Text style={styles.respondButtonText}>Respond to Date Request</Text>
           </TouchableOpacity>
         )}
@@ -766,7 +949,10 @@ const TakeOnDate = () => {
               {respondingToRequest ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={styles.actionButtonText}>Accept</Text>
+                <>
+                  <VectorIcon name="check" size={16} color="#fff" />
+                  <Text style={styles.actionButtonText}>Accept</Text>
+                </>
               )}
             </TouchableOpacity>
             <TouchableOpacity
@@ -774,6 +960,7 @@ const TakeOnDate = () => {
               onPress={() => respondToCounterProposal('reject')}
               disabled={respondingToRequest}
             >
+              <VectorIcon name="close" size={16} color="#fff" />
               <Text style={styles.actionButtonText}>Decline</Text>
             </TouchableOpacity>
           </View>
@@ -783,6 +970,7 @@ const TakeOnDate = () => {
             style={styles.paymentButton}
             onPress={navigateToPayment}
           >
+            <VectorIcon name="payment" size={20} color="#fff" />
             <Text style={styles.paymentButtonText}>
               Complete Payment (₹{currentDateRequest.finalDetails?.budget?.toLocaleString('en-IN')})
             </Text>
@@ -791,6 +979,7 @@ const TakeOnDate = () => {
       </View>
     );
   };
+
   // Render individual message
   const renderMessage = (message, index) => {
     const isMyMessage = message.sender._id === user?._id;
@@ -807,8 +996,8 @@ const TakeOnDate = () => {
               { backgroundColor: getAvatarColor(messageUser) }
             ]}>
               {(messageUser.photoUrl || messageUser.avatar) ? (
-                <Image 
-                  source={{ uri: messageUser.photoUrl || messageUser.avatar }} 
+                <Image
+                  source={{ uri: messageUser.photoUrl || messageUser.avatar }}
                   style={styles.smallAvatarImage}
                   onError={() => console.log('Small avatar image failed to load')}
                 />
@@ -837,26 +1026,31 @@ const TakeOnDate = () => {
             styles.messageTime,
             isMyMessage ? styles.myMessageTime : styles.theirMessageTime
           ]}>
-            {new Date(message.createdAt).toLocaleTimeString([], { 
-              hour: '2-digit', 
-              minute: '2-digit' 
+            {new Date(message.createdAt).toLocaleTimeString([], {
+              hour: '2-digit',
+              minute: '2-digit'
             })}
             {isMyMessage && (
-              <Text style={styles.readStatus}>
-                {message.isRead ? ' ✓✓' : ' ✓'}
-              </Text>
+              <View style={styles.readStatusContainer}>
+                <VectorIcon
+                  name={message.isRead ? "done-all" : "done"}
+                  size={12}
+                  color="rgba(255, 255, 255, 0.7)"
+                />
+              </View>
             )}
           </Text>
         </View>
       </View>
     );
   };
+
   if (loading && messages.length === 0) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.header}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Text style={styles.backButtonText}>←</Text>
+            <VectorIcon name="arrow-back" size={24} color="#ed167e" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>{getDisplayName()}</Text>
         </View>
@@ -867,12 +1061,13 @@ const TakeOnDate = () => {
       </SafeAreaView>
     );
   }
+
   return (
     <SafeAreaView style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-          <Text style={styles.backButtonText}>←</Text>
+          <VectorIcon name="arrow-back" size={24} color="#ed167e" />
         </TouchableOpacity>
         <View style={styles.headerUser}>
           <View style={[
@@ -880,8 +1075,8 @@ const TakeOnDate = () => {
             { backgroundColor: getAvatarColor(otherUserData || username) }
           ]}>
             {getProfileImageUrl() ? (
-              <Image 
-                source={{ uri: getProfileImageUrl() }} 
+              <Image
+                source={{ uri: getProfileImageUrl() }}
                 style={styles.headerAvatarImage}
                 onError={() => console.log('Header avatar image failed to load')}
               />
@@ -917,6 +1112,7 @@ const TakeOnDate = () => {
         {renderDateRequestStatus()}
         {messages.length === 0 ? (
           <View style={styles.emptyContainer}>
+            <VectorIcon name="chat-bubble-outline" size={48} color="#666" />
             <Text style={styles.emptyText}>No messages yet.</Text>
             <Text style={styles.emptySubtext}>Start the conversation by sending a message!</Text>
             <Text style={styles.emptySubtext}>Note: Each person can only send 1 message.</Text>
@@ -925,7 +1121,7 @@ const TakeOnDate = () => {
           messages.map((message, index) => renderMessage(message, index))
         )}
       </ScrollView>
-      {/* Take on Date Button - Shows only when both users have sent 1 message each */}
+      {/* Take on Date Button */}
       {showTakeOnDateButton && (
         <View style={styles.takeOnDateContainer}>
           <TouchableOpacity
@@ -944,7 +1140,8 @@ const TakeOnDate = () => {
               end={{ x: 1, y: 1 }}
               style={styles.takeOnDateGradient}
             >
-              <Text style={styles.takeOnDateText}>💕 Take on a Date</Text>
+              <VectorIcon name="favorite" size={20} color="#fff" />
+              <Text style={styles.takeOnDateText}>Take on a Date</Text>
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -974,7 +1171,10 @@ const TakeOnDate = () => {
                   {sendingMessage === type ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
-                    <Text style={styles.messageButtonText}>{content}</Text>
+                    <>
+                      <VectorIcon name="send" size={16} color="#fff" />
+                      <Text style={styles.messageButtonText}>{content}</Text>
+                    </>
                   )}
                 </LinearGradient>
               </TouchableOpacity>
@@ -985,6 +1185,7 @@ const TakeOnDate = () => {
       {/* Message Limit Reached Notice */}
       {!showMessageButtons && !showTakeOnDateButton && messages.length > 0 && !currentDateRequest && (
         <View style={styles.limitReachedContainer}>
+          <VectorIcon name="info" size={20} color="#999" />
           <Text style={styles.limitReachedText}>
             {getMessageLimitStatus()}
           </Text>
@@ -995,180 +1196,255 @@ const TakeOnDate = () => {
           )}
         </View>
       )}
-      {/* COMPLETE INITIAL DATE REQUEST MODAL - WITH ALL FIELDS */}
+      {/* Enhanced Initial Date Request Modal with Date/Time Pickers */}
       <Modal
         visible={showDateRequestModal}
         animationType="slide"
         transparent={true}
         onRequestClose={() => setShowDateRequestModal(false)}
       >
-        <KeyboardAvoidingView 
+        <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Send Date Request</Text>
+              <View style={styles.modalTitleContainer}>
+                <VectorIcon name="favorite" size={24} color="#ed167e" />
+                <Text style={styles.modalTitle}>Send Date Request</Text>
+              </View>
               <TouchableOpacity
                 onPress={() => setShowDateRequestModal(false)}
                 style={styles.modalCloseButton}
               >
-                <Text style={styles.modalCloseText}>✕</Text>
+                <VectorIcon name="close" size={24} color="#ed167e" />
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalContent} showsVerticalScrollIndicator={false}>
-              <Text style={styles.inputLabel}>Message:</Text>
-              <TextInput
-                style={styles.textInput}
-                value={initialDateRequest.message}
-                onChangeText={(text) => setInitialDateRequest({
-                  ...initialDateRequest,
-                  message: text
-                })}
-                placeholder="Would you like to go on a date?"
-                placeholderTextColor="#666"
-                multiline={true}
-                numberOfLines={3}
-              />
-              <Text style={styles.inputLabel}>Date Type:</Text>
-              <View style={styles.dateTypeContainer}>
-                {['dinner', 'lunch', 'coffee', 'movie'].map(type => (
-                  <TouchableOpacity
-                    key={type}
-                    style={[
-                      styles.dateTypeButton,
-                      initialDateRequest.dateType === type && styles.dateTypeButtonSelected
-                    ]}
-                    onPress={() => setInitialDateRequest({
-                      ...initialDateRequest,
-                      dateType: type
-                    })}
-                  >
-                    <Text style={[
-                      styles.dateTypeButtonText,
-                      initialDateRequest.dateType === type && styles.dateTypeButtonTextSelected
-                    ]}>
-                      {getDateTypeDisplay(type)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+              <View style={styles.formSection}>
+                <View style={styles.inputLabelContainer}>
+                  <VectorIcon name="chat-bubble" size={16} color="#ed167e" />
+                  <Text style={styles.inputLabel}>Message:</Text>
+                </View>
+                <TextInput
+                  style={styles.textInput}
+                  value={initialDateRequest.message}
+                  onChangeText={(text) => setInitialDateRequest({
+                    ...initialDateRequest,
+                    message: text
+                  })}
+                  placeholder="Would you like to go on a date?"
+                  placeholderTextColor="#666"
+                  multiline={true}
+                  numberOfLines={3}
+                />
               </View>
-              <Text style={styles.inputLabel}>Location:</Text>
-              <Text style={styles.subInputLabel}>City *</Text>
-              <TextInput
-                style={styles.textInput}
-                value={initialDateRequest.location.city}
-                onChangeText={(text) => setInitialDateRequest({
-                  ...initialDateRequest,
-                  location: {
-                    ...initialDateRequest.location,
-                    city: text
-                  }
-                })}
-                placeholder="Mumbai"
-                placeholderTextColor="#666"
-              />
-              <Text style={styles.subInputLabel}>Area (Optional)</Text>
-              <TextInput
-                style={styles.textInput}
-                value={initialDateRequest.location.area}
-                onChangeText={(text) => setInitialDateRequest({
-                  ...initialDateRequest,
-                  location: {
-                    ...initialDateRequest.location,
-                    area: text
-                  }
-                })}
-                placeholder="Bandra"
-                placeholderTextColor="#666"
-              />
-              <Text style={styles.subInputLabel}>Specific Place (Optional)</Text>
-              <TextInput
-                style={styles.textInput}
-                value={initialDateRequest.location.specificPlace}
-                onChangeText={(text) => setInitialDateRequest({
-                  ...initialDateRequest,
-                  location: {
-                    ...initialDateRequest.location,
-                    specificPlace: text
-                  }
-                })}
-                placeholder="Linking Road Cafe"
-                placeholderTextColor="#666"
-              />
-              <Text style={styles.inputLabel}>Preferred Date *</Text>
-              <TextInput
-                style={styles.textInput}
-                value={initialDateRequest.preferredDate}
-                onChangeText={(text) => setInitialDateRequest({
-                  ...initialDateRequest,
-                  preferredDate: text
-                })}
-                placeholder="2025-01-20"
-                placeholderTextColor="#666"
-              />
-              <Text style={styles.inputLabel}>Preferred Time *</Text>
-              <TextInput
-                style={styles.textInput}
-                value={initialDateRequest.preferredTime}
-                onChangeText={(text) => setInitialDateRequest({
-                  ...initialDateRequest,
-                  preferredTime: text
-                })}
-                placeholder="19:30"
-                placeholderTextColor="#666"
-              />
-              <Text style={styles.inputLabel}>Budget (₹) *</Text>
-              <TextInput
-                style={styles.textInput}
-                value={initialDateRequest.budget}
-                onChangeText={(text) => setInitialDateRequest({
-                  ...initialDateRequest,
-                  budget: text
-                })}
-                placeholder="2000"
-                placeholderTextColor="#666"
-                keyboardType="numeric"
-              />
+              <View style={styles.formSection}>
+                <View style={styles.inputLabelContainer}>
+                  <VectorIcon name="restaurant" size={16} color="#ed167e" />
+                  <Text style={styles.inputLabel}>Date Type:</Text>
+                </View>
+                <View style={styles.dateTypeContainer}>
+                  {['dinner', 'lunch', 'coffee', 'movie'].map(type => (
+                    <TouchableOpacity
+                      key={type}
+                      style={[
+                        styles.dateTypeButton,
+                        initialDateRequest.dateType === type && styles.dateTypeButtonSelected
+                      ]}
+                      onPress={() => setInitialDateRequest({
+                        ...initialDateRequest,
+                        dateType: type
+                      })}
+                    >
+                      <Text style={[
+                        styles.dateTypeButtonText,
+                        initialDateRequest.dateType === type && styles.dateTypeButtonTextSelected
+                      ]}>
+                        {getDateTypeDisplay(type)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+              <View style={styles.formSection}>
+                <View style={styles.inputLabelContainer}>
+                  <VectorIcon name="location-on" size={16} color="#ed167e" />
+                  <Text style={styles.inputLabel}>Location:</Text>
+                </View>
+                <Text style={styles.subInputLabel}>City *</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={initialDateRequest.location.city}
+                  onChangeText={(text) => setInitialDateRequest({
+                    ...initialDateRequest,
+                    location: {
+                      ...initialDateRequest.location,
+                      city: text
+                    }
+                  })}
+                  placeholder="Mumbai"
+                  placeholderTextColor="#666"
+                />
+                <Text style={styles.subInputLabel}>Area (Optional)</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={initialDateRequest.location.area}
+                  onChangeText={(text) => setInitialDateRequest({
+                    ...initialDateRequest,
+                    location: {
+                      ...initialDateRequest.location,
+                      area: text
+                    }
+                  })}
+                  placeholder="Bandra"
+                  placeholderTextColor="#666"
+                />
+                <Text style={styles.subInputLabel}>Specific Place (Optional)</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={initialDateRequest.location.specificPlace}
+                  onChangeText={(text) => setInitialDateRequest({
+                    ...initialDateRequest,
+                    location: {
+                      ...initialDateRequest.location,
+                      specificPlace: text
+                    }
+                  })}
+                  placeholder="Linking Road Cafe"
+                  placeholderTextColor="#666"
+                />
+              </View>
+              {/* Enhanced Date Picker Section */}
+              <View style={styles.formSection}>
+                <View style={styles.inputLabelContainer}>
+                  <VectorIcon name="event" size={16} color="#ed167e" />
+                  <Text style={styles.inputLabel}>Preferred Date *</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.dateTimeButton}
+                  onPress={() => setShowDatePicker(true)}
+                >
+                  <VectorIcon name="event" size={20} color="#ed167e" />
+                  <Text style={styles.dateTimeButtonText}>
+                    {formatDisplayDate(initialDateRequest.preferredDate)}
+                  </Text>
+                  <VectorIcon name="keyboard-arrow-down" size={20} color="#666" />
+                </TouchableOpacity>
+                {showDatePicker && (
+                  <DateTimePicker
+                    value={initialDateRequest.preferredDate}
+                    mode="date"
+                    display="default"
+                    minimumDate={new Date()}
+                    onChange={(event, selectedDate) => {
+                      setShowDatePicker(false);
+                      if (selectedDate) {
+                        setInitialDateRequest({
+                          ...initialDateRequest,
+                          preferredDate: selectedDate
+                        });
+                      }
+                    }}
+                  />
+                )}
+              </View>
+              {/* Enhanced Time Picker Section */}
+              <View style={styles.formSection}>
+                <View style={styles.inputLabelContainer}>
+                  <VectorIcon name="access-time" size={16} color="#ed167e" />
+                  <Text style={styles.inputLabel}>Preferred Time *</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.dateTimeButton}
+                  onPress={() => setShowTimePicker(true)}
+                >
+                  <VectorIcon name="access-time" size={20} color="#ed167e" />
+                  <Text style={styles.dateTimeButtonText}>
+                    {formatDisplayTime(initialDateRequest.preferredTime)}
+                  </Text>
+                  <VectorIcon name="keyboard-arrow-down" size={20} color="#666" />
+                </TouchableOpacity>
+                {showTimePicker && (
+                  <DateTimePicker
+                    value={initialDateRequest.preferredTime}
+                    mode="time"
+                    display="default"
+                    onChange={(event, selectedTime) => {
+                      setShowTimePicker(false);
+                      if (selectedTime) {
+                        setInitialDateRequest({
+                          ...initialDateRequest,
+                          preferredTime: selectedTime
+                        });
+                      }
+                    }}
+                  />
+                )}
+              </View>
+              <View style={styles.formSection}>
+                <View style={styles.inputLabelContainer}>
+                  <VectorIcon name="currency-rupee" size={16} color="#ed167e" />
+                  <Text style={styles.inputLabel}>Budget (₹) *</Text>
+                </View>
+                <TextInput
+                  style={styles.textInput}
+                  value={initialDateRequest.budget}
+                  onChangeText={(text) => setInitialDateRequest({
+                    ...initialDateRequest,
+                    budget: text
+                  })}
+                  placeholder="2000"
+                  placeholderTextColor="#666"
+                  keyboardType="numeric"
+                />
+                <Text style={styles.helperText}>
+                  Suggested range: ₹500 - ₹200,000
+                </Text>
+              </View>
               <View style={styles.modalFormFooter}>
+                <VectorIcon name="info" size={16} color="#999" />
                 <Text style={styles.requiredFieldsNote}>* Required fields</Text>
               </View>
             </ScrollView>
             <TouchableOpacity
               style={[
                 styles.modalSubmitButton,
-                (!initialDateRequest.location.city || !initialDateRequest.preferredDate || 
-                 !initialDateRequest.preferredTime || !initialDateRequest.budget) && 
+                (!initialDateRequest.location.city || !initialDateRequest.budget) &&
                 styles.modalSubmitButtonDisabled
               ]}
               onPress={createInitialDateRequest}
-              disabled={creatingDateRequest || !initialDateRequest.location.city || 
-                       !initialDateRequest.preferredDate || !initialDateRequest.preferredTime || 
-                       !initialDateRequest.budget}
+              disabled={creatingDateRequest || !initialDateRequest.location.city || !initialDateRequest.budget}
             >
               {creatingDateRequest ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={styles.modalSubmitButtonText}>Send Date Request</Text>
+                <>
+                  <VectorIcon name="send" size={20} color="#fff" />
+                  <Text style={styles.modalSubmitButtonText}>Send Date Request</Text>
+                </>
               )}
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
       </Modal>
-      {/* Response Modal */}
+      {/* Enhanced Response Modal with Complete Original Request Display */}
       <Modal
         visible={showResponseModal}
         animationType="slide"
         transparent={true}
         onRequestClose={() => setShowResponseModal(false)}
       >
-        <KeyboardAvoidingView 
+        <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Respond to Date Request</Text>
+              <View style={styles.modalTitleContainer}>
+                <VectorIcon name="reply" size={24} color="#ed167e" />
+                <Text style={styles.modalTitle}>Respond to Date Request</Text>
+              </View>
               <TouchableOpacity
                 onPress={() => {
                   setShowResponseModal(false);
@@ -1176,70 +1452,158 @@ const TakeOnDate = () => {
                 }}
                 style={styles.modalCloseButton}
               >
-                <Text style={styles.modalCloseText}>✕</Text>
+                <VectorIcon name="close" size={24} color="#ed167e" />
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.modalContent}>
+              {/* Enhanced Complete Original Request Summary */}
               {currentDateRequest && (
                 <View style={styles.requestSummary}>
-                  <Text style={styles.requestSummaryTitle}>Date Request from {currentDateRequest.requester.fullName}</Text>
-                  <Text style={styles.requestSummaryText}>{currentDateRequest.initialRequest.message}</Text>
-                  <Text style={styles.requestSummaryText}>Type: {getDateTypeDisplay(currentDateRequest.initialRequest.dateType)}</Text>
+                  <View style={styles.requestSummaryHeader}>
+                    <VectorIcon name="person" size={20} color="#FF69B4" />
+                    <Text style={styles.requestSummaryTitle}>
+                      Date Request from {currentDateRequest.requester.fullName || currentDateRequest.requester.username}
+                    </Text>
+                  </View>
+                  <View style={styles.requestSummaryDetails}>
+                    <View style={styles.requestSummaryRow}>
+                      <VectorIcon name="restaurant" size={16} color="#ed167e" />
+                      <Text style={styles.requestSummaryText}>
+                        {getDateTypeDisplay(currentDateRequest.initialRequest.dateType)}
+                      </Text>
+                    </View>
+                    <View style={styles.requestSummaryRow}>
+                      <VectorIcon name="chat-bubble" size={16} color="#ed167e" />
+                      <Text style={styles.requestSummaryText}>
+                        "{currentDateRequest.initialRequest.message}"
+                      </Text>
+                    </View>
+                    {/* Complete location display */}
+                    {currentDateRequest.initialRequest.location && (
+                      <View style={styles.requestSummaryRow}>
+                        <VectorIcon name="location-on" size={16} color="#ed167e" />
+                        <Text style={styles.requestSummaryText}>
+                          {currentDateRequest.initialRequest.location.city}
+                          {currentDateRequest.initialRequest.location.area && `, ${currentDateRequest.initialRequest.location.area}`}
+                          {currentDateRequest.initialRequest.location.specificPlace && ` (${currentDateRequest.initialRequest.location.specificPlace})`}
+                        </Text>
+                      </View>
+                    )}
+                    {/* Date and time display */}
+                    {currentDateRequest.initialRequest.preferredDate && (
+                      <View style={styles.requestSummaryRow}>
+                        <VectorIcon name="event" size={16} color="#ed167e" />
+                        <Text style={styles.requestSummaryText}>
+                          {new Date(currentDateRequest.initialRequest.preferredDate).toLocaleDateString('en-IN', {
+                            weekday: 'long',
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric'
+                          })}
+                        </Text>
+                      </View>
+                    )}
+                    {currentDateRequest.initialRequest.preferredTime && (
+                      <View style={styles.requestSummaryRow}>
+                        <VectorIcon name="access-time" size={16} color="#ed167e" />
+                        <Text style={styles.requestSummaryText}>
+                          {currentDateRequest.initialRequest.preferredTime}
+                        </Text>
+                      </View>
+                    )}
+                    {/* Budget display */}
+                    {currentDateRequest.initialRequest.budget && (
+                      <View style={styles.requestSummaryRow}>
+                        <VectorIcon name="currency-rupee" size={16} color="#ed167e" />
+                        <Text style={styles.requestSummaryText}>
+                          ₹{currentDateRequest.initialRequest.budget.toLocaleString('en-IN')}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
                 </View>
               )}
-              <Text style={styles.inputLabel}>Your Response:</Text>
-              <View style={styles.responseOptions}>
-                <TouchableOpacity
-                  style={[
-                    styles.responseButton,
-                    responseForm.action === 'accept' && styles.responseButtonSelected
-                  ]}
-                  onPress={() => {
-                    setResponseForm({ ...responseForm, action: 'accept' });
-                    setShowCounterProposalForm(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.responseButtonText,
-                    responseForm.action === 'accept' && styles.responseButtonTextSelected
-                  ]}>✅ Accept</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.responseButton,
-                    responseForm.action === 'reject' && styles.responseButtonSelected
-                  ]}
-                  onPress={() => {
-                    setResponseForm({ ...responseForm, action: 'reject' });
-                    setShowCounterProposalForm(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.responseButtonText,
-                    responseForm.action === 'reject' && styles.responseButtonTextSelected
-                  ]}>❌ Decline</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.responseButton,
-                    responseForm.action === 'counter_propose' && styles.responseButtonSelected
-                  ]}
-                  onPress={() => {
-                    setResponseForm({ ...responseForm, action: 'counter_propose' });
-                    setShowCounterProposalForm(true);
-                  }}
-                >
-                  <Text style={[
-                    styles.responseButtonText,
-                    responseForm.action === 'counter_propose' && styles.responseButtonTextSelected
-                  ]}>📝 Share Preferences</Text>
-                </TouchableOpacity>
+              <View style={styles.formSection}>
+                <View style={styles.inputLabelContainer}>
+                  <VectorIcon name="reply" size={16} color="#ed167e" />
+                  <Text style={styles.inputLabel}>Your Response:</Text>
+                </View>
+                <View style={styles.responseOptions}>
+                  <TouchableOpacity
+                    style={[
+                      styles.responseButton,
+                      responseForm.action === 'accept' && styles.responseButtonSelected
+                    ]}
+                    onPress={() => {
+                      setResponseForm({ ...responseForm, action: 'accept' });
+                      setShowCounterProposalForm(false);
+                    }}
+                  >
+                    <VectorIcon name="check" size={16} color={responseForm.action === 'accept' ? '#fff' : '#999'} />
+                    <Text style={[
+                      styles.responseButtonText,
+                      responseForm.action === 'accept' && styles.responseButtonTextSelected
+                    ]}>Accept as proposed</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.responseButton,
+                      responseForm.action === 'reject' && styles.responseButtonSelected
+                    ]}
+                    onPress={() => {
+                      setResponseForm({ ...responseForm, action: 'reject' });
+                      setShowCounterProposalForm(false);
+                    }}
+                  >
+                    <VectorIcon name="close" size={16} color={responseForm.action === 'reject' ? '#fff' : '#999'} />
+                    <Text style={[
+                      styles.responseButtonText,
+                      responseForm.action === 'reject' && styles.responseButtonTextSelected
+                    ]}>Decline politely</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.responseButton,
+                      responseForm.action === 'counter_propose' && styles.responseButtonSelected
+                    ]}
+                    onPress={() => {
+                      setResponseForm({ ...responseForm, action: 'counter_propose' });
+                      setShowCounterProposalForm(true);
+                      // Pre-fill with original request data
+                      setCounterProposal({
+                        preferredLocation: {
+                          city: currentDateRequest?.initialRequest.location?.city || '',
+                          area: currentDateRequest?.initialRequest.location?.area || '',
+                          specificPlace: currentDateRequest?.initialRequest.location?.specificPlace || ''
+                        },
+                        preferredDate: currentDateRequest?.initialRequest.preferredDate ?
+                          new Date(currentDateRequest.initialRequest.preferredDate) : new Date(),
+                        preferredTime: currentDateRequest?.initialRequest.preferredTime ?
+                          new Date(`2000-01-01T${currentDateRequest.initialRequest.preferredTime}:00`) : new Date(),
+                        suggestedBudget: currentDateRequest?.initialRequest.budget?.toString() || '2000',
+                        recipientMessage: ''
+                      });
+                    }}
+                  >
+                    <VectorIcon name="edit" size={16} color={responseForm.action === 'counter_propose' ? '#fff' : '#999'} />
+                    <Text style={[
+                      styles.responseButtonText,
+                      responseForm.action === 'counter_propose' && styles.responseButtonTextSelected
+                    ]}>Share my preferences</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
-              {/* Counter-Proposal Form */}
+              {/* Enhanced Counter-Proposal Form with Date/Time Pickers */}
               {showCounterProposalForm && (
                 <View style={styles.counterProposalForm}>
-                  <Text style={styles.formSectionTitle}>Your Date Preferences</Text>
-                  <Text style={styles.inputLabel}>City *</Text>
+                  <View style={styles.formSectionTitleContainer}>
+                    <VectorIcon name="edit" size={20} color="#FF69B4" />
+                    <Text style={styles.formSectionTitle}>Your Date Preferences</Text>
+                  </View>
+                  <View style={styles.inputLabelContainer}>
+                    <VectorIcon name="location-on" size={16} color="#ed167e" />
+                    <Text style={styles.inputLabel}>City *</Text>
+                  </View>
                   <TextInput
                     style={styles.textInput}
                     value={counterProposal.preferredLocation.city}
@@ -1278,32 +1642,77 @@ const TakeOnDate = () => {
                         specificPlace: text
                       }
                     })}
-                    placeholder="Linking Road Cafe"
+                    placeholder="Suggest a specific place"
                     placeholderTextColor="#666"
                   />
-                  <Text style={styles.inputLabel}>Preferred Date *</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={counterProposal.preferredDate}
-                    onChangeText={(text) => setCounterProposal({
-                      ...counterProposal,
-                      preferredDate: text
-                    })}
-                    placeholder="2025-01-20"
-                    placeholderTextColor="#666"
-                  />
-                  <Text style={styles.inputLabel}>Preferred Time *</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={counterProposal.preferredTime}
-                    onChangeText={(text) => setCounterProposal({
-                      ...counterProposal,
-                      preferredTime: text
-                    })}
-                    placeholder="19:30"
-                    placeholderTextColor="#666"
-                  />
-                  <Text style={styles.inputLabel}>Suggested Budget (₹) *</Text>
+                  {/* Counter Proposal Date Picker */}
+                  <View style={styles.inputLabelContainer}>
+                    <VectorIcon name="event" size={16} color="#ed167e" />
+                    <Text style={styles.inputLabel}>Preferred Date *</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.dateTimeButton}
+                    onPress={() => setShowCounterDatePicker(true)}
+                  >
+                    <VectorIcon name="event" size={20} color="#ed167e" />
+                    <Text style={styles.dateTimeButtonText}>
+                      {formatDisplayDate(counterProposal.preferredDate)}
+                    </Text>
+                    <VectorIcon name="keyboard-arrow-down" size={20} color="#666" />
+                  </TouchableOpacity>
+                  {showCounterDatePicker && (
+                    <DateTimePicker
+                      value={counterProposal.preferredDate}
+                      mode="date"
+                      display="default"
+                      minimumDate={new Date()}
+                      onChange={(event, selectedDate) => {
+                        setShowCounterDatePicker(false);
+                        if (selectedDate) {
+                          setCounterProposal({
+                            ...counterProposal,
+                            preferredDate: selectedDate
+                          });
+                        }
+                      }}
+                    />
+                  )}
+                  {/* Counter Proposal Time Picker */}
+                  <View style={styles.inputLabelContainer}>
+                    <VectorIcon name="access-time" size={16} color="#ed167e" />
+                    <Text style={styles.inputLabel}>Preferred Time *</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.dateTimeButton}
+                    onPress={() => setShowCounterTimePicker(true)}
+                  >
+                    <VectorIcon name="access-time" size={20} color="#ed167e" />
+                    <Text style={styles.dateTimeButtonText}>
+                      {formatDisplayTime(counterProposal.preferredTime)}
+                    </Text>
+                    <VectorIcon name="keyboard-arrow-down" size={20} color="#666" />
+                  </TouchableOpacity>
+                  {showCounterTimePicker && (
+                    <DateTimePicker
+                      value={counterProposal.preferredTime}
+                      mode="time"
+                      display="default"
+                      onChange={(event, selectedTime) => {
+                        setShowCounterTimePicker(false);
+                        if (selectedTime) {
+                          setCounterProposal({
+                            ...counterProposal,
+                            preferredTime: selectedTime
+                          });
+                        }
+                      }}
+                    />
+                  )}
+                  {/* Enhanced Budget Input with Soft Guidance */}
+                  <View style={styles.inputLabelContainer}>
+                    <VectorIcon name="currency-rupee" size={16} color="#ed167e" />
+                    <Text style={styles.inputLabel}>Budget Preference (₹) *</Text>
+                  </View>
                   <TextInput
                     style={styles.textInput}
                     value={counterProposal.suggestedBudget}
@@ -1315,7 +1724,42 @@ const TakeOnDate = () => {
                     placeholderTextColor="#666"
                     keyboardType="numeric"
                   />
-                  <Text style={styles.inputLabel}>Message (Optional)</Text>
+                  {/* Soft Budget Guidance */}
+                  <View style={styles.budgetGuidanceContainer}>
+                    <Text style={styles.budgetReference}>
+                      They suggested: ₹{currentDateRequest?.initialRequest.budget?.toLocaleString('en-IN') || '2,000'}
+                    </Text>
+                    <Text style={styles.budgetHelper}>
+                      You can suggest any amount that works for you
+                    </Text>
+                    {/* Soft warning for significant budget differences */}
+                    {counterProposal.suggestedBudget && currentDateRequest?.initialRequest.budget && (
+                      (() => {
+                        const suggestedAmount = parseInt(counterProposal.suggestedBudget);
+                        const originalAmount = currentDateRequest.initialRequest.budget;
+                        const difference = suggestedAmount - originalAmount;
+                        const percentDifference = Math.abs(difference) / originalAmount * 100;
+                        if (!isNaN(suggestedAmount) && percentDifference > 20) {
+                          return (
+                            <View style={styles.budgetNoteContainer}>
+                              <VectorIcon name="info" size={14} color="#FF9800" />
+                              <Text style={styles.budgetNote}>
+                                {difference > 0
+                                  ? "This is higher than their suggestion. They'll need to approve the new amount."
+                                  : "This is lower than their suggestion. They may appreciate the consideration."
+                                }
+                              </Text>
+                            </View>
+                          );
+                        }
+                        return null;
+                      })()
+                    )}
+                  </View>
+                  <View style={styles.inputLabelContainer}>
+                    <VectorIcon name="chat-bubble" size={16} color="#ed167e" />
+                    <Text style={styles.inputLabel}>Optional Message:</Text>
+                  </View>
                   <TextInput
                     style={styles.textInput}
                     value={counterProposal.recipientMessage}
@@ -1330,19 +1774,24 @@ const TakeOnDate = () => {
                   />
                 </View>
               )}
-              <Text style={styles.inputLabel}>Optional Message:</Text>
-              <TextInput
-                style={styles.textInput}
-                value={responseForm.message}
-                onChangeText={(text) => setResponseForm({
-                  ...responseForm,
-                  message: text
-                })}
-                placeholder="Add a message..."
-                placeholderTextColor="#666"
-                multiline={true}
-                numberOfLines={2}
-              />
+              <View style={styles.formSection}>
+                <View style={styles.inputLabelContainer}>
+                  <VectorIcon name="chat-bubble" size={16} color="#ed167e" />
+                  <Text style={styles.inputLabel}>Optional Message:</Text>
+                </View>
+                <TextInput
+                  style={styles.textInput}
+                  value={responseForm.message}
+                  onChangeText={(text) => setResponseForm({
+                    ...responseForm,
+                    message: text
+                  })}
+                  placeholder="Add a message..."
+                  placeholderTextColor="#666"
+                  multiline={true}
+                  numberOfLines={2}
+                />
+              </View>
             </ScrollView>
             <TouchableOpacity
               style={[
@@ -1355,12 +1804,15 @@ const TakeOnDate = () => {
               {respondingToRequest ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={styles.modalSubmitButtonText}>
-                  {responseForm.action === 'accept' ? 'Accept Date' :
-                   responseForm.action === 'reject' ? 'Decline Date' :
-                   responseForm.action === 'counter_propose' ? 'Share Preferences' :
-                   'Select Response'}
-                </Text>
+                <>
+                  <VectorIcon name="send" size={20} color="#fff" />
+                  <Text style={styles.modalSubmitButtonText}>
+                    {responseForm.action === 'accept' ? 'Accept Date Request' :
+                      responseForm.action === 'reject' ? 'Decline Date Request' :
+                        responseForm.action === 'counter_propose' ? 'Share My Preferences' :
+                          'Select Response'}
+                  </Text>
+                </>
               )}
             </TouchableOpacity>
           </View>
@@ -1369,6 +1821,7 @@ const TakeOnDate = () => {
     </SafeAreaView>
   );
 };
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -1386,11 +1839,6 @@ const styles = StyleSheet.create({
   backButton: {
     marginRight: 15,
     padding: 5,
-  },
-  backButtonText: {
-    color: '#ed167e',
-    fontSize: 24,
-    fontWeight: 'bold',
   },
   headerUser: {
     flexDirection: 'row',
@@ -1458,6 +1906,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
+    marginTop: 15,
   },
   emptySubtext: {
     color: '#666',
@@ -1528,6 +1977,8 @@ const styles = StyleSheet.create({
   messageTime: {
     fontSize: 11,
     marginTop: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   myMessageTime: {
     color: 'rgba(255, 255, 255, 0.7)',
@@ -1536,8 +1987,8 @@ const styles = StyleSheet.create({
   theirMessageTime: {
     color: '#999',
   },
-  readStatus: {
-    color: 'rgba(255, 255, 255, 0.7)',
+  readStatusContainer: {
+    marginLeft: 5,
   },
   // Date Request Card Styles
   dateRequestCard: {
@@ -1554,6 +2005,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 10,
   },
+  dateRequestTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   dateRequestTitle: {
     color: '#ed167e',
     fontSize: 18,
@@ -1564,6 +2020,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingVertical: 6,
     paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   cancelButtonText: {
     color: '#fff',
@@ -1576,88 +2035,128 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     lineHeight: 22,
   },
+  // Enhanced Original Request Styles
   originalRequest: {
     backgroundColor: '#2e2e2e',
-    borderRadius: 10,
-    padding: 15,
+    borderRadius: 12,
+    padding: 16,
     marginBottom: 15,
+    borderLeftWidth: 3,
+    borderLeftColor: '#FF69B4',
+  },
+  originalRequestHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
   },
   originalRequestTitle: {
     color: '#FF69B4',
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 8,
   },
   originalRequestDetails: {
-    marginLeft: 10,
+    gap: 8,
+  },
+  originalRequestRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 2,
   },
   originalRequestDetail: {
     color: '#fff',
-    fontSize: 13,
-    marginBottom: 4,
+    fontSize: 14,
+    lineHeight: 20,
+    flex: 1,
   },
+  // Enhanced Counter Proposal Styles
   counterProposalDetails: {
     backgroundColor: '#2e2e2e',
-    borderRadius: 10,
-    padding: 15,
+    borderRadius: 12,
+    padding: 16,
     marginBottom: 15,
+    borderLeftWidth: 3,
+    borderLeftColor: '#4CAF50',
+  },
+  counterProposalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
   },
   counterProposalTitle: {
-    color: '#FF69B4',
+    color: '#4CAF50',
     fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 10,
   },
   counterProposalDetailsContainer: {
     gap: 8,
   },
   counterProposalRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 2,
   },
   counterProposalText: {
     color: '#fff',
     fontSize: 14,
-    marginBottom: 5,
+    lineHeight: 20,
+    flex: 1,
   },
   counterProposalMessage: {
     color: '#ccc',
     fontSize: 14,
     fontStyle: 'italic',
-    marginTop: 10,
+    marginTop: 5,
+    flex: 1,
   },
+  // Final Details Styles
   finalDetails: {
     backgroundColor: '#1a4a1a',
-    borderRadius: 10,
-    padding: 15,
+    borderRadius: 12,
+    padding: 16,
     marginBottom: 15,
+    borderLeftWidth: 3,
+    borderLeftColor: '#4CAF50',
+  },
+  finalDetailsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
   },
   finalDetailsTitle: {
     color: '#4CAF50',
     fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 10,
   },
   finalDetailsContainer: {
     gap: 8,
   },
   finalDetailsRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 2,
   },
   finalDetailsText: {
     color: '#fff',
     fontSize: 14,
-    marginBottom: 5,
+    lineHeight: 20,
+    flex: 1,
   },
+  // Action Button Styles
   respondButton: {
     backgroundColor: '#ed167e',
     borderRadius: 10,
     paddingVertical: 12,
     paddingHorizontal: 20,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
   },
   respondButtonText: {
     color: '#fff',
@@ -1673,6 +2172,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingVertical: 12,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
   },
   acceptButton: {
     backgroundColor: '#28a745',
@@ -1691,6 +2193,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 20,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
   },
   paymentButtonText: {
     color: '#fff',
@@ -1718,6 +2223,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 25,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
   },
   takeOnDateText: {
     color: '#fff',
@@ -1732,17 +2239,22 @@ const styles = StyleSheet.create({
     borderTopColor: '#2e2e2e',
     backgroundColor: '#0a0a0a',
   },
+  inputLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
   inputLabel: {
-    color: '#999',
+    color: '#fff',
     fontSize: 14,
-    marginBottom: 5,
-    fontWeight: '500',
+    fontWeight: '600',
   },
   subInputLabel: {
     color: '#ccc',
     fontSize: 13,
-    marginBottom: 5,
-    marginTop: 10,
+    marginBottom: 8,
+    marginTop: 12,
     fontWeight: '400',
   },
   messageLimitText: {
@@ -1769,6 +2281,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 44,
+    flexDirection: 'row',
+    gap: 6,
   },
   messageButtonText: {
     color: '#fff',
@@ -1783,6 +2297,9 @@ const styles = StyleSheet.create({
     borderTopColor: '#2e2e2e',
     backgroundColor: '#0a0a0a',
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
   },
   limitReachedText: {
     color: '#999',
@@ -1818,6 +2335,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#2e2e2e',
   },
+  modalTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   modalTitle: {
     color: '#fff',
     fontSize: 20,
@@ -1826,14 +2348,27 @@ const styles = StyleSheet.create({
   modalCloseButton: {
     padding: 5,
   },
-  modalCloseText: {
-    color: '#ed167e',
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
   modalContent: {
     flex: 1,
     padding: 20,
+  },
+  // Form Section Styles
+  formSection: {
+    marginBottom: 20,
+  },
+  formSectionTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 15,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#2e2e2e',
+  },
+  formSectionTitle: {
+    color: '#FF69B4',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   textInput: {
     backgroundColor: '#2e2e2e',
@@ -1841,9 +2376,33 @@ const styles = StyleSheet.create({
     padding: 15,
     color: '#fff',
     fontSize: 16,
-    marginBottom: 15,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: '#444',
+  },
+  helperText: {
+    color: '#999',
+    fontSize: 12,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  // Enhanced Date/Time Picker Styles
+  dateTimeButton: {
+    backgroundColor: '#2e2e2e',
+    borderRadius: 10,
+    padding: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#444',
+  },
+  dateTimeButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    flex: 1,
+    marginLeft: 10,
   },
   dateTypeContainer: {
     flexDirection: 'row',
@@ -1876,6 +2435,9 @@ const styles = StyleSheet.create({
     paddingTop: 20,
     paddingBottom: 10,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
   },
   requiredFieldsNote: {
     color: '#999',
@@ -1889,6 +2451,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 25,
     alignItems: 'center',
     margin: 20,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
   },
   modalSubmitButtonDisabled: {
     backgroundColor: '#666',
@@ -1898,36 +2463,56 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
+  // Enhanced Request Summary Styles
   requestSummary: {
     backgroundColor: '#2e2e2e',
-    borderRadius: 10,
-    padding: 15,
+    borderRadius: 12,
+    padding: 16,
     marginBottom: 20,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FF69B4',
+  },
+  requestSummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
   },
   requestSummaryTitle: {
     color: '#FF69B4',
     fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 10,
+  },
+  requestSummaryDetails: {
+    gap: 8,
+  },
+  requestSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    paddingVertical: 3,
   },
   requestSummaryText: {
     color: '#fff',
     fontSize: 14,
-    marginBottom: 5,
+    lineHeight: 20,
+    flex: 1,
   },
+  // Response Options Styles
   responseOptions: {
-    flexDirection: 'row',
-    gap: 10,
+    gap: 12,
     marginBottom: 20,
   },
   responseButton: {
-    flex: 1,
     backgroundColor: '#2e2e2e',
-    borderRadius: 10,
-    paddingVertical: 15,
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
     alignItems: 'center',
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: '#444',
+    flexDirection: 'row',
+    gap: 12,
   },
   responseButtonSelected: {
     backgroundColor: '#ed167e',
@@ -1937,43 +2522,57 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '500',
-    textAlign: 'center',
+    textAlign: 'left',
+    flex: 1,
   },
   responseButtonTextSelected: {
     color: '#fff',
     fontWeight: 'bold',
   },
+  // Enhanced Counter Proposal Form Styles
   counterProposalForm: {
     backgroundColor: '#2e2e2e',
     borderRadius: 15,
     padding: 20,
     marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#444',
   },
-  formSectionTitle: {
-    color: '#FF69B4',
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 15,
-    textAlign: 'center',
-  },
-  flowExplanation: {
-    backgroundColor: '#2a2a2a',
-    borderRadius: 10,
-    padding: 15,
-    marginTop: 10,
+  // Enhanced Budget Guidance Styles
+  budgetGuidanceContainer: {
+    marginTop: 8,
+    padding: 12,
+    backgroundColor: '#333',
+    borderRadius: 8,
     borderLeftWidth: 3,
-    borderLeftColor: '#ed167e',
+    borderLeftColor: '#4CAF50',
   },
-  flowExplanationTitle: {
-    color: '#ed167e',
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginBottom: 8,
-  },
-  flowExplanationText: {
-    color: '#ccc',
+  budgetReference: {
+    color: '#4CAF50',
     fontSize: 14,
-    lineHeight: 20,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  budgetHelper: {
+    color: '#999',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  budgetNoteContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 8,
+    padding: 8,
+    backgroundColor: '#3a2a1a',
+    borderRadius: 6,
+  },
+  budgetNote: {
+    color: '#FFB74D',
+    fontSize: 12,
+    lineHeight: 16,
+    flex: 1,
   },
 });
+
 export default TakeOnDate;

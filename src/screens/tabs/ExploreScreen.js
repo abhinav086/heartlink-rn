@@ -15,7 +15,7 @@ import {
   Animated,
   TextInput
 } from "react-native";
-import Video from 'react-native-video';
+import Video from 'react-native-video'; // Not directly used here anymore, but kept for potential future use or other components
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from "../../context/AuthContext";
 import BASE_URL from "../../config/config";
@@ -34,16 +34,11 @@ const ExploreScreen = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
-  
-  // Video modal states
-  const [videoModalVisible, setVideoModalVisible] = useState(false);
-  const [selectedVideo, setSelectedVideo] = useState(null);
-  const [videoLoading, setVideoLoading] = useState(false);
-  
+
   // Zoom modal states
   const [zoomModalVisible, setZoomModalVisible] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
-  
+
   // Animation values for zoom
   const scale = useRef(new Animated.Value(1)).current;
   const translateX = useRef(new Animated.Value(0)).current;
@@ -54,9 +49,10 @@ const ExploreScreen = () => {
   // Function to normalize URLs and fix double protocol issues
   const normalizeImageUrl = (url) => {
     if (!url || typeof url !== 'string') return null;
-    
+
     let cleanUrl = url.trim();
-    
+
+    // Handle common double protocol issues
     if (cleanUrl.includes('https://http://')) {
       cleanUrl = cleanUrl.replace('https://http://', 'https://');
     } else if (cleanUrl.includes('https://https://')) {
@@ -66,24 +62,27 @@ const ExploreScreen = () => {
     } else if (cleanUrl.includes('http://http://')) {
       cleanUrl = cleanUrl.replace('http://http://', 'http://');
     }
-    
+
+    // Ensure it starts with a protocol
     if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
       if (cleanUrl.startsWith('//')) {
         cleanUrl = 'https:' + cleanUrl;
       } else if (cleanUrl.startsWith('/')) {
+        // Relative URL, cannot be used directly
         return null;
       } else {
+        // Assume https if no protocol
         cleanUrl = 'https://' + cleanUrl;
       }
     }
-    
+
     return cleanUrl;
   };
 
   // Function to extract video URL from post
   const extractVideoUrl = (post) => {
     let videoUrl = null;
-    
+
     try {
       if (post.type === 'reel' && post.video) {
         videoUrl = post.video.cdnUrl || post.video.url || post.video.key;
@@ -93,34 +92,37 @@ const ExploreScreen = () => {
           videoUrl = videoMedia.cdnUrl || videoMedia.url || videoMedia.key;
         }
       }
-      
+
       videoUrl = normalizeImageUrl(videoUrl);
-      
+
     } catch (error) {
       console.error('Error extracting video URL for post:', post._id, error);
     }
-    
+
     return videoUrl;
   };
 
   // Function to extract image URL from different post structures
   const extractImageUrl = (post) => {
     let imageUrl = null;
-    
+
     try {
       if (post.type === 'post' && post.images && post.images.length > 0) {
         const firstImage = post.images[0];
         imageUrl = firstImage.cdnUrl || firstImage.url || firstImage.key;
       } else if (post.type === 'reel' && post.video) {
+        // Try to get thumbnail from video object
         if (post.video.thumbnail) {
           imageUrl = post.video.thumbnail.cdnUrl || post.video.thumbnail.url;
         } else if (post.video.thumbnails) {
+          // Fallback to largest available thumbnail
           const thumbnails = post.video.thumbnails;
           const thumbnail = thumbnails.large || thumbnails.medium || thumbnails.small;
           if (thumbnail) {
             imageUrl = thumbnail.cdnUrl || thumbnail.url;
           }
         }
+        // Final fallback to post.thumbnail
         if (!imageUrl && post.thumbnail) {
           imageUrl = post.thumbnail.cdnUrl || post.thumbnail.url;
         }
@@ -130,17 +132,19 @@ const ExploreScreen = () => {
         imageUrl = post.thumbnail.cdnUrl || post.thumbnail.url || post.thumbnail;
       } else if (post.media && post.media.length > 0) {
         const firstMedia = post.media[0];
+        // Prefer image type, fallback to thumbnail if it's a video
         imageUrl = firstMedia.cdnUrl || firstMedia.url || firstMedia.thumbnail;
       }
-      
+
       imageUrl = normalizeImageUrl(imageUrl);
-      
+
     } catch (error) {
       console.error('Error extracting image URL for post:', post._id, error);
     }
-    
+
     return imageUrl;
   };
+
 
   // Shuffle array function
   const shuffleArray = (array) => {
@@ -175,7 +179,7 @@ const ExploreScreen = () => {
         limit: API_LIMIT.toString(),
         offset: '0',
         type: 'all',
-        seed: Math.random().toString(36).substring(7)
+        seed: Math.random().toString(36).substring(7) // Add randomness to seed
       });
 
       const url = `${BASE_URL}/api/v1/posts/explore?${params.toString()}`;
@@ -206,12 +210,12 @@ const ExploreScreen = () => {
         const newExploreItems = posts.map(post => {
           const mainImage = extractImageUrl(post);
           const videoUrl = extractVideoUrl(post);
-          
+
           let imageCount = 0;
           if (post.type === 'post' && post.images) {
             imageCount = post.images.length;
           } else if (post.type === 'reel') {
-            imageCount = 1;
+            imageCount = 1; // Reels have one video, but we show a thumbnail
           } else if (post.media) {
             imageCount = post.media.length;
           } else {
@@ -220,8 +224,8 @@ const ExploreScreen = () => {
 
           return {
             id: post._id,
-            imageUrl: mainImage,
-            videoUrl: videoUrl,
+            imageUrl: mainImage, // Used for display thumbnail
+            videoUrl: videoUrl,  // Used for video source (if applicable)
             imageCount: imageCount,
             isLikedByCurrentUser: post.isLikedByUser || false,
             userSimilarityScore: post.exploreScore || 0,
@@ -233,22 +237,22 @@ const ExploreScreen = () => {
             caption: post.caption || '',
             createdAt: post.createdAt,
             tags: post.tags || [],
-            originalPost: post
+            originalPost: post // Keep original for potential future use
           };
         });
 
-        // Filter valid items
+        // Filter valid items: must have a valid image or video URL
         const validItems = newExploreItems.filter(item => {
-          const hasValidImage = item.imageUrl && 
-            typeof item.imageUrl === 'string' && 
+          const hasValidImage = item.imageUrl &&
+            typeof item.imageUrl === 'string' &&
             item.imageUrl.length > 0 &&
             (item.imageUrl.startsWith('http://') || item.imageUrl.startsWith('https://'));
-          
-          const hasValidVideo = item.videoUrl && 
-            typeof item.videoUrl === 'string' && 
+
+          const hasValidVideo = item.videoUrl &&
+            typeof item.videoUrl === 'string' &&
             item.videoUrl.length > 0 &&
             (item.videoUrl.startsWith('http://') || item.videoUrl.startsWith('https://'));
-          
+
           return hasValidImage || hasValidVideo;
         });
 
@@ -277,7 +281,7 @@ const ExploreScreen = () => {
   // Search users function
   const searchUsers = async (query) => {
     if (!query.trim() || !token) return;
-    
+
     setSearching(true);
     try {
       const response = await fetch(
@@ -290,7 +294,7 @@ const ExploreScreen = () => {
           },
         }
       );
-      
+
       const result = await response.json();
       if (response.ok && result.success) {
         setSearchResults(result.data.results);
@@ -350,13 +354,42 @@ const ExploreScreen = () => {
     }
   }, [allImages.length, shuffleDisplayedImages]);
 
-  // Handle video press
+
+  // --- MODIFIED: handleVideoPress now formats data for ReelsViewerScreen ---
   const handleVideoPress = (item) => {
-    if (item.videoUrl) {
-      setSelectedVideo(item);
-      setVideoModalVisible(true);
+    if (item.videoUrl && item.type === 'reel') {
+      // Format the item to match ReelsViewerScreen's expected structure
+      const formattedReel = {
+        _id: item.id, // Use _id as ReelsViewerScreen expects
+        video: {
+          url: item.videoUrl, // Direct MP4 URL
+          thumbnail: {
+            url: item.imageUrl, // Thumbnail image URL
+          },
+        },
+        author: item.author,
+        content: item.caption || '',
+        caption: item.caption || '',
+        likeCount: item.likeCount,
+        commentCount: item.commentCount,
+        viewCount: item.viewCount,
+        createdAt: item.createdAt,
+        tags: item.tags || [],
+        isLikedByCurrentUser: item.isLikedByCurrentUser || false,
+        likes: [], // ReelsViewerScreen might populate this or fetch it
+        comments: [],
+        // Add any other specific fields ReelsViewerScreen might need directly from item.originalPost if necessary
+      };
+
+      // Navigate to ReelsViewerScreen with the correctly formatted data
+      navigation.navigate('ReelsViewerScreen', {
+        reels: [formattedReel], // Pass as an array with one item
+        initialIndex: 0,       // Start at index 0
+        username: item.author?.username || item.author?.fullName || 'User'
+      });
     }
   };
+
 
   // Handle image long press (zoom)
   const handleImageLongPress = (item) => {
@@ -388,15 +421,15 @@ const ExploreScreen = () => {
         translateY.setOffset(translateY._value);
       },
       onPanResponderMove: (evt, gestureState) => {
-        // Handle pinch to zoom
+        // Handle pinch to zoom (basic implementation)
         if (evt.nativeEvent.touches.length === 2) {
           const touch1 = evt.nativeEvent.touches[0];
           const touch2 = evt.nativeEvent.touches[1];
           const distance = Math.sqrt(
-            Math.pow(touch2.pageX - touch1.pageX, 2) + 
+            Math.pow(touch2.pageX - touch1.pageX, 2) +
             Math.pow(touch2.pageY - touch1.pageY, 2)
           );
-          const newScale = Math.max(1, Math.min(3, distance / 200));
+          const newScale = Math.max(1, Math.min(3, distance / 200)); // Min 1x, Max 3x
           scale.setValue(newScale);
         } else {
           // Handle pan
@@ -419,21 +452,19 @@ const ExploreScreen = () => {
     setSelectedImage(null);
   };
 
-  // Close video modal
-  const closeVideoModal = () => {
-    setVideoModalVisible(false);
-    setSelectedVideo(null);
-  };
 
   // Uniform Grid Item Component
-  const UniformGridItem = ({ item, index, onPress, onLongPress, onVideoPress }) => {
+  const UniformGridItem = ({ item, index, onPress, onLongPress }) => {
+    const isReel = item.type === 'reel';
     return (
-      <TouchableOpacity 
-        style={styles.gridItem} 
+      <TouchableOpacity
+        style={styles.gridItem}
         onPress={() => {
-          if (item.type === 'reel' && item.videoUrl) {
-            onVideoPress && onVideoPress(item);
+          if (isReel && item.videoUrl) {
+             // If it's a reel with a video, navigate to ReelsViewerScreen
+            handleVideoPress(item);
           } else {
+            // Handle press for images or non-video reels (currently logs)
             onPress && onPress(item, index);
           }
         }}
@@ -445,7 +476,7 @@ const ExploreScreen = () => {
           style={styles.uniformImage}
           resizeMode="cover"
         />
-        
+
         {/* Overlay for additional info */}
         <View style={styles.overlay}>
           {/* Image count indicator for multiple images */}
@@ -454,14 +485,14 @@ const ExploreScreen = () => {
               <Text style={styles.imageCountText}>{item.imageCount}</Text>
             </View>
           )}
-          
+
           {/* Video indicator for reels */}
-          {item.type === 'reel' && (
+          {isReel && (
             <View style={styles.videoBadge}>
               <Text style={styles.videoBadgeText}>▶</Text>
             </View>
           )}
-          
+
           {/* Like count */}
           {item.likeCount > 0 && (
             <View style={styles.statsContainer}>
@@ -486,12 +517,12 @@ const ExploreScreen = () => {
             hasImage: !!selectedItem.imageUrl,
             hasVideo: !!selectedItem.videoUrl
           });
+          // Add navigation to a detail screen for images/posts if needed here
         }}
         onLongPress={handleImageLongPress}
-        onVideoPress={handleVideoPress}
       />
     );
-  }, []);
+  }, [handleImageLongPress]);
 
   // Render search result item
   const renderSearchResult = ({ item }) => (
@@ -500,7 +531,7 @@ const ExploreScreen = () => {
       onPress={() => handleUserPress(item._id)}
     >
       <Image
-        source={{ uri: item.photoUrl?.trim() || 'https://via.placeholder.com/40  ' }}
+        source={{ uri: item.photoUrl?.trim() || 'https://via.placeholder.com/40' }}
         style={styles.searchResultAvatar}
       />
       <View style={styles.searchResultText}>
@@ -578,7 +609,7 @@ const ExploreScreen = () => {
           />
           <Icon name="search" size={20} color="#ed167e" style={styles.searchIcon} />
         </View>
-        
+
         {/* Search Results Dropdown */}
         {searchQuery.length > 0 && (
           <View style={styles.searchResultsContainer}>
@@ -627,53 +658,6 @@ const ExploreScreen = () => {
         </Text>
       </View>
 
-      {/* Video Modal */}
-      <Modal
-        visible={videoModalVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={closeVideoModal}
-      >
-        <View style={styles.modalContainer}>
-          <TouchableOpacity 
-            style={styles.modalOverlay} 
-            onPress={closeVideoModal}
-            activeOpacity={1}
-          >
-            <View style={styles.videoContainer}>
-              {selectedVideo && (
-                <>
-                  <TouchableOpacity 
-                    style={styles.closeButton} 
-                    onPress={closeVideoModal}
-                  >
-                    <Text style={styles.closeButtonText}>✕</Text>
-                  </TouchableOpacity>
-                  
-                  {videoLoading && (
-                    <View style={styles.videoLoadingContainer}>
-                      <ActivityIndicator size="large" color="#ed167e" />
-                    </View>
-                  )}
-                  
-                  <Video
-                    source={{ uri: selectedVideo.videoUrl }}
-                    style={styles.fullScreenVideo}
-                    controls={true}
-                    resizeMode="contain"
-                    onLoadStart={() => setVideoLoading(true)}
-                    onLoad={() => setVideoLoading(false)}
-                    onError={(error) => {
-                      console.error('Video error:', error);
-                      setVideoLoading(false);
-                    }}
-                  />
-                </>
-              )}
-            </View>
-          </TouchableOpacity>
-        </View>
-      </Modal>
 
       {/* Zoom Modal */}
       <Modal
@@ -683,8 +667,8 @@ const ExploreScreen = () => {
         onRequestClose={closeZoomModal}
       >
         <View style={styles.modalContainer}>
-          <TouchableOpacity 
-            style={styles.modalOverlay} 
+          <TouchableOpacity
+            style={styles.modalOverlay}
             onPress={closeZoomModal}
             activeOpacity={1}
           >
@@ -733,7 +717,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    zIndex: 100,
+    zIndex: 100, // Ensure it stays on top
   },
   searchBar: {
     backgroundColor: '#1a1a1a',
@@ -762,6 +746,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginTop: 8,
     maxHeight: 300,
+    zIndex: 1000, // Ensure dropdown is above content
   },
   searchResultsList: {
     maxHeight: 300,
@@ -796,7 +781,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   contentContainer: {
-    paddingBottom: 60,
+    paddingBottom: 60, // Space for shuffle indicator
     paddingHorizontal: 5,
   },
   row: {
@@ -843,7 +828,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: '50%',
     left: '50%',
-    transform: [{ translateX: -15 }, { translateY: -15 }],
+    transform: [{ translateX: -15 }, { translateY: -15 }], // Center the badge
     backgroundColor: 'rgba(0,0,0,0.7)',
     borderRadius: 15,
     width: 30,
@@ -854,7 +839,7 @@ const styles = StyleSheet.create({
   videoBadgeText: {
     color: 'white',
     fontSize: 12,
-    marginLeft: 2,
+    marginLeft: 2, // Adjust for triangle shape if needed
   },
   statsContainer: {
     alignSelf: 'flex-end',
@@ -877,6 +862,7 @@ const styles = StyleSheet.create({
     padding: 10,
     borderRadius: 20,
     alignItems: 'center',
+    zIndex: 10, // Ensure it's above the FlatList content
   },
   shuffleText: {
     color: '#999',
@@ -933,7 +919,7 @@ const styles = StyleSheet.create({
     padding: 15,
     borderRadius: 8,
     alignItems: 'center',
-    zIndex: 1000,
+    zIndex: 1000, // Ensure it's on top
   },
   errorOverlayText: {
     color: '#ff4757',
@@ -950,23 +936,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  videoContainer: {
-    width: screenWidth,
-    height: screenHeight,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  fullScreenVideo: {
-    width: screenWidth,
-    height: screenHeight * 0.7,
-  },
-  videoLoadingContainer: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -25 }, { translateY: -25 }],
-    zIndex: 1000,
-  },
   zoomContainer: {
     width: screenWidth,
     height: screenHeight,
@@ -977,23 +946,7 @@ const styles = StyleSheet.create({
     width: screenWidth,
     height: screenHeight * 0.8,
   },
-  closeButton: {
-    position: 'absolute',
-    top: 50,
-    right: 20,
-    backgroundColor: 'rgba(0,0,0,0.7)',
-    borderRadius: 20,
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1000,
-  },
-  closeButtonText: {
-    color: 'white',
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
+  // Removed video modal styles as they are no longer used
 });
 
 export default ExploreScreen;

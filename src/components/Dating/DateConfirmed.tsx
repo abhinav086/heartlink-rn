@@ -39,36 +39,6 @@ const DateConfirmed = () => {
     ]).start();
   }, []);
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-IN', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  };
-
-  const getDateIcon = (dateType) => {
-    const type = dateType?.toLowerCase();
-    switch (type) {
-      case 'coffee': return 'local-cafe';
-      case 'movie': return 'movie';
-      case 'shopping': return 'shopping-bag';
-      case 'dinner': return 'restaurant';
-      case 'lunch': return 'lunch-dining';
-      case 'park_walk': return 'park';
-      case 'beach': return 'beach-access';
-      case 'adventure': return 'terrain';
-      case 'party': return 'celebration';
-      case 'cultural_event': return 'museum';
-      case 'sports': return 'sports-tennis';
-      default: return 'favorite';
-    }
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#0a0a0a" />
@@ -97,7 +67,7 @@ const DateConfirmed = () => {
           <Text style={styles.successSubtitle}>Your date is confirmed 🎉</Text>
         </Animated.View>
 
-        {/* Date Details Card */}
+        {/* Date Details Card - Only show "With [person]" */}
         {request && (
           <View style={styles.dateCard}>
             <LinearGradient
@@ -105,58 +75,19 @@ const DateConfirmed = () => {
               style={styles.dateCardGradient}
             >
               <View style={styles.dateHeader}>
-                <Icon name={getDateIcon(request.dateType)} size={40} color="#fff" />
-                <Text style={styles.dateTitle}>
-                  {request.dateTypeDisplay || request.dateType || 'Date'}
-                </Text>
+                <Icon name="favorite" size={40} color="#fff" />
+                <Text style={styles.dateTitle}>Date Confirmed</Text>
               </View>
             </LinearGradient>
 
             <View style={styles.dateDetails}>
+              {/* ONLY show "With [person]" - removed date, location, paid */}
               <View style={styles.detailRow}>
                 <Icon name="person" size={20} color="#ed167e" />
                 <Text style={styles.detailText}>
                   With {request.recipient?.fullName || 'Someone Special'}
                 </Text>
               </View>
-
-              <View style={styles.detailRow}>
-                <Icon name="calendar-today" size={20} color="#ed167e" />
-                <Text style={styles.detailText}>
-                  {formatDate(request.preferredDate)}
-                </Text>
-              </View>
-
-              <View style={styles.detailRow}>
-                <Icon name="location-on" size={20} color="#ed167e" />
-                <Text style={styles.detailText}>
-                  {request.location?.city}
-                  {request.location?.area && `, ${request.location.area}`}
-                </Text>
-              </View>
-
-              <View style={styles.detailRow}>
-                <Icon name="payment" size={20} color="#4CAF50" />
-                <Text style={styles.detailText}>
-                  Paid: {request.formattedBudget || `₹${request.budget}`}
-                </Text>
-              </View>
-
-              {/* Show Mobile Number after payment */}
-              {request.recipient?.phoneNumber && (
-                <View style={styles.phoneNumberContainer}>
-                  <Icon name="phone" size={24} color="#4CAF50" />
-                  <View style={styles.phoneNumberContent}>
-                    <Text style={styles.phoneNumberLabel}>Contact Number:</Text>
-                    <Text style={styles.phoneNumber}>
-                      {request.recipient.phoneNumber}
-                    </Text>
-                    <Text style={styles.phoneNumberNote}>
-                      You can now contact {request.recipient.fullName} for date planning
-                    </Text>
-                  </View>
-                </View>
-              )}
             </View>
           </View>
         )}
@@ -199,12 +130,7 @@ const DateConfirmed = () => {
             style={styles.primaryButton}
             onPress={() => {
               // Navigate to chat or call the person directly
-              // You can customize this based on your chat implementation
               if (request.recipient?.phoneNumber) {
-                // Option 1: Navigate to existing chat screen if available
-                // navigation.navigate('ChatDetail', { userId: request.recipient._id });
-                
-                // Option 2: For now, just show an alert with the phone number
                 Alert.alert(
                   'Contact Details',
                   `You can call ${request.recipient.fullName} at ${request.recipient.phoneNumber}`,
@@ -231,7 +157,7 @@ const DateConfirmed = () => {
 
           <TouchableOpacity
             style={styles.tertiaryButton}
-            onPress={() => navigation.navigate('HomeScreen')} // Fixed navigation
+            onPress={() => navigation.navigate('HomeScreen')}
           >
             <Text style={styles.tertiaryButtonText}>Back to Home</Text>
           </TouchableOpacity>
@@ -245,7 +171,6 @@ const DateConfirmed = () => {
           <TouchableOpacity
             style={styles.supportButton}
             onPress={() => {
-              // Navigate to support or show contact info
               Alert.alert(
                 'Support',
                 'For any issues, please contact our support team.',
@@ -330,38 +255,6 @@ const styles = StyleSheet.create({
     color: '#ccc',
     marginLeft: 15,
     flex: 1,
-  },
-  phoneNumberContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#2a2a2a',
-    borderRadius: 12,
-    padding: 15,
-    marginTop: 15,
-    borderWidth: 1,
-    borderColor: '#4CAF50',
-  },
-  phoneNumberContent: {
-    flex: 1,
-    marginLeft: 15,
-  },
-  phoneNumberLabel: {
-    fontSize: 14,
-    color: '#4CAF50',
-    fontWeight: '600',
-    marginBottom: 5,
-  },
-  phoneNumber: {
-    fontSize: 18,
-    color: '#fff',
-    fontWeight: '700',
-    marginBottom: 5,
-    letterSpacing: 1,
-  },
-  phoneNumberNote: {
-    fontSize: 12,
-    color: '#999',
-    lineHeight: 16,
   },
   nextStepsCard: {
     backgroundColor: '#1a1a1a',

@@ -289,6 +289,16 @@ const PaymentScreen = () => {
             <Text style={styles.stepTitle}>Payment Successful! 🎉</Text>
             <Text style={styles.stepDescription}>Your date is now confirmed</Text>
             <Text style={styles.stepSubtext}>Redirecting...</Text>
+
+            {/* Show only the "With" detail */}
+            {orderData && orderData.dateRequest?.recipient?.fullName && (
+              <View style={styles.successDetailCard}>
+                <Icon name="person" size={20} color="#fff" />
+                <Text style={styles.successDetailText}>
+                  With {orderData.dateRequest.recipient.fullName}
+                </Text>
+              </View>
+            )}
           </View>
         );
 
@@ -658,6 +668,21 @@ const styles = StyleSheet.create({
   securityText: {
     fontSize: 14,
     color: '#4CAF50',
+  },
+  // New styles for success detail card
+  successDetailCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 12,
+  },
+  successDetailText: {
+    fontSize: 16,
+    color: '#fff',
+    marginLeft: 10,
   },
 });
 
