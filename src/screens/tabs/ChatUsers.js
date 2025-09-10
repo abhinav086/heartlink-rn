@@ -3073,7 +3073,7 @@ const styles = StyleSheet.create({
   },
   readStatusText: {
     fontSize: 12,
-    color: '#00C853', // Green checkmarks like WhatsApp
+    color: '#00C853', 
     fontWeight: '600',
   },
 });
